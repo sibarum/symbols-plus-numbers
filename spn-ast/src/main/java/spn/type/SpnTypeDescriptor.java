@@ -18,17 +18,32 @@ import java.util.List;
  * critical for @ExplodeLoop: Graal needs to see each Constraint, Rule, and Element
  * object as a constant to devirtualize their method calls.
  *
- * Example usage with builder:
- * <pre>
- *   var omega = new SpnDistinguishedElement("Omega");
+ * A type can be either scalar (single value + constraints) or a product type
+ * (multiple named components + operation definitions). Product types enable
+ * user-defined multi-component algebraic objects like complex numbers, vectors,
+ * bivectors, quaternions, and matrices.
  *
- *   SpnTypeDescriptor extNat = SpnTypeDescriptor.builder("ExtendedNatural")
+ * Example scalar type:
+ * <pre>
+ *   SpnTypeDescriptor natural = SpnTypeDescriptor.builder("Natural")
  *       .constraint(new Constraint.GreaterThanOrEqual(0))
  *       .constraint(new Constraint.ModuloEquals(1, 0))
- *       .element(omega)
- *       .rule(new AlgebraicRule(Operation.DIV, new OperandPattern.Any(), new OperandPattern.ExactLong(0), omega))
- *       .rule(new AlgebraicRule(Operation.ADD, new OperandPattern.IsElement(omega), new OperandPattern.Any(), omega))
- *       .rule(new AlgebraicRule(Operation.ADD, new OperandPattern.Any(), new OperandPattern.IsElement(omega), omega))
+ *       .build();
+ * </pre>
+ *
+ * Example product type:
+ * <pre>
+ *   import static spn.type.ComponentExpression.*;
+ *
+ *   SpnTypeDescriptor complex = SpnTypeDescriptor.builder("Complex")
+ *       .component("real")
+ *       .component("imag")
+ *       .productRule(Operation.ADD,
+ *           add(left(0), right(0)),   // result.real = left.real + right.real
+ *           add(left(1), right(1)))   // result.imag = left.imag + right.imag
+ *       .productRule(Operation.MUL,
+ *           sub(mul(left(0), right(0)), mul(left(1), right(1))),   // ac - bd
+ *           add(mul(left(0), right(1)), mul(left(1), right(0))))   // ad + bc
  *       .build();
  * </pre>
  */
@@ -45,17 +60,28 @@ public final class SpnTypeDescriptor {
     @CompilationFinal(dimensions = 1)
     private final AlgebraicRule[] rules;
 
+    @CompilationFinal(dimensions = 1)
+    private final ComponentDescriptor[] componentDescriptors;
+
+    @CompilationFinal(dimensions = 1)
+    private final ProductOperationDef[] productOperationDefs;
+
     private SpnTypeDescriptor(String name, Constraint[] constraints,
-                              SpnDistinguishedElement[] elements, AlgebraicRule[] rules) {
+                              SpnDistinguishedElement[] elements, AlgebraicRule[] rules,
+                              ComponentDescriptor[] componentDescriptors,
+                              ProductOperationDef[] productOperationDefs) {
         this.name = name;
         this.constraints = constraints;
         this.elements = elements;
         this.rules = rules;
+        this.componentDescriptors = componentDescriptors;
+        this.productOperationDefs = productOperationDefs;
     }
 
-    /** Simple constructor for types with only constraints (no elements or rules). */
+    /** Simple constructor for scalar types with only constraints (no elements or rules). */
     public SpnTypeDescriptor(String name, Constraint... constraints) {
-        this(name, constraints, new SpnDistinguishedElement[0], new AlgebraicRule[0]);
+        this(name, constraints, new SpnDistinguishedElement[0], new AlgebraicRule[0],
+                new ComponentDescriptor[0], new ProductOperationDef[0]);
     }
 
     public static Builder builder(String name) {
@@ -119,6 +145,54 @@ public final class SpnTypeDescriptor {
         return elements.length > 0;
     }
 
+    // ── Product type accessors ──────────────────────────────────────────────
+
+    public ComponentDescriptor[] getComponentDescriptors() {
+        return componentDescriptors;
+    }
+
+    public ProductOperationDef[] getProductOperationDefs() {
+        return productOperationDefs;
+    }
+
+    /**
+     * Returns true if this is a product type (has named components).
+     */
+    public boolean isProduct() {
+        return componentDescriptors.length > 0;
+    }
+
+    /**
+     * Number of components in this product type. Returns 0 for scalar types.
+     */
+    public int componentCount() {
+        return componentDescriptors.length;
+    }
+
+    /**
+     * Looks up a component's index by name. Returns -1 if not found.
+     */
+    public int componentIndex(String componentName) {
+        for (ComponentDescriptor cd : componentDescriptors) {
+            if (cd.name().equals(componentName)) {
+                return cd.index();
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Finds the ProductOperationDef for the given operation. Returns null if not defined.
+     */
+    public ProductOperationDef findProductOperation(Operation operation) {
+        for (ProductOperationDef def : productOperationDefs) {
+            if (def.operation() == operation) {
+                return def;
+            }
+        }
+        return null;
+    }
+
     /**
      * Checks whether a value satisfies all constraints of this type.
      * Distinguished elements bypass constraint checking.
@@ -155,6 +229,14 @@ public final class SpnTypeDescriptor {
     @Override
     public String toString() {
         var sb = new StringBuilder(name);
+        if (componentDescriptors.length > 0) {
+            sb.append("(");
+            for (int i = 0; i < componentDescriptors.length; i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(componentDescriptors[i].name());
+            }
+            sb.append(")");
+        }
         if (constraints.length > 0) {
             sb.append(" where ");
             for (int i = 0; i < constraints.length; i++) {
@@ -179,6 +261,8 @@ public final class SpnTypeDescriptor {
         private final List<Constraint> constraints = new ArrayList<>();
         private final List<SpnDistinguishedElement> elements = new ArrayList<>();
         private final List<AlgebraicRule> rules = new ArrayList<>();
+        private final List<ComponentDescriptor> components = new ArrayList<>();
+        private final List<ProductOperationDef> productDefs = new ArrayList<>();
 
         private Builder(String name) {
             this.name = name;
@@ -199,12 +283,40 @@ public final class SpnTypeDescriptor {
             return this;
         }
 
+        /**
+         * Adds a named component to this product type. Components are indexed
+         * in the order they are added (first = 0, second = 1, etc.).
+         */
+        public Builder component(String name) {
+            components.add(new ComponentDescriptor(name, components.size()));
+            return this;
+        }
+
+        /**
+         * Defines a binary operation on this product type. Each ComponentExpression
+         * computes one component of the result, in component order.
+         *
+         * <pre>
+         *   import static spn.type.ComponentExpression.*;
+         *
+         *   builder.productRule(Operation.ADD,
+         *       add(left(0), right(0)),   // result component 0
+         *       add(left(1), right(1)))   // result component 1
+         * </pre>
+         */
+        public Builder productRule(Operation operation, ComponentExpression... componentResults) {
+            productDefs.add(new ProductOperationDef(operation, componentResults));
+            return this;
+        }
+
         public SpnTypeDescriptor build() {
             return new SpnTypeDescriptor(
                     name,
                     constraints.toArray(new Constraint[0]),
                     elements.toArray(new SpnDistinguishedElement[0]),
-                    rules.toArray(new AlgebraicRule[0])
+                    rules.toArray(new AlgebraicRule[0]),
+                    components.toArray(new ComponentDescriptor[0]),
+                    productDefs.toArray(new ProductOperationDef[0])
             );
         }
     }
