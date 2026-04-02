@@ -17,6 +17,7 @@
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <truffle.version>24.1.1</truffle.version>
+        <junit.version>5.11.3</junit.version>
     </properties>
 
     <dependencyManagement>
@@ -30,6 +31,12 @@
                 <groupId>org.graalvm.truffle</groupId>
                 <artifactId>truffle-dsl-processor</artifactId>
                 <version>${truffle.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>${junit.version}</version>
+                <scope>test</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>
