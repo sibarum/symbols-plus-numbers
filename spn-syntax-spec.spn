@@ -1,0 +1,201 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- SPN (Symbols Plus Numbers) — Syntax Specification Draft
+-- ═══════════════════════════════════════════════════════════════════════
+-- This file represents the proposed syntax for SPN, generated from the
+-- AST framework. Edit this file to refine the syntax, then we'll build
+-- a parser that matches it.
+--
+-- Primary influences: Haskell/OCaml > Java > JavaScript > Ruby
+-- ═══════════════════════════════════════════════════════════════════════
+
+
+-- ─── NUMERIC / ALGEBRAIC TYPES ──────────────────────────────────────────
+-- Numeric types are the "smart" types: they carry constraints, rules,
+-- and operation definitions. They are tuples of primitives.
+
+type Natural where n >= 0, n % 1 == 0
+
+type ExtendedNatural where n >= 0, n % 1 == 0 with Omega
+  rule n / 0 = Omega
+  rule Omega + n = Omega
+  rule n + Omega = Omega
+
+type Complex(real: Double, imag: Double)
+  +(a, b) = ((left[0] + right[0]), (left[1] + right[1]))
+  *(a, b) = (((left[0] * right[0]) - (left[1] * right[1])), ((left[0] * right[1]) + (left[1] * right[0])))
+
+type Vec3(x: Double, y: Double, z: Double)
+  +(a, b) = ((left[0] + right[0]), (left[1] + right[1]), (left[2] + right[2]))
+  *(a, b) = (((left[1] * right[2]) - (left[2] * right[1])), ((left[2] * right[0]) - (left[0] * right[2])), ((left[0] * right[1]) - (left[1] * right[0])))
+
+type ColoredNumber(n: Double, color: Symbol where oneOf(:red, :green, :blue))
+  +(a, b) = ((left[0] + right[0]), left[1])
+
+
+-- ─── SYMBOL TYPES ───────────────────────────────────────────────────────
+-- Symbols are interned atoms. Constrained symbol types act like enums.
+
+type Color = Symbol where oneOf(:red, :green, :blue)
+
+type Direction = Symbol where oneOf(:north, :south, :east, :west)
+
+
+-- ─── CONSTRAINED STRING TYPES ───────────────────────────────────────────
+
+type Identifier where length >= 1, length <= 64, matches /[a-zA-Z_][a-zA-Z0-9_]*/
+
+type HexColor where length >= 6, length <= 6, charset HEX
+
+
+-- ─── STRUCTS (DATA TYPES) ───────────────────────────────────────────────
+-- Structs are "dumb" containers. They get their smartness from typed fields
+-- that reference numeric/algebraic types.
+
+data Shape
+  = Circle(radius)
+  | Rectangle(width, height)
+  | Triangle(a, b, c)
+
+struct Point(x: Double, y: Double)
+
+struct Pair<T, U>(first, second)
+
+struct Pixel(color: ColoredNumber, x: Long, y: Long)
+
+
+-- ─── TUPLES ─────────────────────────────────────────────────────────────
+-- Anonymous, structurally typed. Variable specificity per position.
+
+-- Fully typed
+(Long, String)
+
+-- Mixed specificity
+(Long, _, Double)
+
+
+-- ─── PURE FUNCTIONS ─────────────────────────────────────────────────────
+-- Pure functions have isolated scope, typed parameters (tuple-like),
+-- a return type, and must be total (all match cases covered).
+
+pure area(shape) -> Double =
+  match shape
+    | Circle(r)          -> 3.14159 * r * r
+    | Rectangle(w, h)    -> w * h
+    | Triangle(a, b, c)  -> heron(a, b, c)
+
+pure add(a: Long, b: Long) -> Long = a + b
+
+pure opposite(dir: Direction) -> Direction =
+  match dir
+    | :north -> :south
+    | :south -> :north
+    | :east  -> :west
+    | :west  -> :east
+
+
+-- ─── PATTERN MATCHING ───────────────────────────────────────────────────
+-- Patterns can match on: struct type, literal, type, string prefix/suffix/regex,
+-- array structure, set membership, dictionary keys, or wildcard.
+
+-- String patterns
+pure parseUrl(url: String) -> String =
+  match url
+    | "http://" ++ rest                -> "web: " ++ rest
+    | "ftp://" ++ rest                 -> "file: " ++ rest
+    | /(\w+):\/\/(.*)/(_,proto,path) -> proto ++ "://" ++ path
+    | _                                -> "unknown"
+
+-- Array patterns
+pure sum(arr: Array<Long>) -> Long =
+  match arr
+    | []      -> 0
+    | [h | t] -> h + sum(t)
+
+pure head3(arr) =
+  match arr
+    | [a, b, c] -> (a, b, c)
+    | _         -> (:error, 0, 0)
+
+-- Set patterns (membership only, no positional)
+pure describeColors(colors: Set<Symbol>) -> String =
+  match colors
+    | {}                       -> "none"
+    | {contains :red, :blue}   -> "has red and blue"
+    | {contains :red}          -> "has red"
+    | _                        -> "other"
+
+-- Dictionary patterns (key destructuring, binds values)
+pure greet(person: Dict) -> String =
+  match person
+    | {:name n, :age a} -> "Hello " ++ n ++ ", age " ++ show(a)
+    | {:name n}         -> "Hello " ++ n
+    | {:}               -> "Hello stranger"
+    | _                 -> "not a dict"
+
+-- Guards
+pure classify(n: Long) -> String =
+  match n
+    | x | x < 0  -> "negative"
+    | x | x > 0  -> "positive"
+    | _           -> "zero"
+
+
+-- ─── LAMBDA SCOPE & STREAMING ───────────────────────────────────────────
+-- Lambda blocks execute in the caller's frame (read/write parent vars).
+-- They cannot be passed by reference. Used with yield for streaming.
+
+-- Accumulation via streaming
+let sum = 0
+stream range(1, 10) { |n|
+  sum = sum + n
+}
+-- sum == 45
+
+-- Map-like transformation
+let results = []
+stream range(0, 5) { |i|
+  results = append(results, i * i)
+}
+-- results == [0, 1, 4, 9, 16]
+
+-- Producer function (uses yield)
+pure range(start: Long, end: Long) =
+  let i = start
+  while i < end do
+    yield i
+    i = i + 1
+  end
+
+
+-- ─── COLLECTIONS ────────────────────────────────────────────────────────
+
+-- Arrays (immutable, ordered, indexed)
+let nums: Array<Long> = [1, 2, 3, 4, 5]
+let first = nums[0]
+let len = length(nums)
+
+-- Sets (immutable, unordered, no duplicates)
+let tags: Set<Symbol> = {:red, :green, :blue}
+let hasRed = contains(tags, :red)
+let combined = union(tags, {:yellow})
+
+-- Dictionaries (immutable, symbol-keyed)
+let config: Dict<String> = {:host "localhost", :port "8080"}
+let host = config[:host]
+let updated = set(config, :port, "9090")  -- returns new dict
+
+
+-- ─── STRUCT CONSTRUCTION ────────────────────────────────────────────────
+
+let c = Circle(5.0)
+let r = Rectangle(3.0, 4.0)
+let p = Point(1.0, 2.0)
+let z = Complex(3.0, 4.0)
+let v = Vec3(1.0, 0.0, 0.0)
+
+-- Generic instantiation
+let pair = Pair<Long, String>(42, "hello")
+
+-- Nested
+let px = Pixel(ColoredNumber(1.0, :red), 10, 20)
+
