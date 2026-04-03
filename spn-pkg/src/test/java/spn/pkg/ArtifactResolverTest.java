@@ -193,4 +193,121 @@ class ArtifactResolverTest {
         assertEquals("org:deep:3.0.0", deepArtifact.getId().coordinate());
         assertTrue(deepArtifact.getSourceFiles().containsKey("org.deep.impl"));
     }
+
+    @Test
+    void errorOnUnversionedArtifact() throws IOException {
+        writeFile(tempDir, "artifact.spn", """
+            artifact [:group "spn", :name "root", :version "1.0.0"]
+            """);
+
+        // Nested artifact with no version and no defaults to inherit from
+        Path libDir = tempDir.resolve("lib");
+        writeFile(libDir, "artifact.spn", """
+            artifact [:group "spn", :name "orphan"]
+            """);
+
+        var resolver = new ArtifactResolver();
+        var ex = assertThrows(IOException.class, () -> resolver.resolve(tempDir));
+        assertTrue(ex.getMessage().contains("Unversioned artifact"));
+        assertTrue(ex.getMessage().contains("spn:orphan"));
+    }
+
+    @Test
+    void profilesInheritedByNestedArtifacts() throws IOException {
+        writeFile(tempDir, "artifact.spn", """
+            artifact [:group "spn", :name "root", :version "1.0.0"]
+            defaults [
+              [:group "spn", :name "lib", :version "1.0.0"]
+            ]
+            profiles [
+              ["collection.default" "sorted_array"],
+              ["numeric.overflow" "saturate"]
+            ]
+            """);
+
+        Path libDir = tempDir.resolve("lib");
+        writeFile(libDir, "artifact.spn", """
+            artifact [:group "spn", :name "lib"]
+            profiles [
+              ["lib.specific" "value"],
+              ["numeric.overflow" "wrap"]
+            ]
+            """);
+        writeFile(libDir, "core.spn", "-- core");
+
+        SpnArtifact root = new ArtifactResolver().resolve(tempDir);
+        SpnArtifact nested = root.getNested().getFirst();
+
+        // Root profiles flow down
+        assertEquals("sorted_array", nested.profile("collection.default"));
+        // Ancestor profile wins over local
+        assertEquals("saturate", nested.profile("numeric.overflow"));
+        // Local-only profile preserved
+        assertEquals("value", nested.profile("lib.specific"));
+    }
+
+    @Test
+    void versionConflictAmongSiblings() throws IOException {
+        writeFile(tempDir, "artifact.spn", """
+            artifact [:group "org", :name "root", :version "1.0.0"]
+            defaults [
+              [:group "org", :name "a", :version "1.0.0"],
+              [:group "org", :name "b", :version "1.0.0"]
+            ]
+            """);
+
+        // Sibling A depends on utils 1.0
+        Path aDir = tempDir.resolve("a");
+        writeFile(aDir, "artifact.spn", """
+            artifact [:group "org", :name "a"]
+            require [
+              [:group "org", :name "utils", :version "1.0.0"]
+            ]
+            """);
+
+        // Sibling B depends on utils 2.0 — conflict!
+        Path bDir = tempDir.resolve("b");
+        writeFile(bDir, "artifact.spn", """
+            artifact [:group "org", :name "b"]
+            require [
+              [:group "org", :name "utils", :version "2.0.0"]
+            ]
+            """);
+
+        var resolver = new ArtifactResolver();
+        var ex = assertThrows(IOException.class, () -> resolver.resolve(tempDir));
+        assertTrue(ex.getMessage().contains("Version conflict"));
+        assertTrue(ex.getMessage().contains("org:utils"));
+    }
+
+    @Test
+    void noConflictWhenVersionsMatch() throws IOException {
+        writeFile(tempDir, "artifact.spn", """
+            artifact [:group "org", :name "root", :version "1.0.0"]
+            defaults [
+              [:group "org", :name "a", :version "1.0.0"],
+              [:group "org", :name "b", :version "1.0.0"]
+            ]
+            """);
+
+        Path aDir = tempDir.resolve("a");
+        writeFile(aDir, "artifact.spn", """
+            artifact [:group "org", :name "a"]
+            require [
+              [:group "org", :name "utils", :version "1.0.0"]
+            ]
+            """);
+
+        Path bDir = tempDir.resolve("b");
+        writeFile(bDir, "artifact.spn", """
+            artifact [:group "org", :name "b"]
+            require [
+              [:group "org", :name "utils", :version "1.0.0"]
+            ]
+            """);
+
+        // Should not throw — both agree on version 1.0.0
+        SpnArtifact root = new ArtifactResolver().resolve(tempDir);
+        assertEquals(2, root.getNested().size());
+    }
 }

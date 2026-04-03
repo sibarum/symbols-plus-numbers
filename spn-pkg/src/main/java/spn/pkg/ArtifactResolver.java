@@ -26,13 +26,14 @@ public final class ArtifactResolver {
      * @return the fully resolved artifact tree
      */
     public SpnArtifact resolve(Path root) throws IOException {
-        return resolve(root, List.of());
+        return resolve(root, List.of(), Map.of());
     }
 
     /**
-     * Resolves with inherited defaults from ancestor artifacts.
+     * Resolves with inherited defaults and profiles from ancestor artifacts.
      */
-    private SpnArtifact resolve(Path root, List<ArtifactId> inheritedDefaults) throws IOException {
+    private SpnArtifact resolve(Path root, List<ArtifactId> inheritedDefaults,
+                                Map<String, String> inheritedProfiles) throws IOException {
         Path artifactFile = root.resolve(ARTIFACT_FILE);
         if (!Files.exists(artifactFile)) {
             throw new IOException("No " + ARTIFACT_FILE + " found in " + root);
@@ -47,11 +48,17 @@ public final class ArtifactResolver {
             String resolved = resolveVersionFromDefaults(id.group(), id.name(), inheritedDefaults);
             if (resolved != null) {
                 id = id.withVersion(resolved);
+            } else {
+                throw new IOException("Unversioned artifact: " + id.coordinate()
+                        + " — no version declared and none found in ancestor defaults");
             }
         }
 
-        // Merge defaults: this artifact's defaults + inherited (this wins)
+        // Merge defaults: this artifact's defaults + inherited (local wins)
         List<ArtifactId> mergedDefaults = mergeDefaults(parsed.defaults(), inheritedDefaults);
+
+        // Merge profiles: ancestor profiles win (root project sets them)
+        Map<String, String> mergedProfiles = mergeProfiles(parsed.profiles(), inheritedProfiles);
 
         // Discover nested artifacts and source files
         List<SpnArtifact> nested = new ArrayList<>();
@@ -61,16 +68,19 @@ public final class ArtifactResolver {
         // First pass: find all nested artifact roots
         findNestedArtifactRoots(root, nestedRoots);
 
-        // Resolve nested artifacts
+        // Resolve nested artifacts (pass merged defaults and profiles down)
         for (Path nestedRoot : nestedRoots) {
-            nested.add(resolve(nestedRoot, mergedDefaults));
+            nested.add(resolve(nestedRoot, mergedDefaults, mergedProfiles));
         }
+
+        // Check for version conflicts among sibling nested artifacts
+        detectVersionConflicts(nested);
 
         // Second pass: collect source files not claimed by nested artifacts
         collectSourceFiles(root, id, sourceFiles, nestedRoots);
 
         return new SpnArtifact(id, root, parsed.dependencies(),
-                parsed.defaults(), parsed.profiles(), nested, sourceFiles);
+                parsed.defaults(), mergedProfiles, nested, sourceFiles);
     }
 
     /**
@@ -138,6 +148,31 @@ public final class ArtifactResolver {
     }
 
     /**
+     * Detects version conflicts among sibling artifacts.
+     * If two artifacts at the same depth declare different versions of the same
+     * dependency, that's an error — must be resolved in root defaults.
+     */
+    private void detectVersionConflicts(List<SpnArtifact> siblings) throws IOException {
+        // Collect all dependency declarations from siblings, keyed by group:name
+        Map<String, ArtifactId> seen = new HashMap<>();
+        for (SpnArtifact sibling : siblings) {
+            for (ArtifactId dep : sibling.getDependencies()) {
+                String key = dep.group() + ":" + dep.name();
+                ArtifactId existing = seen.get(key);
+                if (existing != null && dep.version() != null && existing.version() != null
+                        && !dep.version().equals(existing.version())) {
+                    throw new IOException("Version conflict for " + key
+                            + ": " + existing.version() + " vs " + dep.version()
+                            + " — resolve in root defaults");
+                }
+                if (existing == null || (dep.version() != null && existing.version() == null)) {
+                    seen.put(key, dep);
+                }
+            }
+        }
+    }
+
+    /**
      * Looks up a version from a defaults list.
      */
     private String resolveVersionFromDefaults(String group, String name,
@@ -148,6 +183,17 @@ public final class ArtifactResolver {
             }
         }
         return null;
+    }
+
+    /**
+     * Merges profiles: ancestor (inherited) profiles win over local,
+     * because the root project controls implementation configuration.
+     */
+    private Map<String, String> mergeProfiles(Map<String, String> local,
+                                               Map<String, String> inherited) {
+        Map<String, String> merged = new LinkedHashMap<>(local);
+        merged.putAll(inherited); // ancestor wins
+        return merged;
     }
 
     /**
