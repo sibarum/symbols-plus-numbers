@@ -182,6 +182,16 @@ public final class SpnTypeDescriptor {
     }
 
     /**
+     * Returns true if any component has type or constraint validation.
+     */
+    public boolean hasComponentValidation() {
+        for (ComponentDescriptor cd : componentDescriptors) {
+            if (cd.hasValidation()) return true;
+        }
+        return false;
+    }
+
+    /**
      * Finds the ProductOperationDef for the given operation. Returns null if not defined.
      */
     public ProductOperationDef findProductOperation(Operation operation) {
@@ -233,7 +243,7 @@ public final class SpnTypeDescriptor {
             sb.append("(");
             for (int i = 0; i < componentDescriptors.length; i++) {
                 if (i > 0) sb.append(", ");
-                sb.append(componentDescriptors[i].name());
+                sb.append(componentDescriptors[i].toString());
             }
             sb.append(")");
         }
@@ -284,11 +294,30 @@ public final class SpnTypeDescriptor {
         }
 
         /**
-         * Adds a named component to this product type. Components are indexed
-         * in the order they are added (first = 0, second = 1, etc.).
+         * Adds an untyped named component. Components are indexed in add order.
          */
         public Builder component(String name) {
             components.add(new ComponentDescriptor(name, components.size()));
+            return this;
+        }
+
+        /**
+         * Adds a typed component (e.g., FieldType.DOUBLE, FieldType.SYMBOL).
+         */
+        public Builder component(String name, FieldType type) {
+            components.add(new ComponentDescriptor(name, components.size(), type));
+            return this;
+        }
+
+        /**
+         * Adds a typed component with per-component constraints.
+         * <pre>
+         *   builder.component("color", FieldType.SYMBOL,
+         *       Constraint.SymbolOneOf.of(red, green, blue))
+         * </pre>
+         */
+        public Builder component(String name, FieldType type, Constraint... constraints) {
+            components.add(new ComponentDescriptor(name, components.size(), type, constraints));
             return this;
         }
 

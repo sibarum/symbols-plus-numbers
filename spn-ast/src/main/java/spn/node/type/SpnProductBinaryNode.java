@@ -7,6 +7,7 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import spn.language.SpnException;
 import spn.node.SpnExpressionNode;
 import spn.type.AlgebraicRule;
+import spn.type.ComponentDescriptor;
 import spn.type.ComponentExpression;
 import spn.type.Operation;
 import spn.type.ProductOperationDef;
@@ -56,6 +57,12 @@ public final class SpnProductBinaryNode extends SpnExpressionNode {
     @CompilationFinal(dimensions = 1)
     private final ComponentExpression[] componentExprs;
 
+    @CompilationFinal(dimensions = 1)
+    private final ComponentDescriptor[] componentDescs;
+
+    @CompilationFinal
+    private final boolean needsComponentValidation;
+
     private final int componentCount;
 
     public SpnProductBinaryNode(SpnExpressionNode leftNode, SpnExpressionNode rightNode,
@@ -69,6 +76,8 @@ public final class SpnProductBinaryNode extends SpnExpressionNode {
         ProductOperationDef def = typeDescriptor.findProductOperation(operation);
         this.componentExprs = (def != null) ? def.componentResults() : new ComponentExpression[0];
         this.componentCount = typeDescriptor.componentCount();
+        this.componentDescs = typeDescriptor.getComponentDescriptors();
+        this.needsComponentValidation = typeDescriptor.hasComponentValidation();
     }
 
     @Override
@@ -108,7 +117,24 @@ public final class SpnProductBinaryNode extends SpnExpressionNode {
         for (int i = 0; i < componentExprs.length; i++) {
             result[i] = componentExprs[i].evaluate(leftComps, rightComps);
         }
+
+        if (needsComponentValidation) {
+            validateResultComponents(result);
+        }
+
         return new SpnProductValue(typeDescriptor, result);
+    }
+
+    @ExplodeLoop
+    private void validateResultComponents(Object[] result) {
+        for (int i = 0; i < componentDescs.length; i++) {
+            String violation = componentDescs[i].validate(result[i]);
+            if (violation != null) {
+                throw new SpnException(
+                        typeDescriptor.getName() + " operation " + operation.getSymbol()
+                                + " result: " + violation, this);
+            }
+        }
     }
 
     @ExplodeLoop

@@ -41,6 +41,7 @@ public sealed interface FieldType {
     // ── Convenience constants ───────────────────────────────────────────────
 
     Untyped UNTYPED = new Untyped();
+    OfClass SYMBOL = new OfClass(SpnSymbol.class, "Symbol");
     OfClass LONG = new OfClass(Long.class, "Long");
     OfClass DOUBLE = new OfClass(Double.class, "Double");
     OfClass BOOLEAN = new OfClass(Boolean.class, "Boolean");
@@ -62,6 +63,10 @@ public sealed interface FieldType {
 
     static FieldType ofTuple(SpnTupleDescriptor descriptor) {
         return new OfTuple(descriptor);
+    }
+
+    static FieldType ofArray(FieldType elementType) {
+        return new OfArray(elementType);
     }
 
     static FieldType generic(String name) {
@@ -139,6 +144,27 @@ public sealed interface FieldType {
         @Override
         public String describe() {
             return descriptor.describe();
+        }
+    }
+
+    /**
+     * Accepts SpnArrayValue instances with a compatible element type.
+     *
+     * If our expected elementType is UNTYPED, any array matches.
+     * Otherwise the array's element type must match exactly (invariant).
+     */
+    record OfArray(FieldType elementType) implements FieldType {
+        @Override
+        public boolean accepts(Object value) {
+            if (!(value instanceof SpnArrayValue arr)) return false;
+            if (elementType instanceof Untyped) return true;
+            return elementType.equals(arr.getElementType());
+        }
+
+        @Override
+        public String describe() {
+            if (elementType instanceof Untyped) return "Array";
+            return "Array<" + elementType.describe() + ">";
         }
     }
 

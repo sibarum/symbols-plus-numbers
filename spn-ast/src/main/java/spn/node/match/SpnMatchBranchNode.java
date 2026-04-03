@@ -8,6 +8,7 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import spn.language.SpnException;
 import spn.node.SpnExpressionNode;
+import spn.type.SpnArrayValue;
 import spn.type.SpnProductValue;
 import spn.type.SpnStructValue;
 import spn.type.SpnTupleValue;
@@ -109,6 +110,39 @@ public final class SpnMatchBranchNode extends Node {
             case MatchPattern.Struct _ -> bindIndexed(frame, ((SpnStructValue) value).getFields());
             case MatchPattern.Product _ -> bindIndexed(frame, ((SpnProductValue) value).getComponents());
             case MatchPattern.Tuple _ -> bindIndexed(frame, ((SpnTupleValue) value).getElements());
+            case MatchPattern.EmptyArray _ -> { /* no bindings for empty array */ }
+            case MatchPattern.ArrayHeadTail _ -> {
+                // Slot 0 = head, slot 1 = tail
+                SpnArrayValue arr = (SpnArrayValue) value;
+                if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
+                    frame.setObject(bindingSlots[0], arr.head());
+                }
+                if (bindingSlots.length > 1 && bindingSlots[1] >= 0) {
+                    frame.setObject(bindingSlots[1], arr.tail());
+                }
+            }
+            case MatchPattern.ArrayExactLength _ -> bindIndexed(frame, ((SpnArrayValue) value).getElements());
+            case MatchPattern.StringPrefix sp -> {
+                // Slot 0 gets the remainder after the prefix
+                if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
+                    frame.setObject(bindingSlots[0], sp.remainder((String) value));
+                }
+            }
+            case MatchPattern.StringSuffix ss -> {
+                // Slot 0 gets the prefix before the suffix
+                if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
+                    frame.setObject(bindingSlots[0], ss.prefix((String) value));
+                }
+            }
+            case MatchPattern.StringRegex sr -> {
+                // Slot 0 gets the full match, slots 1..N get capture groups
+                String[] groups = sr.groups((String) value);
+                for (int i = 0; i < bindingSlots.length && i < groups.length; i++) {
+                    if (bindingSlots[i] >= 0) {
+                        frame.setObject(bindingSlots[i], groups[i]);
+                    }
+                }
+            }
             case MatchPattern.OfType _ -> {
                 if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
                     frame.setObject(bindingSlots[0], value);

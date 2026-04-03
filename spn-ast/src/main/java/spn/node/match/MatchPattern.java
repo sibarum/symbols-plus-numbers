@@ -1,6 +1,7 @@
 package spn.node.match;
 
 import spn.type.FieldType;
+import spn.type.SpnArrayValue;
 import spn.type.SpnProductValue;
 import spn.type.SpnStructDescriptor;
 import spn.type.SpnStructValue;
@@ -123,6 +124,153 @@ public sealed interface MatchPattern {
             return fieldType.describe();
         }
     }
+
+    // ── String patterns ────────────────────────────────────────────────────
+
+    /**
+     * Matches a string that starts with the given prefix.
+     *
+     * When used with bindings, slot 0 gets the remainder (the part after the prefix).
+     * <pre>
+     *   // match s { "http://"(rest) -> rest }
+     *   new MatchPattern.StringPrefix("http://")
+     * </pre>
+     */
+    record StringPrefix(String prefix) implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            return value instanceof String s && s.startsWith(prefix);
+        }
+
+        /** Extracts the remainder after the prefix. */
+        public String remainder(String value) {
+            return value.substring(prefix.length());
+        }
+
+        @Override
+        public String describe() {
+            return "\"" + prefix + "\"..";
+        }
+    }
+
+    /**
+     * Matches a string that ends with the given suffix.
+     *
+     * When used with bindings, slot 0 gets the prefix (the part before the suffix).
+     */
+    record StringSuffix(String suffix) implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            return value instanceof String s && s.endsWith(suffix);
+        }
+
+        /** Extracts the prefix before the suffix. */
+        public String prefix(String value) {
+            return value.substring(0, value.length() - suffix.length());
+        }
+
+        @Override
+        public String describe() {
+            return "..\"" + suffix + "\"";
+        }
+    }
+
+    /**
+     * Matches a string against a regular expression (full match).
+     *
+     * When used with bindings, slot 0 gets the full matched string.
+     * If the regex has capture groups, slots 1..N get the group values.
+     */
+    record StringRegex(String regex) implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            return value instanceof String s && s.matches(regex);
+        }
+
+        /** Extracts capture groups. Index 0 is the full match, 1..N are groups. */
+        public String[] groups(String value) {
+            var matcher = java.util.regex.Pattern.compile(regex).matcher(value);
+            if (!matcher.matches()) return new String[0];
+            var result = new String[matcher.groupCount() + 1];
+            for (int i = 0; i <= matcher.groupCount(); i++) {
+                result[i] = matcher.group(i);
+            }
+            return result;
+        }
+
+        @Override
+        public String describe() {
+            return "/" + regex + "/";
+        }
+    }
+
+    // ── Array patterns ──────────────────────────────────────────────────────
+
+    /**
+     * Matches an empty array.
+     * <pre>
+     *   // match arr { [] -> "empty", _ -> "non-empty" }
+     * </pre>
+     */
+    record EmptyArray() implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            return value instanceof SpnArrayValue arr && arr.isEmpty();
+        }
+
+        @Override
+        public String describe() {
+            return "[]";
+        }
+    }
+
+    /**
+     * Matches a non-empty array, decomposing it into head and tail.
+     *
+     * When used with bindings:
+     *   slot 0 = head (first element)
+     *   slot 1 = tail (new SpnArrayValue with remaining elements)
+     *
+     * <pre>
+     *   // match arr { [h | t] -> ... }
+     *   new MatchPattern.ArrayHeadTail()
+     * </pre>
+     */
+    record ArrayHeadTail() implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            return value instanceof SpnArrayValue arr && !arr.isEmpty();
+        }
+
+        @Override
+        public String describe() {
+            return "[h | t]";
+        }
+    }
+
+    /**
+     * Matches an array of exactly the specified length, binding each element.
+     *
+     * Binding slots correspond to each element position (slots 0..N-1).
+     *
+     * <pre>
+     *   // match arr { [a, b, c] -> ... }  (exactly 3 elements)
+     *   new MatchPattern.ArrayExactLength(3)
+     * </pre>
+     */
+    record ArrayExactLength(int length) implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            return value instanceof SpnArrayValue arr && arr.length() == length;
+        }
+
+        @Override
+        public String describe() {
+            return "[" + "_, ".repeat(Math.max(0, length - 1)) + "_]";
+        }
+    }
+
+    // ── Value patterns ──────────────────────────────────────────────────────
 
     /**
      * Matches a value that equals the expected literal.

@@ -119,6 +119,175 @@ public sealed interface Constraint {
         }
     }
 
+    // ── Symbol constraints ─────────────────────────────────────────────────
+
+    /**
+     * Value must be a symbol and must be one of the specified allowed symbols.
+     * Uses reference equality (==) since symbols are interned.
+     *
+     * This enables enum-like constrained symbol types:
+     * <pre>
+     *   var table = new SpnSymbolTable();
+     *   var red = table.intern("red");
+     *   var green = table.intern("green");
+     *   var blue = table.intern("blue");
+     *
+     *   SpnTypeDescriptor color = SpnTypeDescriptor.builder("Color")
+     *       .constraint(Constraint.SymbolOneOf.of(red, green, blue))
+     *       .build();
+     * </pre>
+     */
+    record SymbolOneOf(SpnSymbol[] allowed) implements Constraint {
+
+        /** Varargs convenience factory. */
+        public static SymbolOneOf of(SpnSymbol... allowed) {
+            return new SymbolOneOf(allowed);
+        }
+
+        @Override
+        public boolean check(Object value) {
+            if (!(value instanceof SpnSymbol sym)) return false;
+            for (SpnSymbol a : allowed) {
+                if (a == sym) return true;
+            }
+            return false;
+        }
+
+        @Override
+        public String describe() {
+            var sb = new StringBuilder("oneOf(");
+            for (int i = 0; i < allowed.length; i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(":").append(allowed[i].name());
+            }
+            return sb.append(")").toString();
+        }
+    }
+
+    /**
+     * Value must be a SpnSymbol (any symbol at all).
+     * Used as a type check rather than a value constraint.
+     */
+    record IsSymbol() implements Constraint {
+        @Override
+        public boolean check(Object value) {
+            return value instanceof SpnSymbol;
+        }
+
+        @Override
+        public String describe() {
+            return "isSymbol";
+        }
+    }
+
+    // ── String constraints ──────────────────────────────────────────────────
+
+    /**
+     * String must have at least the specified length.
+     *
+     * <pre>
+     *   new Constraint.MinLength(1)  // non-empty string
+     * </pre>
+     */
+    record MinLength(int min) implements Constraint {
+        @Override
+        public boolean check(Object value) {
+            return value instanceof String s && s.length() >= min;
+        }
+
+        @Override
+        public String describe() {
+            return "length >= " + min;
+        }
+    }
+
+    /**
+     * String must have at most the specified length.
+     */
+    record MaxLength(int max) implements Constraint {
+        @Override
+        public boolean check(Object value) {
+            return value instanceof String s && s.length() <= max;
+        }
+
+        @Override
+        public String describe() {
+            return "length <= " + max;
+        }
+    }
+
+    /**
+     * String must match the given regular expression (full match, not partial).
+     *
+     * The regex is compiled once at constraint creation time and reused.
+     * The pattern is stored as a String for serialization; the compiled Pattern
+     * is transient and rebuilt on demand.
+     *
+     * <pre>
+     *   new Constraint.MatchesPattern("[a-zA-Z_][a-zA-Z0-9_]*")  // identifier
+     * </pre>
+     */
+    record MatchesPattern(String regex) implements Constraint {
+        @Override
+        public boolean check(Object value) {
+            return value instanceof String s && s.matches(regex);
+        }
+
+        @Override
+        public String describe() {
+            return "matches /" + regex + "/";
+        }
+    }
+
+    /**
+     * String must consist entirely of characters from the specified character class.
+     */
+    record CharSetConstraint(CharClass charClass) implements Constraint {
+        @Override
+        public boolean check(Object value) {
+            if (!(value instanceof String s)) return false;
+            for (int i = 0; i < s.length(); i++) {
+                if (!charClass.accepts(s.charAt(i))) return false;
+            }
+            return true;
+        }
+
+        @Override
+        public String describe() {
+            return "charset " + charClass.name();
+        }
+    }
+
+    /** Predefined character classes for CharSetConstraint. */
+    enum CharClass {
+        ASCII {
+            @Override public boolean accepts(char c) { return c < 128; }
+        },
+        ASCII_PRINTABLE {
+            @Override public boolean accepts(char c) { return c >= 32 && c < 127; }
+        },
+        ALPHANUMERIC {
+            @Override public boolean accepts(char c) {
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+            }
+        },
+        ALPHA {
+            @Override public boolean accepts(char c) {
+                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+            }
+        },
+        DIGIT {
+            @Override public boolean accepts(char c) { return c >= '0' && c <= '9'; }
+        },
+        HEX {
+            @Override public boolean accepts(char c) {
+                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+            }
+        };
+
+        public abstract boolean accepts(char c);
+    }
+
     // ── Utility ─────────────────────────────────────────────────────────────
 
     private static String formatBound(double bound) {

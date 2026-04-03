@@ -5,9 +5,12 @@ import spn.node.match.MatchPattern;
 import spn.node.match.SpnMatchBranchNode;
 import spn.node.match.SpnMatchNode;
 import spn.type.SpnStructDescriptor;
+import spn.type.SpnSymbol;
+import spn.type.SpnSymbolSet;
 import spn.type.SpnVariantSet;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static spn.type.check.Diagnostic.Category;
@@ -24,23 +27,18 @@ import static spn.type.check.Diagnostic.Category;
  *   1. If any branch has a Wildcard pattern → exhaustive (trivially total)
  *   2. If the branches' Struct patterns cover all variants of a known SpnVariantSet
  *      → exhaustive (all constructors handled)
- *   3. Otherwise → non-exhaustive → ERROR diagnostic with the missing variants
+ *   3. If the branches' Literal patterns cover all symbols of a known SpnSymbolSet
+ *      → exhaustive (all symbol values handled)
+ *   4. Otherwise → non-exhaustive → ERROR diagnostic with the missing cases
  *
  * Usage:
  * <pre>
  *   var SHAPE = new SpnVariantSet("Shape", CIRCLE, RECTANGLE, TRIANGLE);
+ *   var COLOR = new SpnSymbolSet("Color", red, green, blue);
  *
- *   var diagnostics = TotalityChecker.check(functionBody, SHAPE);
- *   if (TotalityChecker.hasErrors(diagnostics)) {
- *       // function is not total -- report missing patterns
- *   }
+ *   var diagnostics = TotalityChecker.check(functionBody,
+ *       List.of(SHAPE), List.of(COLOR));
  * </pre>
- *
- * Limitations:
- *   - Does not check nested patterns (future work)
- *   - Does not reason about guard exhaustiveness (guards make totality undecidable)
- *   - Requires explicit SpnVariantSet declarations to check struct coverage
- *   - Match nodes not associated with any variant set get a warning (not an error)
  */
 public final class TotalityChecker {
 
@@ -48,15 +46,20 @@ public final class TotalityChecker {
     }
 
     /**
-     * Checks all match expressions in the given AST for exhaustiveness.
-     *
-     * @param body          the function body (root of the AST subtree to check)
-     * @param variantSets   the known sum types whose variants must be fully covered
-     * @return list of diagnostics (errors for non-exhaustive matches, info for exhaustive ones)
+     * Checks with only variant sets (backwards compatible).
      */
     public static List<Diagnostic> check(Node body, SpnVariantSet... variantSets) {
+        return check(body, Arrays.asList(variantSets), List.of());
+    }
+
+    /**
+     * Checks with both variant sets and symbol sets.
+     */
+    public static List<Diagnostic> check(Node body,
+                                          List<SpnVariantSet> variantSets,
+                                          List<SpnSymbolSet> symbolSets) {
         var diagnostics = new ArrayList<Diagnostic>();
-        walkAndCheck(body, variantSets, diagnostics);
+        walkAndCheck(body, variantSets, symbolSets, diagnostics);
         return diagnostics;
     }
 
@@ -67,15 +70,17 @@ public final class TotalityChecker {
 
     // ── AST walking ─────────────────────────────────────────────────────────
 
-    private static void walkAndCheck(Node node, SpnVariantSet[] variantSets,
+    private static void walkAndCheck(Node node,
+                                     List<SpnVariantSet> variantSets,
+                                     List<SpnSymbolSet> symbolSets,
                                      List<Diagnostic> diagnostics) {
         if (node instanceof SpnMatchNode matchNode) {
-            checkMatchExhaustiveness(matchNode, variantSets, diagnostics);
+            checkMatchExhaustiveness(matchNode, variantSets, symbolSets, diagnostics);
         }
 
         for (Node child : node.getChildren()) {
             if (child != null) {
-                walkAndCheck(child, variantSets, diagnostics);
+                walkAndCheck(child, variantSets, symbolSets, diagnostics);
             }
         }
     }
@@ -83,7 +88,8 @@ public final class TotalityChecker {
     // ── Match exhaustiveness ────────────────────────────────────────────────
 
     private static void checkMatchExhaustiveness(SpnMatchNode matchNode,
-                                                  SpnVariantSet[] variantSets,
+                                                  List<SpnVariantSet> variantSets,
+                                                  List<SpnSymbolSet> symbolSets,
                                                   List<Diagnostic> diagnostics) {
         SpnMatchBranchNode[] branches = matchNode.getBranches();
         MatchPattern[] patterns = extractPatterns(branches);
@@ -95,10 +101,11 @@ public final class TotalityChecker {
             return;
         }
 
-        // Check against each known variant set
         boolean checkedAgainstAny = false;
+
+        // Check against struct variant sets
         for (SpnVariantSet vs : variantSets) {
-            if (isRelevant(patterns, vs)) {
+            if (isRelevantVariant(patterns, vs)) {
                 checkedAgainstAny = true;
                 if (vs.isCoveredBy(patterns)) {
                     diagnostics.add(Diagnostic.info(Category.FEASIBILITY,
@@ -117,10 +124,31 @@ public final class TotalityChecker {
             }
         }
 
+        // Check against symbol sets
+        for (SpnSymbolSet ss : symbolSets) {
+            if (isRelevantSymbol(patterns, ss)) {
+                checkedAgainstAny = true;
+                if (ss.isCoveredBy(patterns)) {
+                    diagnostics.add(Diagnostic.info(Category.FEASIBILITY,
+                            "Match expression covers all symbols of " + ss.getName() + "."));
+                } else {
+                    SpnSymbol[] missing = ss.uncoveredSymbols(patterns);
+                    var names = new StringBuilder();
+                    for (int i = 0; i < missing.length; i++) {
+                        if (i > 0) names.append(", ");
+                        names.append(":").append(missing[i].name());
+                    }
+                    diagnostics.add(Diagnostic.error(Category.EMPTY_TYPE,
+                            "Non-exhaustive match: missing patterns for " + ss.getName()
+                                    + " symbol(s): " + names + "."));
+                }
+            }
+        }
+
         if (!checkedAgainstAny) {
             diagnostics.add(Diagnostic.warning(Category.FEASIBILITY,
                     "Match expression has no wildcard default and could not be checked "
-                            + "against any known variant set. It may fail at runtime."));
+                            + "against any known variant or symbol set. It may fail at runtime."));
         }
     }
 
@@ -142,14 +170,27 @@ public final class TotalityChecker {
     }
 
     /**
-     * Returns true if the patterns reference at least one variant from this set,
-     * suggesting the match is intended to dispatch over this sum type.
+     * Returns true if the patterns reference at least one variant from this set.
      */
-    private static boolean isRelevant(MatchPattern[] patterns, SpnVariantSet vs) {
+    private static boolean isRelevantVariant(MatchPattern[] patterns, SpnVariantSet vs) {
         for (MatchPattern p : patterns) {
             if (p instanceof MatchPattern.Struct sp) {
                 for (SpnStructDescriptor variant : vs.getVariants()) {
                     if (sp.descriptor() == variant) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns true if the patterns contain a literal that matches a symbol from this set.
+     */
+    private static boolean isRelevantSymbol(MatchPattern[] patterns, SpnSymbolSet ss) {
+        for (MatchPattern p : patterns) {
+            if (p instanceof MatchPattern.Literal lit && lit.expected() instanceof SpnSymbol sym) {
+                for (SpnSymbol s : ss.getSymbols()) {
+                    if (s == sym) return true;
                 }
             }
         }
