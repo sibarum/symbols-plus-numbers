@@ -10,6 +10,8 @@
     <packaging>pom</packaging>
     <modules>
         <module>spn-ast</module>
+        <module>spn-parse</module>
+        <module>spn-pkg</module>
     </modules>
 
     <properties>

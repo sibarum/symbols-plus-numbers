@@ -9,6 +9,16 @@
 -- ═══════════════════════════════════════════════════════════════════════
 
 
+-- ─── CORE PRINCIPLE ────────────────────────────────────────────────────
+-- Every body is a lambda: (params) { body }
+-- No-arg single-expression lambdas: {expr}
+-- Two ways to use a lambda:
+--   = binds it to a name (function definition)
+--   do executes it (control flow / iteration)
+-- Signatures carry types only; parameter names live in the lambda.
+-- A signature without = is a declaration (interface).
+
+
 -- ─── NUMERIC / ALGEBRAIC TYPES ──────────────────────────────────────────
 -- Numeric types are the "smart" types: they carry constraints, rules,
 -- and operation definitions. They are tuples of primitives.
@@ -28,16 +38,16 @@ type Vec3(x: Double, y: Double, z: Double)
   +(a, b) = ((left[0] + right[0]), (left[1] + right[1]), (left[2] + right[2]))
   *(a, b) = (((left[1] * right[2]) - (left[2] * right[1])), ((left[2] * right[0]) - (left[0] * right[2])), ((left[0] * right[1]) - (left[1] * right[0])))
 
-type ColoredNumber(n: Double, color: Symbol where oneOf(:red, :green, :blue))
+type ColoredNumber(n: Double, color: Symbol where oneOf([:red, :green, :blue]))
   +(a, b) = ((left[0] + right[0]), left[1])
 
 
 -- ─── SYMBOL TYPES ───────────────────────────────────────────────────────
 -- Symbols are interned atoms. Constrained symbol types act like enums.
 
-type Color = Symbol where oneOf(:red, :green, :blue)
+type Color = Symbol where oneOf([:red, :green, :blue])
 
-type Direction = Symbol where oneOf(:north, :south, :east, :west)
+type Direction = Symbol where oneOf([:north, :south, :east, :west])
 
 
 -- ─── CONSTRAINED STRING TYPES ───────────────────────────────────────────
@@ -73,24 +83,35 @@ struct Pixel(color: ColoredNumber, x: Long, y: Long)
 (Long, _, Double)
 
 
--- ─── PURE FUNCTIONS ─────────────────────────────────────────────────────
--- Pure functions have isolated scope, typed parameters (tuple-like),
--- a return type, and must be total (all match cases covered).
+-- ─── DECLARATIONS (INTERFACES) ──────────────────────────────────────────
+-- A signature without = is an unbound declaration. It specifies the
+-- type-level contract without providing an implementation.
 
-pure area(shape) -> Double =
+pure area(Shape) -> Double
+pure add(Long, Long) -> Long
+pure opposite(Direction) -> Direction
+
+
+-- ─── PURE FUNCTIONS ─────────────────────────────────────────────────────
+-- Signatures carry types only. Parameter names live in the lambda.
+-- The lambda is bound to the name with =.
+
+pure add(Long, Long) -> Long = (a, b) { a + b }
+
+pure area(Shape) -> Double = (shape) {
   match shape
     | Circle(r)          -> 3.14159 * r * r
     | Rectangle(w, h)    -> w * h
     | Triangle(a, b, c)  -> heron(a, b, c)
+}
 
-pure add(a: Long, b: Long) -> Long = a + b
-
-pure opposite(dir: Direction) -> Direction =
+pure opposite(Direction) -> Direction = (dir) {
   match dir
     | :north -> :south
     | :south -> :north
     | :east  -> :west
     | :west  -> :east
+}
 
 
 -- ─── PATTERN MATCHING ───────────────────────────────────────────────────
@@ -98,91 +119,113 @@ pure opposite(dir: Direction) -> Direction =
 -- array structure, set membership, dictionary keys, or wildcard.
 
 -- String patterns
-pure parseUrl(url: String) -> String =
+pure parseUrl(String) -> String = (url) {
   match url
     | "http://" ++ rest                -> "web: " ++ rest
     | "ftp://" ++ rest                 -> "file: " ++ rest
     | /(\w+):\/\/(.*)/(_,proto,path) -> proto ++ "://" ++ path
     | _                                -> "unknown"
+}
 
 -- Array patterns
-pure sum(arr: Array<Long>) -> Long =
+pure sum(Collection<Long>) -> Long = (arr) {
   match arr
     | []      -> 0
     | [h | t] -> h + sum(t)
+}
 
-pure head3(arr) =
+pure head3(Collection) -> Tuple = (arr) {
   match arr
     | [a, b, c] -> (a, b, c)
     | _         -> (:error, 0, 0)
+}
 
--- Set patterns (membership only, no positional)
-pure describeColors(colors: Set<Symbol>) -> String =
+-- Collection patterns (membership, key destructuring)
+pure describeColors(Collection<Symbol>) -> String = (colors) {
   match colors
-    | {}                       -> "none"
-    | {contains :red, :blue}   -> "has red and blue"
-    | {contains :red}          -> "has red"
+    | []                       -> "none"
+    | [contains :red, :blue]   -> "has red and blue"
+    | [contains :red]          -> "has red"
     | _                        -> "other"
+}
 
--- Dictionary patterns (key destructuring, binds values)
-pure greet(person: Dict) -> String =
+-- Key-value patterns (binds values by key)
+pure greet(Collection) -> String = (person) {
   match person
-    | {:name n, :age a} -> "Hello " ++ n ++ ", age " ++ show(a)
-    | {:name n}         -> "Hello " ++ n
-    | {:}               -> "Hello stranger"
-    | _                 -> "not a dict"
+    | [:name n, :age a] -> "Hello " ++ n ++ ", age " ++ show(a)
+    | [:name n]         -> "Hello " ++ n
+    | []                -> "Hello stranger"
+    | _                 -> "not a collection"
+}
 
 -- Guards
-pure classify(n: Long) -> String =
+pure classify(Long) -> String = (n) {
   match n
     | x | x < 0  -> "negative"
     | x | x > 0  -> "positive"
     | _           -> "zero"
+}
 
 
--- ─── LAMBDA SCOPE & STREAMING ───────────────────────────────────────────
--- Lambda blocks execute in the caller's frame (read/write parent vars).
--- They cannot be passed by reference. Used with yield for streaming.
+-- ─── LAMBDAS & CONTROL FLOW ────────────────────────────────────────────
+-- Lambdas are { } blocks. Two forms:
+--   (params) { body }    — with parameters
+--   {expr}               — no-arg, single expression (re-evaluated each use)
+--
+-- do executes a lambda (control flow / iteration).
+-- = binds a lambda to a name (function definition).
 
--- Accumulation via streaming
+-- Iteration over a stream (do executes the lambda per yielded value)
 let sum = 0
-stream range(1, 10) { |n|
+while range(1, 10) do (n) {
   sum = sum + n
 }
 -- sum == 45
 
 -- Map-like transformation
 let results = []
-stream range(0, 5) { |i|
+while range(0, 5) do (i) {
   results = append(results, i * i)
 }
 -- results == [0, 1, 4, 9, 16]
 
--- Producer function (uses yield)
-pure range(start: Long, end: Long) =
+-- Producer function (uses yield inside a while loop with condition lambda)
+pure range(Long, Long) = (start, end) {
   let i = start
-  while i < end do
+  while {i < end} do {
     yield i
     i = i + 1
-  end
+  }
+}
 
 
 -- ─── COLLECTIONS ────────────────────────────────────────────────────────
+-- All collections use []. Array, Set, Dict are not distinct types —
+-- they are the same underlying structure. The behavioral difference
+-- (ordering, uniqueness, key indexing) is a configurable implementation
+-- profile, not a type-level distinction.
+--
+-- Implicit coercion: any collection can be assigned to any other
+-- collection context freely, without warning.
+--
+-- Implementation details (e.g., hash-set, sorted-array, btree-map)
+-- can be specified by the caller — even at the app entry point —
+-- using the same numeric type system that defines operation rules.
 
--- Arrays (immutable, ordered, indexed)
-let nums: Array<Long> = [1, 2, 3, 4, 5]
+-- Positional entries
+let nums = [1, 2, 3, 4, 5]
 let first = nums[0]
 let len = length(nums)
 
--- Sets (immutable, unordered, no duplicates)
-let tags: Set<Symbol> = {:red, :green, :blue}
+-- Symbol entries (could behave as a set if configured)
+let tags = [:red, :green, :blue]
 let hasRed = contains(tags, :red)
-let combined = union(tags, {:yellow})
+let combined = union(tags, [:yellow])
 
--- Dictionaries (immutable, symbol-keyed)
-let config: Dict<String> = {:host "localhost", :port "8080"}
+-- Key-value entries (could behave as a dict if configured)
+let config = [:host "localhost", :port "8080"]
 let host = config[:host]
-let updated = set(config, :port, "9090")  -- returns new dict
+let updated = set(config, :port, "9090")  -- returns new collection
 
 
 -- ─── STRUCT CONSTRUCTION ────────────────────────────────────────────────
@@ -198,4 +241,3 @@ let pair = Pair<Long, String>(42, "hello")
 
 -- Nested
 let px = Pixel(ColoredNumber(1.0, :red), 10, 20)
-
