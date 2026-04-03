@@ -1,8 +1,11 @@
 package spn.node.match;
 
+import spn.type.FieldType;
 import spn.type.SpnProductValue;
 import spn.type.SpnStructDescriptor;
 import spn.type.SpnStructValue;
+import spn.type.SpnTupleDescriptor;
+import spn.type.SpnTupleValue;
 import spn.type.SpnTypeDescriptor;
 
 import java.util.Objects;
@@ -21,6 +24,8 @@ import java.util.Objects;
  *
  *   Struct(descriptor)   -- matches SpnStructValue with that exact descriptor (==)
  *   Product(type)        -- matches SpnProductValue with that exact type (==)
+ *   Tuple(descriptor)    -- matches SpnTupleValue structurally (arity + element types)
+ *   OfType(fieldType)    -- matches any value accepted by the FieldType (primitives, constrained types, etc.)
  *   Literal(value)       -- matches any value that .equals() the expected value
  *   Wildcard             -- matches anything (the "_ ->" or "else ->" case)
  *
@@ -74,6 +79,48 @@ public sealed interface MatchPattern {
         @Override
         public String describe() {
             return typeDescriptor.getName();
+        }
+    }
+
+    /**
+     * Matches a SpnTupleValue that structurally matches the given descriptor.
+     * Uses structural typing: checks arity and that each element satisfies its FieldType.
+     */
+    record Tuple(SpnTupleDescriptor descriptor) implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            return value instanceof SpnTupleValue tv && descriptor.structurallyMatches(tv);
+        }
+
+        @Override
+        public String describe() {
+            return descriptor.describe();
+        }
+    }
+
+    /**
+     * Matches any value accepted by the given FieldType.
+     *
+     * This is the general-purpose type pattern that covers primitives, constrained
+     * types, and any other FieldType variant. It reuses the FieldType.accepts() logic
+     * so there's no duplication between type checking and pattern matching.
+     *
+     * <pre>
+     *   MatchPattern.OfType(FieldType.LONG)                        // Long values
+     *   MatchPattern.OfType(FieldType.DOUBLE)                      // Double values
+     *   MatchPattern.OfType(FieldType.ofConstrainedType(natural))  // Natural values
+     *   MatchPattern.OfType(FieldType.ofStruct(circleDesc))        // Circle structs
+     * </pre>
+     */
+    record OfType(FieldType fieldType) implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            return fieldType.accepts(value);
+        }
+
+        @Override
+        public String describe() {
+            return fieldType.describe();
         }
     }
 

@@ -10,6 +10,7 @@ import spn.language.SpnException;
 import spn.node.SpnExpressionNode;
 import spn.type.SpnProductValue;
 import spn.type.SpnStructValue;
+import spn.type.SpnTupleValue;
 
 /**
  * One arm of a match expression: a pattern, optional field bindings, optional guard,
@@ -107,6 +108,12 @@ public final class SpnMatchBranchNode extends Node {
         switch (pattern) {
             case MatchPattern.Struct _ -> bindIndexed(frame, ((SpnStructValue) value).getFields());
             case MatchPattern.Product _ -> bindIndexed(frame, ((SpnProductValue) value).getComponents());
+            case MatchPattern.Tuple _ -> bindIndexed(frame, ((SpnTupleValue) value).getElements());
+            case MatchPattern.OfType _ -> {
+                if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
+                    frame.setObject(bindingSlots[0], value);
+                }
+            }
             case MatchPattern.Wildcard _ -> {
                 if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
                     frame.setObject(bindingSlots[0], value);

@@ -82,4 +82,9 @@ public final class SpnMatchNode extends SpnExpressionNode {
 
         throw new SpnException("Non-exhaustive match: no pattern matched value " + value, this);
     }
+
+    /** Returns the branches for static analysis (e.g., totality checking). */
+    public SpnMatchBranchNode[] getBranches() {
+        return branches;
+    }
 }
