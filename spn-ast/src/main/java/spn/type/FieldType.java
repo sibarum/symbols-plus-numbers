@@ -69,6 +69,14 @@ public sealed interface FieldType {
         return new OfArray(elementType);
     }
 
+    static FieldType ofSet(FieldType elementType) {
+        return new OfSet(elementType);
+    }
+
+    static FieldType ofDictionary(FieldType valueType) {
+        return new OfDictionary(valueType);
+    }
+
     static FieldType generic(String name) {
         return new GenericParam(name);
     }
@@ -165,6 +173,43 @@ public sealed interface FieldType {
         public String describe() {
             if (elementType instanceof Untyped) return "Array";
             return "Array<" + elementType.describe() + ">";
+        }
+    }
+
+    /**
+     * Accepts SpnSetValue instances with a compatible element type.
+     */
+    record OfSet(FieldType elementType) implements FieldType {
+        @Override
+        public boolean accepts(Object value) {
+            if (!(value instanceof SpnSetValue sv)) return false;
+            if (elementType instanceof Untyped) return true;
+            return elementType.equals(sv.getElementType());
+        }
+
+        @Override
+        public String describe() {
+            if (elementType instanceof Untyped) return "Set";
+            return "Set<" + elementType.describe() + ">";
+        }
+    }
+
+    /**
+     * Accepts SpnDictionaryValue instances with a compatible value type.
+     * Keys are always symbols (SpnSymbol).
+     */
+    record OfDictionary(FieldType valueType) implements FieldType {
+        @Override
+        public boolean accepts(Object value) {
+            if (!(value instanceof SpnDictionaryValue dv)) return false;
+            if (valueType instanceof Untyped) return true;
+            return valueType.equals(dv.getValueType());
+        }
+
+        @Override
+        public String describe() {
+            if (valueType instanceof Untyped) return "Dict";
+            return "Dict<" + valueType.describe() + ">";
         }
     }
 

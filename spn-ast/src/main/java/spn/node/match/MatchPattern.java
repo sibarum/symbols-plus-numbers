@@ -2,7 +2,10 @@ package spn.node.match;
 
 import spn.type.FieldType;
 import spn.type.SpnArrayValue;
+import spn.type.SpnDictionaryValue;
 import spn.type.SpnProductValue;
+import spn.type.SpnSetValue;
+import spn.type.SpnSymbol;
 import spn.type.SpnStructDescriptor;
 import spn.type.SpnStructValue;
 import spn.type.SpnTupleDescriptor;
@@ -267,6 +270,107 @@ public sealed interface MatchPattern {
         @Override
         public String describe() {
             return "[" + "_, ".repeat(Math.max(0, length - 1)) + "_]";
+        }
+    }
+
+    // ── Set patterns ────────────────────────────────────────────────────────
+
+    /**
+     * Matches an empty set.
+     */
+    record EmptySet() implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            return value instanceof SpnSetValue sv && sv.isEmpty();
+        }
+
+        @Override
+        public String describe() {
+            return "{}";
+        }
+    }
+
+    /**
+     * Matches a set that contains ALL of the specified required elements.
+     * This is a membership check, not positional destructuring.
+     *
+     * <pre>
+     *   // match s { {contains :red, :blue}  -> "has both" }
+     *   new MatchPattern.SetContaining(new Object[]{red, blue})
+     * </pre>
+     *
+     * When used with bindings, slot 0 gets the entire set (for further operations).
+     */
+    record SetContaining(Object[] requiredElements) implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            if (!(value instanceof SpnSetValue sv)) return false;
+            for (Object required : requiredElements) {
+                if (!sv.contains(required)) return false;
+            }
+            return true;
+        }
+
+        @Override
+        public String describe() {
+            var sb = new StringBuilder("{contains ");
+            for (int i = 0; i < requiredElements.length; i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(requiredElements[i]);
+            }
+            return sb.append("}").toString();
+        }
+    }
+
+    // ── Dictionary patterns ─────────────────────────────────────────────────
+
+    /**
+     * Matches an empty dictionary.
+     */
+    record EmptyDictionary() implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            return value instanceof SpnDictionaryValue dv && dv.isEmpty();
+        }
+
+        @Override
+        public String describe() {
+            return "{:}";
+        }
+    }
+
+    /**
+     * Matches a dictionary that contains ALL of the specified keys.
+     * Binds the values of those keys to frame slots (in key order).
+     *
+     * <pre>
+     *   // match d { {:name n, :age a} -> ... }
+     *   new MatchPattern.DictionaryKeys(new SpnSymbol[]{name, age})
+     *   // bindingSlots[0] = slot for value of :name
+     *   // bindingSlots[1] = slot for value of :age
+     * </pre>
+     *
+     * The dictionary may contain additional keys beyond the required ones --
+     * this is a "has at least these keys" check, not an exact match.
+     */
+    record DictionaryKeys(SpnSymbol[] requiredKeys) implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            if (!(value instanceof SpnDictionaryValue dv)) return false;
+            for (SpnSymbol key : requiredKeys) {
+                if (!dv.containsKey(key)) return false;
+            }
+            return true;
+        }
+
+        @Override
+        public String describe() {
+            var sb = new StringBuilder("{");
+            for (int i = 0; i < requiredKeys.length; i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(requiredKeys[i]);
+            }
+            return sb.append("}").toString();
         }
     }
 

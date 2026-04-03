@@ -9,6 +9,8 @@ import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import spn.language.SpnException;
 import spn.node.SpnExpressionNode;
 import spn.type.SpnArrayValue;
+import spn.type.SpnDictionaryValue;
+import spn.type.SpnSymbol;
 import spn.type.SpnProductValue;
 import spn.type.SpnStructValue;
 import spn.type.SpnTupleValue;
@@ -111,6 +113,24 @@ public final class SpnMatchBranchNode extends Node {
             case MatchPattern.Product _ -> bindIndexed(frame, ((SpnProductValue) value).getComponents());
             case MatchPattern.Tuple _ -> bindIndexed(frame, ((SpnTupleValue) value).getElements());
             case MatchPattern.EmptyArray _ -> { /* no bindings for empty array */ }
+            case MatchPattern.EmptySet _ -> { /* no bindings for empty set */ }
+            case MatchPattern.EmptyDictionary _ -> { /* no bindings for empty dict */ }
+            case MatchPattern.DictionaryKeys dk -> {
+                // Bind the value of each required key to its corresponding slot
+                SpnDictionaryValue dv = (SpnDictionaryValue) value;
+                SpnSymbol[] reqKeys = dk.requiredKeys();
+                for (int i = 0; i < bindingSlots.length && i < reqKeys.length; i++) {
+                    if (bindingSlots[i] >= 0) {
+                        frame.setObject(bindingSlots[i], dv.get(reqKeys[i]));
+                    }
+                }
+            }
+            case MatchPattern.SetContaining _ -> {
+                // Slot 0 gets the entire set
+                if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
+                    frame.setObject(bindingSlots[0], value);
+                }
+            }
             case MatchPattern.ArrayHeadTail _ -> {
                 // Slot 0 = head, slot 1 = tail
                 SpnArrayValue arr = (SpnArrayValue) value;
