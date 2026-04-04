@@ -246,9 +246,9 @@ public class SpnParser {
                     + directive.modulePath() + "'");
         }
 
-        // Look up the module (native short name first, then FQ namespace)
+        // Look up the module (native short name, then FQ namespace, then loaders)
         SpnModule module = moduleRegistry.lookupNative(directive.modulePath())
-                .or(() -> moduleRegistry.lookup(directive.modulePath()))
+                .or(() -> moduleRegistry.resolve(directive.modulePath()))
                 .orElse(null);
 
         if (module == null) {

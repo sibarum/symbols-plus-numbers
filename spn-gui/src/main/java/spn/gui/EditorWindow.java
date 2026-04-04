@@ -221,6 +221,7 @@ public class EditorWindow {
             SpnSymbolTable symbolTable = new SpnSymbolTable();
             spn.language.SpnModuleRegistry moduleRegistry = new spn.language.SpnModuleRegistry();
             spn.canvas.CanvasBuiltins.registerModule(moduleRegistry);
+            moduleRegistry.addLoader(new spn.lang.ClasspathModuleLoader(null, symbolTable));
             SpnParser parser = new SpnParser(source, null, symbolTable, moduleRegistry);
             SpnRootNode root = parser.parse();
             Object result = root.getCallTarget().call();

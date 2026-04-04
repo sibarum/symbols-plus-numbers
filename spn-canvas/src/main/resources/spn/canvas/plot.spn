@@ -1,0 +1,71 @@
+-- spn.canvas.plot — Plotting abstractions built on Canvas
+import Canvas
+
+-- Draw a horizontal line across the canvas
+pure drawHLine(_, _, _, _) = (y, x1, x2, weight) {
+    strokeWeight(weight)
+    line(x1, y, x2, y)
+}
+
+-- Draw a vertical line across the canvas
+pure drawVLine(_, _, _, _) = (x, y1, y2, weight) {
+    strokeWeight(weight)
+    line(x, y1, x, y2)
+}
+
+-- Draw a grid with the given spacing
+pure drawGrid(_, _, _, _, _) = (w, h, spacingX, spacingY, weight) {
+    stroke(0.3, 0.3, 0.3)
+    strokeWeight(weight)
+    let x = 0.0
+    while {x < w} do {
+        line(x, 0.0, x, h)
+        x = x + spacingX
+    }
+    let y = 0.0
+    while {y < h} do {
+        line(0.0, y, w, y)
+        y = y + spacingY
+    }
+}
+
+-- Draw axes centered at (ox, oy)
+pure drawAxes(_, _, _, _, _) = (ox, oy, w, h, weight) {
+    stroke(0.6, 0.6, 0.6)
+    strokeWeight(weight)
+    line(0.0, oy, w, oy)
+    line(ox, 0.0, ox, h)
+}
+
+-- Plot a series of (x, y) data points as connected line segments
+-- points is an array of x values, yValues is an array of y values
+pure plotLines(_, _, _, _, _) = (xs, ys, r, g, b) {
+    stroke(r, g, b)
+    strokeWeight(2.0)
+    let i = 0
+    while {i < length(xs) - 1} do {
+        line(xs[i], ys[i], xs[i + 1], ys[i + 1])
+        i = i + 1
+    }
+}
+
+-- Plot data points as small filled circles
+pure plotPoints(_, _, _, _, _, _) = (xs, ys, radius, r, g, b) {
+    fill(r, g, b)
+    let i = 0
+    while {i < length(xs)} do {
+        circle(xs[i], ys[i], radius)
+        i = i + 1
+    }
+}
+
+-- Draw a filled rectangle with a border
+pure drawBox(_, _, _, _) = (x, y, w, h) {
+    rect(x, y, w, h)
+    stroke(1.0, 1.0, 1.0)
+    strokeWeight(1.0)
+    line(x, y, x + w, y)
+    line(x + w, y, x + w, y + h)
+    line(x + w, y + h, x, y + h)
+    line(x, y + h, x, y)
+}

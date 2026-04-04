@@ -124,6 +124,31 @@ public final class SpnModule {
             return this;
         }
 
+        public Builder functions(Map<String, CallTarget> all) {
+            functions.putAll(all);
+            return this;
+        }
+
+        public Builder builtinFactories(Map<String, BuiltinFactory> all) {
+            builtinFactories.putAll(all);
+            return this;
+        }
+
+        public Builder types(Map<String, SpnTypeDescriptor> all) {
+            types.putAll(all);
+            return this;
+        }
+
+        public Builder structs(Map<String, SpnStructDescriptor> all) {
+            structs.putAll(all);
+            return this;
+        }
+
+        public Builder variants(Map<String, SpnVariantSet> all) {
+            variants.putAll(all);
+            return this;
+        }
+
         public SpnModule build() {
             return new SpnModule(namespace, functions, builtinFactories,
                     types, structs, variants);
