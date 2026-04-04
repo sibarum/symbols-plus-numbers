@@ -1,0 +1,243 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- SPN (Symbols Plus Numbers) — Syntax Specification Draft
+-- ═══════════════════════════════════════════════════════════════════════
+-- This file represents the proposed syntax for SPN, generated from the
+-- AST framework. Edit this file to refine the syntax, then we'll build
+-- a parser that matches it.
+--
+-- Primary influences: Haskell/OCaml > Java > JavaScript > Ruby
+-- ═══════════════════════════════════════════════════════════════════════
+
+
+-- ─── CORE PRINCIPLE ────────────────────────────────────────────────────
+-- Every body is a lambda: (params) { body }
+-- No-arg single-expression lambdas: {expr}
+-- Two ways to use a lambda:
+--   = binds it to a name (function definition)
+--   do executes it (control flow / iteration)
+-- Signatures carry types only; parameter names live in the lambda.
+-- A signature without = is a declaration (interface).
+
+
+-- ─── NUMERIC / ALGEBRAIC TYPES ──────────────────────────────────────────
+-- Numeric types are the "smart" types: they carry constraints, rules,
+-- and operation definitions. They are tuples of primitives.
+
+type Natural where n >= 0, n % 1 == 0
+
+type ExtendedNatural where n >= 0, n % 1 == 0 with Omega
+  rule n / 0 = Omega
+  rule Omega + n = Omega
+  rule n + Omega = Omega
+
+type Complex(real: Double, imag: Double)
+  +(a, b) = ((left[0] + right[0]), (left[1] + right[1]))
+  *(a, b) = (((left[0] * right[0]) - (left[1] * right[1])), ((left[0] * right[1]) + (left[1] * right[0])))
+
+type Vec3(x: Double, y: Double, z: Double)
+  +(a, b) = ((left[0] + right[0]), (left[1] + right[1]), (left[2] + right[2]))
+  *(a, b) = (((left[1] * right[2]) - (left[2] * right[1])), ((left[2] * right[0]) - (left[0] * right[2])), ((left[0] * right[1]) - (left[1] * right[0])))
+
+type ColoredNumber(n: Double, color: Symbol where oneOf([:red, :green, :blue]))
+  +(a, b) = ((left[0] + right[0]), left[1])
+
+
+-- ─── SYMBOL TYPES ───────────────────────────────────────────────────────
+-- Symbols are interned atoms. Constrained symbol types act like enums.
+
+type Color = Symbol where oneOf([:red, :green, :blue])
+
+type Direction = Symbol where oneOf([:north, :south, :east, :west])
+
+
+-- ─── CONSTRAINED STRING TYPES ───────────────────────────────────────────
+
+type Identifier where length >= 1, length <= 64, matches /[a-zA-Z_][a-zA-Z0-9_]*/
+
+type HexColor where length >= 6, length <= 6, charset HEX
+
+
+-- ─── STRUCTS (DATA TYPES) ───────────────────────────────────────────────
+-- Structs are "dumb" containers. They get their smartness from typed fields
+-- that reference numeric/algebraic types.
+
+data Shape
+  = Circle(radius)
+  | Rectangle(width, height)
+  | Triangle(a, b, c)
+
+struct Point(x: Double, y: Double)
+
+struct Pair<T, U>(first, second)
+
+struct Pixel(color: ColoredNumber, x: Long, y: Long)
+
+
+-- ─── TUPLES ─────────────────────────────────────────────────────────────
+-- Anonymous, structurally typed. Variable specificity per position.
+
+-- Fully typed
+(Long, String)
+
+-- Mixed specificity
+(Long, _, Double)
+
+
+-- ─── DECLARATIONS (INTERFACES) ──────────────────────────────────────────
+-- A signature without = is an unbound declaration. It specifies the
+-- type-level contract without providing an implementation.
+
+pure area(Shape) -> Double
+pure add(Long, Long) -> Long
+pure opposite(Direction) -> Direction
+
+
+-- ─── PURE FUNCTIONS ─────────────────────────────────────────────────────
+-- Signatures carry types only. Parameter names live in the lambda.
+-- The lambda is bound to the name with =.
+
+pure add(Long, Long) -> Long = (a, b) { a + b }
+
+pure area(Shape) -> Double = (shape) {
+  match shape
+    | Circle(r)          -> 3.14159 * r * r
+    | Rectangle(w, h)    -> w * h
+    | Triangle(a, b, c)  -> heron(a, b, c)
+}
+
+pure opposite(Direction) -> Direction = (dir) {
+  match dir
+    | :north -> :south
+    | :south -> :north
+    | :east  -> :west
+    | :west  -> :east
+}
+
+
+-- ─── PATTERN MATCHING ───────────────────────────────────────────────────
+-- Patterns can match on: struct type, literal, type, string prefix/suffix/regex,
+-- array structure, set membership, dictionary keys, or wildcard.
+
+-- String patterns
+pure parseUrl(String) -> String = (url) {
+  match url
+    | "http://" ++ rest                -> "web: " ++ rest
+    | "ftp://" ++ rest                 -> "file: " ++ rest
+    | /(\w+):\/\/(.*)/(_,proto,path) -> proto ++ "://" ++ path
+    | _                                -> "unknown"
+}
+
+-- Array patterns
+pure sum(Collection<Long>) -> Long = (arr) {
+  match arr
+    | []      -> 0
+    | [h | t] -> h + sum(t)
+}
+
+pure head3(Collection) -> Tuple = (arr) {
+  match arr
+    | [a, b, c] -> (a, b, c)
+    | _         -> (:error, 0, 0)
+}
+
+-- Collection patterns (membership, key destructuring)
+pure describeColors(Collection<Symbol>) -> String = (colors) {
+  match colors
+    | []                       -> "none"
+    | [contains :red, :blue]   -> "has red and blue"
+    | [contains :red]          -> "has red"
+    | _                        -> "other"
+}
+
+-- Key-value patterns (binds values by key)
+pure greet(Collection) -> String = (person) {
+  match person
+    | [:name n, :age a] -> "Hello " ++ n ++ ", age " ++ show(a)
+    | [:name n]         -> "Hello " ++ n
+    | []                -> "Hello stranger"
+    | _                 -> "not a collection"
+}
+
+-- Guards
+pure classify(Long) -> String = (n) {
+  match n
+    | x | x < 0  -> "negative"
+    | x | x > 0  -> "positive"
+    | _           -> "zero"
+}
+
+
+-- ─── LAMBDAS & CONTROL FLOW ────────────────────────────────────────────
+-- Lambdas are { } blocks. Two forms:
+--   (params) { body }    — with parameters
+--   {expr}               — no-arg, single expression (re-evaluated each use)
+--
+-- do executes a lambda (control flow / iteration).
+-- = binds a lambda to a name (function definition).
+
+-- Iteration over a stream (do executes the lambda per yielded value)
+let sum = 0
+while range(1, 10) do (n) {
+  sum = sum + n
+}
+-- sum == 45
+
+-- Map-like transformation
+let results = []
+while range(0, 5) do (i) {
+  results = append(results, i * i)
+}
+-- results == [0, 1, 4, 9, 16]
+
+-- Producer function (uses yield inside a while loop with condition lambda)
+pure range(Long, Long) = (start, end) {
+  let i = start
+  while {i < end} do {
+    yield i
+    i = i + 1
+  }
+}
+
+
+-- ─── COLLECTIONS ────────────────────────────────────────────────────────
+-- All collections use []. Array, Set, Dict are not distinct types —
+-- they are the same underlying structure. The behavioral difference
+-- (ordering, uniqueness, key indexing) is a configurable implementation
+-- profile, not a type-level distinction.
+--
+-- Implicit coercion: any collection can be assigned to any other
+-- collection context freely, without warning.
+--
+-- Implementation details (e.g., hash-set, sorted-array, btree-map)
+-- can be specified by the caller — even at the app entry point —
+-- using the same numeric type system that defines operation rules.
+
+-- Positional entries
+let nums = [1, 2, 3, 4, 5]
+let first = nums[0]
+let len = length(nums)
+
+-- Symbol entries (could behave as a set if configured)
+let tags = [:red, :green, :blue]
+let hasRed = contains(tags, :red)
+let combined = union(tags, [:yellow])
+
+-- Key-value entries (could behave as a dict if configured)
+let config = [:host "localhost", :port "8080"]
+let host = config[:host]
+let updated = set(config, :port, "9090")  -- returns new collection
+
+
+-- ─── STRUCT CONSTRUCTION ────────────────────────────────────────────────
+
+let c = Circle(5.0)
+let r = Rectangle(3.0, 4.0)
+let p = Point(1.0, 2.0)
+let z = Complex(3.0, 4.0)
+let v = Vec3(1.0, 0.0, 0.0)
+
+-- Generic instantiation
+let pair = Pair<Long, String>(42, "hello")
+
+-- Nested
+let px = Pixel(ColoredNumber(1.0, :red), 10, 20)
