@@ -13,6 +13,7 @@
         <module>spn-parse</module>
         <module>spn-pkg</module>
         <module>spn-intellij-plugin</module>
+        <module>spn-gui</module>
     </modules>
 
     <properties>
