@@ -12,6 +12,7 @@
         <module>spn-ast</module>
         <module>spn-parse</module>
         <module>spn-pkg</module>
+        <module>spn-intellij-plugin</module>
     </modules>
 
     <properties>

@@ -3,6 +3,8 @@
   <component name="Encoding">
     <file url="file://$PROJECT_DIR$/spn-ast/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-ast/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-maven-plugin/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-maven-plugin/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-parse/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-parse/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-pkg/src/main/java" charset="UTF-8" />

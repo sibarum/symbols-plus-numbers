@@ -130,8 +130,8 @@ class ArtifactResolverTest {
         writeFile(tempDir, "artifact.spn", """
             artifact [:group "spn", :name "myapp", :version "1.0.0"]
             profiles [
-              ["collection.default" "sorted_array"],
-              ["numeric.overflow" "saturate"]
+              [:collection.default :sorted_array],
+              [:numeric.overflow :saturate]
             ]
             """);
 
@@ -220,8 +220,8 @@ class ArtifactResolverTest {
               [:group "spn", :name "lib", :version "1.0.0"]
             ]
             profiles [
-              ["collection.default" "sorted_array"],
-              ["numeric.overflow" "saturate"]
+              [:collection.default :sorted_array],
+              [:numeric.overflow :saturate]
             ]
             """);
 
@@ -229,8 +229,8 @@ class ArtifactResolverTest {
         writeFile(libDir, "artifact.spn", """
             artifact [:group "spn", :name "lib"]
             profiles [
-              ["lib.specific" "value"],
-              ["numeric.overflow" "wrap"]
+              [:lib.specific :value],
+              [:numeric.overflow :wrap]
             ]
             """);
         writeFile(libDir, "core.spn", "-- core");

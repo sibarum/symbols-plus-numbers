@@ -99,10 +99,10 @@ defaults [
 -- its behavior — but the root project sets them.
 
 profiles [
-  ["collection.default"  "sorted_array"],
-  ["collection.hashing"  "fnv1a"],
-  ["numeric.overflow"    "saturate"],
-  ["string.encoding"     "utf8"]
+  [:collection.default  :sorted_array],
+  [:collection.hashing  :fnv1a],
+  [:numeric.overflow    :saturate],
+  [:string.encoding     :utf8]
 ]
 
 

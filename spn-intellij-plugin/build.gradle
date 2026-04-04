@@ -1,0 +1,43 @@
+plugins {
+    id 'java'
+    id 'org.jetbrains.intellij.platform' version '2.5.0'
+}
+
+group = 'spn'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+    intellijPlatform {
+        defaultRepositories()
+    }
+}
+
+dependencies {
+    intellijPlatform {
+        intellijIdeaCommunity('2024.3')
+        instrumentationTools()
+    }
+    implementation 'sibarum.spn.core:spn-parse:1.0-SNAPSHOT'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+intellijPlatform {
+    pluginConfiguration {
+        id = 'spn.intellij'
+        name = 'SPN Language'
+        version = project.version
+        description = 'Syntax highlighting for the SPN programming language'
+        vendor {
+            name = 'SPN'
+        }
+        ideaVersion {
+            sinceBuild = '243'
+        }
+    }
+}

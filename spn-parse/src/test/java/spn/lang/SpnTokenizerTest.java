@@ -91,6 +91,25 @@ class SpnTokenizerTest {
     }
 
     @Test
+    void tokenizesDottedSymbols() {
+        var t = new SpnTokenizer(":spn.collections.sorted");
+        SpnParseToken sym = t.advance();
+        assertEquals(TokenType.SYMBOL, sym.type());
+        assertEquals(":spn.collections.sorted", sym.text());
+        assertFalse(t.hasMore());
+    }
+
+    @Test
+    void dottedSymbolDoesNotConsumeTrailingDot() {
+        var t = new SpnTokenizer(":foo.");
+        SpnParseToken sym = t.advance();
+        assertEquals(TokenType.SYMBOL, sym.type());
+        assertEquals(":foo", sym.text());
+        // The trailing dot is a separate token
+        assertTrue(t.hasMore());
+    }
+
+    @Test
     void tokenizesCollectionSyntax() {
         var t = new SpnTokenizer("[1, :red, \"hello\"]");
         assertEquals("[", t.advance().text());

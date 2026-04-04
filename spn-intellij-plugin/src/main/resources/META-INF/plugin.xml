@@ -1,0 +1,21 @@
+<idea-plugin>
+    <id>spn.intellij</id>
+    <name>SPN Language</name>
+    <vendor>SPN</vendor>
+    <description>Syntax highlighting for the SPN programming language</description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType
+                name="SPN"
+                implementationClass="spn.intellij.SpnFileType"
+                fieldName="INSTANCE"
+                language="SPN"
+                extensions="spn"/>
+
+        <lang.syntaxHighlighterFactory
+                language="SPN"
+                implementationClass="spn.intellij.SpnSyntaxHighlighterFactory"/>
+    </extensions>
+</idea-plugin>

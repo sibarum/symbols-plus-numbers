@@ -23,7 +23,7 @@ import java.util.*;
  *   ]
  *
  *   profiles [
- *     [:collection.default :sorted_array]
+ *     [:collection.default  :sorted_array]
  *   ]
  */
 public final class ArtifactParser {
@@ -111,14 +111,21 @@ public final class ArtifactParser {
         tokens.expect("[");
         while (!tokens.check("]")) {
             tokens.expect("[");
-            String key = unquote(tokens.expectType(TokenType.STRING).text());
+            String key;
+            if (tokens.checkType(TokenType.SYMBOL)) {
+                key = parseSymbolName();
+            } else {
+                key = unquote(tokens.expectType(TokenType.STRING).text());
+            }
             String value;
-            if (tokens.checkType(TokenType.STRING)) {
+            if (tokens.checkType(TokenType.SYMBOL)) {
+                value = parseSymbolName();
+            } else if (tokens.checkType(TokenType.STRING)) {
                 value = unquote(tokens.advance().text());
             } else if (tokens.checkType(TokenType.NUMBER)) {
                 value = tokens.advance().text();
             } else {
-                throw tokens.error("Expected profile value (string or number)");
+                throw tokens.error("Expected profile value (symbol, string, or number)");
             }
             tokens.expect("]");
             tokens.match(",");

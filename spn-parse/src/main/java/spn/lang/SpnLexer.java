@@ -71,11 +71,13 @@ public class SpnLexer {
                 continue;
             }
 
-            // symbol literal :name
+            // symbol literal :name or :dotted.name
             if (ch == ':' && pos + 1 < len && isIdentStart(line.charAt(pos + 1))
                     && !isValueToken(prevNonWs)) {
                 pos++;
-                while (pos < len && isIdentPart(line.charAt(pos))) pos++;
+                while (pos < len && (isIdentPart(line.charAt(pos)) || line.charAt(pos) == '.')) pos++;
+                // strip trailing dot (e.g. ":foo." → ":foo" + ".")
+                if (line.charAt(pos - 1) == '.') pos--;
                 tokens.add(new Token(start, pos, TokenType.SYMBOL));
                 prevNonWs = TokenType.SYMBOL;
                 continue;

@@ -63,8 +63,8 @@ class ArtifactParserTest {
         var result = new ArtifactParser("""
             artifact [:group "spn", :name "myapp", :version "1.0.0"]
             profiles [
-              ["collection.default" "sorted_array"],
-              ["string.encoding" "utf8"]
+              [:collection.default :sorted_array],
+              [:string.encoding :utf8]
             ]
             """).parse();
 
@@ -84,7 +84,7 @@ class ArtifactParserTest {
               [:group "spn", :name "collections", :version "2.1.0"]
             ]
             profiles [
-              ["collection.default" "sorted_array"]
+              [:collection.default :sorted_array]
             ]
             """).parse();
 

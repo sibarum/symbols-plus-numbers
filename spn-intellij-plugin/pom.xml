@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>sibarum.spn.core</groupId>
+        <artifactId>spn-parent</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>spn-intellij-plugin</artifactId>
+    <packaging>jar</packaging>
+
+    <properties>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <intellij.home>C:/Program Files/JetBrains/IntelliJ IDEA 2021.3.2</intellij.home>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>sibarum.spn.core</groupId>
+            <artifactId>spn-parse</artifactId>
+            <version>${project.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <!-- IntelliJ Platform (compile-only, provided at runtime by the IDE) -->
+        <dependency>
+            <groupId>com.jetbrains.intellij</groupId>
+            <artifactId>platform-util</artifactId>
+            <version>local</version>
+            <scope>system</scope>
+            <systemPath>${intellij.home}/lib/util-8.jar</systemPath>
+        </dependency>
+        <dependency>
+            <groupId>com.jetbrains.intellij</groupId>
+            <artifactId>platform-app-client</artifactId>
+            <version>local</version>
+            <scope>system</scope>
+            <systemPath>${intellij.home}/lib/app-client.jar</systemPath>
+        </dependency>
+        <dependency>
+            <groupId>com.jetbrains.intellij</groupId>
+            <artifactId>platform-lib-client</artifactId>
+            <version>local</version>
+            <scope>system</scope>
+            <systemPath>${intellij.home}/lib/lib-client.jar</systemPath>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <configuration>
+                    <archive>
+                        <addMavenDescriptor>false</addMavenDescriptor>
+                    </archive>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.7.1</version>
+                <configuration>
+                    <descriptors>
+                        <descriptor>src/assembly/plugin.xml</descriptor>
+                    </descriptors>
+                    <finalName>spn-intellij-plugin</finalName>
+                    <appendAssemblyId>false</appendAssemblyId>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-plugin-zip</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
