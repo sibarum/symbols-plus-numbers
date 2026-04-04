@@ -1,7 +1,10 @@
 package spn.gui;
 
+import spn.fonts.ColorSpan;
+import spn.fonts.SdfFontRenderer;
 import spn.gui.lang.HighlightCache;
 import spn.lang.Token;
+import spn.lang.TokenType;
 
 import java.util.List;
 
@@ -291,7 +294,12 @@ public class TextArea {
 
             if (startCol < line.length()) {
                 List<Token> tokens = highlightCache.getTokens(row, line);
-                font.drawColoredLine(line, tokens, textX, y, fontScale, startCol, endCol);
+                ColorSpan[] spans = tokens.stream()
+                        .filter(t -> t.type() != TokenType.WHITESPACE)
+                        .map(t -> new ColorSpan(t.startCol(), t.endCol(),
+                                t.type().r, t.type().g, t.type().b))
+                        .toArray(ColorSpan[]::new);
+                font.drawColoredLine(line, spans, textX, y, fontScale, startCol, endCol);
             }
         }
 

@@ -1,5 +1,6 @@
 package spn.gui;
 
+import spn.fonts.SdfFontRenderer;
 import spn.gui.lang.ContextDetector;
 import spn.gui.lang.EditorContext;
 import spn.gui.lang.Suggestion;
@@ -9,6 +10,8 @@ import spn.node.SpnRootNode;
 import spn.type.SpnSymbolTable;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -146,7 +149,39 @@ public class EditorWindow {
     // ---- HUD ------------------------------------------------------------
 
     private static final String BASE_SHORTCUTS =
-            "F5 Run | Ctrl+N New | Ctrl+O Open | Ctrl+S Save | Ctrl+Z Undo | Ctrl+Y Redo";
+            "F1 Shapes | F2 Grid | F5 Run | Ctrl+N New | Ctrl+O Open | Ctrl+S Save";
+
+    // ---- Sample scripts -------------------------------------------------
+
+    private record Sample(int key, String label, String resource) {}
+    private static final Sample[] SAMPLES = {
+            new Sample(GLFW_KEY_F1, "Shapes",  "/samples/canvas_shapes.spn"),
+            new Sample(GLFW_KEY_F2, "Grid",    "/samples/canvas_grid.spn"),
+    };
+
+    private void openSample(Sample sample) {
+        try (InputStream in = getClass().getResourceAsStream(sample.resource())) {
+            if (in == null) {
+                hud.flash("Sample not found: " + sample.resource(), true);
+                return;
+            }
+            String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+
+            if (currentFile == null && textArea.getText().isBlank()) {
+                // Load into current window
+                textArea.setText(content);
+                currentFile = null;
+                glfwSetWindowTitle(handle, sample.label() + " - Symbols+Numbers");
+            } else {
+                // Open in a new window
+                EditorWindow w = Main.instance.spawnWindow();
+                w.textArea.setText(content);
+                glfwSetWindowTitle(w.handle, sample.label() + " - Symbols+Numbers");
+            }
+        } catch (IOException e) {
+            hud.flash("Error loading sample: " + e.getMessage(), true);
+        }
+    }
 
     private void updateHud() {
         // Detect semantic context and update available suggestions
@@ -308,6 +343,14 @@ public class EditorWindow {
         glfwSetKeyCallback(handle, (win, key, scancode, action, mods) -> {
             if (action == GLFW_PRESS || action == GLFW_REPEAT) {
                 boolean ctrl = (mods & GLFW_MOD_CONTROL) != 0;
+                // Sample shortcuts (F1, F2, ...)
+                if (!ctrl && action == GLFW_PRESS) {
+                    boolean handled = false;
+                    for (Sample s : SAMPLES) {
+                        if (key == s.key()) { openSample(s); handled = true; break; }
+                    }
+                    if (handled) return;
+                }
                 if (ctrl && key == GLFW_KEY_N && action == GLFW_PRESS) {
                     Main.instance.spawnWindow();
                 } else if (ctrl && key == GLFW_KEY_O && action == GLFW_PRESS) {

@@ -5,6 +5,10 @@
     <file url="file://$PROJECT_DIR$/spn-ast/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-canvas/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-canvas/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-fonts/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-fonts/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-graphics/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-graphics/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-gui/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-gui/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-intellij-plugin/src/main/java" charset="UTF-8" />

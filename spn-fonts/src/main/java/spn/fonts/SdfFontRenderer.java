@@ -1,11 +1,8 @@
-package spn.gui;
+package spn.fonts;
 
 import org.lwjgl.stb.STBTTFontinfo;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
-
-import spn.lang.Token;
-import spn.lang.TokenType;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -14,7 +11,6 @@ import java.nio.IntBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 import static org.lwjgl.opengl.GL11.*;
@@ -43,9 +39,6 @@ public class SdfFontRenderer {
     private static final int FLOATS_PER_VERTEX = 7;
     private static final int FLOATS_PER_CHAR = 6 * FLOATS_PER_VERTEX;
 
-    // UV coordinate pointing at the solid-white region of the atlas (for drawRect)
-    private static final float SOLID_UV = 2f / ATLAS_SIZE;
-
     private static class Glyph {
         float u0, v0, u1, v1;       // texture coordinates in atlas
         int width, height;           // SDF bitmap dimensions
@@ -55,7 +48,7 @@ public class SdfFontRenderer {
 
     private final Map<Integer, Glyph> glyphs = new HashMap<>();
 
-    private int texture;
+    private TextureAtlas atlas;
     private int program;
     private int vbo;
     private int uProjectionLoc, uSmoothingLoc;
@@ -69,11 +62,6 @@ public class SdfFontRenderer {
     private ByteBuffer fontData;     // must stay alive while stbtt is using it
     private STBTTFontinfo fontInfo;  // kept alive for on-demand glyph rendering
     private final float[] vertexBuf = new float[MAX_CHARS_PER_DRAW * FLOATS_PER_CHAR];
-
-    // Shelf-packing cursor for the atlas
-    private int atlasCursorX;
-    private int atlasCursorY;
-    private int atlasRowHeight;
 
     // -----------------------------------------------------------------------
     // Public API
@@ -105,7 +93,7 @@ public class SdfFontRenderer {
             descent = pDescent.get(0);
         }
 
-        createAtlas();
+        atlas = new TextureAtlas(ATLAS_SIZE);
         createShader();
         createBuffers();
     }
@@ -143,31 +131,11 @@ public class SdfFontRenderer {
                 g.offsetX = pXo.get(0);
                 g.offsetY = pYo.get(0);
 
-                // Shelf-pack: advance to next row if this glyph doesn't fit
-                if (atlasCursorX + w > ATLAS_SIZE) {
-                    atlasCursorX = 0;
-                    atlasCursorY += atlasRowHeight;
-                    atlasRowHeight = 0;
-                }
-                if (atlasCursorY + h > ATLAS_SIZE) {
-                    stbtt_FreeSDF(sdf);
-                    throw new RuntimeException("SDF atlas overflow — increase ATLAS_SIZE");
-                }
-
-                // Upload this glyph's SDF data directly to the GPU texture
-                glBindTexture(GL_TEXTURE_2D, texture);
-                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                glTexSubImage2D(GL_TEXTURE_2D, 0,
-                        atlasCursorX, atlasCursorY, w, h,
-                        GL_RED, GL_UNSIGNED_BYTE, sdf);
-
-                g.u0 = atlasCursorX       / (float) ATLAS_SIZE;
-                g.v0 = atlasCursorY       / (float) ATLAS_SIZE;
-                g.u1 = (atlasCursorX + w) / (float) ATLAS_SIZE;
-                g.v1 = (atlasCursorY + h) / (float) ATLAS_SIZE;
-
-                atlasCursorX += w;
-                atlasRowHeight = Math.max(atlasRowHeight, h);
+                TextureAtlas.Region region = atlas.place(sdf, w, h);
+                g.u0 = region.u0();
+                g.v0 = region.v0();
+                g.u1 = region.u1();
+                g.v1 = region.v1();
 
                 stbtt_FreeSDF(sdf);
             }
@@ -215,7 +183,7 @@ public class SdfFontRenderer {
         glUniformMatrix4fv(uProjectionLoc, false, ortho);
 
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, texture);
+        atlas.bind();
     }
 
     /**
@@ -261,18 +229,18 @@ public class SdfFontRenderer {
     }
 
     /**
-     * Render a line of text with per-token coloring in a single batched draw call.
-     * Each token's color is baked into the vertex data, avoiding per-token draw calls.
+     * Render a line of text with per-span coloring in a single batched draw call.
+     * Each span's color is baked into the vertex data, avoiding per-span draw calls.
      *
      * @param line      full line text
-     * @param tokens    token list for the line (from the lexer)
+     * @param spans     color spans for the line
      * @param x         pixel x of column 0
      * @param y         pixel y (baseline)
      * @param scale     font scale
      * @param startCol  first visible column (scroll offset)
      * @param endCol    one past last visible column
      */
-    public void drawColoredLine(String line, List<Token> tokens, float x, float y,
+    public void drawColoredLine(String line, ColorSpan[] spans, float x, float y,
                                 float scale, int startCol, int endCol) {
         if (startCol >= endCol || startCol >= line.length()) return;
         endCol = Math.min(endCol, line.length());
@@ -288,21 +256,17 @@ public class SdfFontRenderer {
         glUniform1f(uSmoothingLoc, smoothing);
 
         float s = pixelScale * scale;
-        // Compute the advance width of a single character for column positioning.
-        // Since the font is monospace, every glyph has the same advance.
         float charAdvance = getCharAdvance(s);
 
         int batchSize = 0;
         int bufPos = 0;
 
-        for (Token tok : tokens) {
-            if (tok.type() == TokenType.WHITESPACE) continue;
-
-            int tStart = Math.max(tok.startCol(), startCol);
-            int tEnd = Math.min(tok.endCol(), endCol);
+        for (ColorSpan span : spans) {
+            int tStart = Math.max(span.startCol(), startCol);
+            int tEnd = Math.min(span.endCol(), endCol);
             if (tStart >= tEnd) continue;
 
-            float r = tok.type().r, g = tok.type().g, b = tok.type().b;
+            float r = span.r(), g = span.g(), b = span.b();
             float cursorX = x + (tStart - startCol) * charAdvance;
 
             for (int ci = tStart; ci < tEnd; ) {
@@ -390,16 +354,17 @@ public class SdfFontRenderer {
     public void drawRect(float x, float y, float w, float h, float r, float g, float b) {
         glUniform1f(uSmoothingLoc, 0.1f);
 
+        float su = atlas.getSolidU(), sv = atlas.getSolidV();
         float x1 = x + w;
         float y1 = y + h;
 
         int bufPos = 0;
-        bufPos = putVertex(bufPos, x,  y,  SOLID_UV, SOLID_UV, r, g, b);
-        bufPos = putVertex(bufPos, x1, y,  SOLID_UV, SOLID_UV, r, g, b);
-        bufPos = putVertex(bufPos, x1, y1, SOLID_UV, SOLID_UV, r, g, b);
-        bufPos = putVertex(bufPos, x,  y,  SOLID_UV, SOLID_UV, r, g, b);
-        bufPos = putVertex(bufPos, x1, y1, SOLID_UV, SOLID_UV, r, g, b);
-        bufPos = putVertex(bufPos, x,  y1, SOLID_UV, SOLID_UV, r, g, b);
+        bufPos = putVertex(bufPos, x,  y,  su, sv, r, g, b);
+        bufPos = putVertex(bufPos, x1, y,  su, sv, r, g, b);
+        bufPos = putVertex(bufPos, x1, y1, su, sv, r, g, b);
+        bufPos = putVertex(bufPos, x,  y,  su, sv, r, g, b);
+        bufPos = putVertex(bufPos, x1, y1, su, sv, r, g, b);
+        bufPos = putVertex(bufPos, x,  y1, su, sv, r, g, b);
 
         flushBatch(1, bufPos);
     }
@@ -407,14 +372,14 @@ public class SdfFontRenderer {
     /** Restore GL state after text rendering. */
     public void endText() {
         glUseProgram(0);
-        glBindTexture(GL_TEXTURE_2D, 0);
+        atlas.unbind();
         glDisable(GL_BLEND);
         glEnable(GL_DEPTH_TEST);
     }
 
     /** Free all GL resources and native memory. */
     public void dispose() {
-        glDeleteTextures(texture);
+        atlas.dispose();
         glDeleteBuffers(vbo);
         for (int vao : vaoByContext.values()) glDeleteVertexArrays(vao);
         vaoByContext.clear();
@@ -424,42 +389,6 @@ public class SdfFontRenderer {
             fontData = null;
         }
         fontInfo = null;
-    }
-
-    // -----------------------------------------------------------------------
-    // Atlas creation
-    // -----------------------------------------------------------------------
-
-    /**
-     * Create an empty atlas texture with a small solid-white region reserved
-     * at (0,0) for rectangle drawing. Glyphs are added later via ensureGlyph.
-     */
-    private void createAtlas() {
-        texture = glGenTextures();
-        glBindTexture(GL_TEXTURE_2D, texture);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-        // Allocate empty atlas
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, ATLAS_SIZE, ATLAS_SIZE,
-                0, GL_RED, GL_UNSIGNED_BYTE, (ByteBuffer) null);
-
-        // Reserve a 4x4 solid-white block at (0,0) for drawRect
-        ByteBuffer solid = MemoryUtil.memAlloc(4 * 4);
-        for (int i = 0; i < 16; i++) solid.put(i, (byte) 255);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 4,
-                GL_RED, GL_UNSIGNED_BYTE, solid);
-        MemoryUtil.memFree(solid);
-
-        // Start glyph packing after the reserved block
-        atlasCursorX = 4;
-        atlasCursorY = 0;
-        atlasRowHeight = 4;
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_2D, 0);
     }
 
     // -----------------------------------------------------------------------
@@ -549,14 +478,9 @@ public class SdfFontRenderer {
         glBufferData(GL_ARRAY_BUFFER, (long) MAX_CHARS_PER_DRAW * FLOATS_PER_CHAR * Float.BYTES, GL_DYNAMIC_DRAW);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-        // Create a VAO for the initial context
         ensureVao();
     }
 
-    /**
-     * Returns the VAO for the current GL context, creating one if needed.
-     * VAOs are not shared across contexts, so each window needs its own.
-     */
     private int ensureVao() {
         long ctx = org.lwjgl.glfw.GLFW.glfwGetCurrentContext();
         Integer vao = vaoByContext.get(ctx);
@@ -568,13 +492,10 @@ public class SdfFontRenderer {
         int stride = FLOATS_PER_VERTEX * Float.BYTES;
 
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        // layout(location=0) vec2 aPos
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 2, GL_FLOAT, false, stride, 0);
-        // layout(location=1) vec2 aUV
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(1, 2, GL_FLOAT, false, stride, 2L * Float.BYTES);
-        // layout(location=2) vec3 aColor
         glEnableVertexAttribArray(2);
         glVertexAttribPointer(2, 3, GL_FLOAT, false, stride, 4L * Float.BYTES);
 

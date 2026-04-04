@@ -1,5 +1,6 @@
 package spn.gui;
 
+import spn.fonts.SdfFontRenderer;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.glfw.GLFWVidMode;
@@ -89,7 +90,7 @@ public class Main {
         }
     }
 
-    void spawnWindow() {
+    EditorWindow spawnWindow() {
         long shareWith = windows.isEmpty() ? NULL : windows.getFirst().getHandle();
         EditorWindow w = new EditorWindow(shareWith);
         w.initComponents(font);
@@ -105,6 +106,7 @@ public class Main {
 
         w.show();
         pendingWindows.add(w);
+        return w;
     }
 
     private static void centerOnScreen(long window) {

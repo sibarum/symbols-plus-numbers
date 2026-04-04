@@ -16,6 +16,8 @@
         <module>spn-gui</module>
         <module>spn-stdlib</module>
         <module>spn-canvas</module>
+        <module>spn-graphics</module>
+        <module>spn-fonts</module>
     </modules>
 
     <properties>

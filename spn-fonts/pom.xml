@@ -9,7 +9,7 @@
         <version>1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>spn-gui</artifactId>
+    <artifactId>spn-fonts</artifactId>
 
     <properties>
         <lwjgl.version>3.3.6</lwjgl.version>
@@ -28,22 +28,6 @@
     </dependencyManagement>
 
     <dependencies>
-        <dependency>
-            <groupId>sibarum.spn.core</groupId>
-            <artifactId>spn-parse</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>sibarum.spn.core</groupId>
-            <artifactId>spn-canvas</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>sibarum.spn.core</groupId>
-            <artifactId>spn-fonts</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
         <!-- LWJGL Core -->
         <dependency>
             <groupId>org.lwjgl</groupId>
@@ -55,7 +39,7 @@
             <classifier>natives-windows</classifier>
         </dependency>
 
-        <!-- GLFW - windowing and input -->
+        <!-- GLFW (for glfwGetCurrentContext in VAO tracking) -->
         <dependency>
             <groupId>org.lwjgl</groupId>
             <artifactId>lwjgl-glfw</artifactId>
@@ -66,7 +50,7 @@
             <classifier>natives-windows</classifier>
         </dependency>
 
-        <!-- OpenGL bindings -->
+        <!-- OpenGL -->
         <dependency>
             <groupId>org.lwjgl</groupId>
             <artifactId>lwjgl-opengl</artifactId>
@@ -77,7 +61,7 @@
             <classifier>natives-windows</classifier>
         </dependency>
 
-        <!-- STB - font rendering -->
+        <!-- STB TrueType -->
         <dependency>
             <groupId>org.lwjgl</groupId>
             <artifactId>lwjgl-stb</artifactId>
@@ -85,35 +69,8 @@
         <dependency>
             <groupId>org.lwjgl</groupId>
             <artifactId>lwjgl-stb</artifactId>
-            <classifier>natives-windows</classifier>
-        </dependency>
-
-        <!-- TinyFileDialogs - native file browser -->
-        <dependency>
-            <groupId>org.lwjgl</groupId>
-            <artifactId>lwjgl-tinyfd</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.lwjgl</groupId>
-            <artifactId>lwjgl-tinyfd</artifactId>
             <classifier>natives-windows</classifier>
         </dependency>
     </dependencies>
 
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <version>3.4.2</version>
-                <configuration>
-                    <archive>
-                        <manifest>
-                            <mainClass>spn.gui.Main</mainClass>
-                        </manifest>
-                    </archive>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
 </project>

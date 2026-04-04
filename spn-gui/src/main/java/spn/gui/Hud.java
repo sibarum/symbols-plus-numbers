@@ -1,5 +1,7 @@
 package spn.gui;
 
+import spn.fonts.SdfFontRenderer;
+
 /**
  * A read-only display bar for contextual information: keyboard shortcuts,
  * error messages, code generation hints, etc.

@@ -1,5 +1,6 @@
 package spn.gui;
 
+import spn.fonts.SdfFontRenderer;
 import java.util.function.IntConsumer;
 
 import static org.lwjgl.glfw.GLFW.*;
