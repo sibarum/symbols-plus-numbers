@@ -85,6 +85,10 @@ public sealed interface FieldType {
         return new GenericParam(name);
     }
 
+    static FieldType ofFunction(FieldType[] paramTypes, FieldType returnType) {
+        return new OfFunction(paramTypes, returnType);
+    }
+
     // ── Variants ────────────────────────────────────────────────────────────
 
     /** Accepts any value. The "don't care" type. */
@@ -254,6 +258,28 @@ public sealed interface FieldType {
         @Override
         public String describe() {
             return name;
+        }
+    }
+
+    /**
+     * Accepts function values (CallTarget instances). Carries the full signature
+     * for type checking and display: {@code (Long, Long) -> Long}.
+     */
+    record OfFunction(FieldType[] paramTypes, FieldType returnType) implements FieldType {
+        @Override
+        public boolean accepts(Object value) {
+            return value instanceof com.oracle.truffle.api.CallTarget;
+        }
+
+        @Override
+        public String describe() {
+            var sb = new StringBuilder("(");
+            for (int i = 0; i < paramTypes.length; i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(paramTypes[i].describe());
+            }
+            sb.append(") -> ").append(returnType.describe());
+            return sb.toString();
         }
     }
 }

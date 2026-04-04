@@ -169,7 +169,7 @@ public class SpnLexer {
 
     private static boolean isDelimiter(char c) {
         return c == '(' || c == ')' || c == '[' || c == ']'
-                || c == '{' || c == '}' || c == ',';
+                || c == '{' || c == '}' || c == ',' || c == '.';
     }
 
     /** True if the given token type represents a value that could precede a division `/`. */

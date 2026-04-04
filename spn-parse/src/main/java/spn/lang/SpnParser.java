@@ -3,7 +3,10 @@ package spn.lang;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameSlotKind;
+import spn.language.ImportDirective;
 import spn.language.SpnLanguage;
+import spn.language.SpnModule;
+import spn.language.SpnModuleRegistry;
 import spn.node.SpnBlockNode;
 import spn.node.SpnExpressionNode;
 import spn.node.SpnRootNode;
@@ -14,7 +17,9 @@ import spn.node.ctrl.SpnIfNode;
 import spn.node.ctrl.SpnWhileNode;
 import spn.node.dict.SpnDictionaryLiteralNode;
 import spn.node.expr.*;
+import spn.node.func.SpnFunctionRefNode;
 import spn.node.func.SpnFunctionRootNode;
+import spn.node.func.SpnIndirectInvokeNode;
 import spn.node.func.SpnInvokeNode;
 import spn.node.lambda.SpnLambdaNode;
 import spn.node.lambda.SpnStreamBlockNode;
@@ -48,13 +53,23 @@ public class SpnParser {
     private final Map<String, CallTarget> functionRegistry = new LinkedHashMap<>();
     private final Map<String, spn.node.BuiltinFactory> builtinRegistry = new LinkedHashMap<>();
 
+    // Module system
+    private final SpnModuleRegistry moduleRegistry;
+    private final Map<String, SpnModule> qualifiedModules = new LinkedHashMap<>();
+
     // Current scope for frame slot management
     private Scope currentScope;
 
     public SpnParser(String source, SpnLanguage language, SpnSymbolTable symbolTable) {
+        this(source, language, symbolTable, null);
+    }
+
+    public SpnParser(String source, SpnLanguage language, SpnSymbolTable symbolTable,
+                     SpnModuleRegistry moduleRegistry) {
         this.tokens = new SpnTokenizer(source);
         this.language = language;
         this.symbolTable = symbolTable;
+        this.moduleRegistry = moduleRegistry;
     }
 
     public Map<String, spn.node.BuiltinFactory> getBuiltinRegistry() {
@@ -145,6 +160,10 @@ public class SpnParser {
         if (tok == null) return null;
 
         return switch (tok.text()) {
+            case "import" -> { parseImportDecl(); yield null; }
+            case "module" -> throw tokens.error(
+                    "Module declarations are implicit in SPN — the namespace is derived "
+                    + "from the file's position relative to artifact.spn");
             case "type" -> { parseTypeDecl(); yield null; }
             case "data" -> { parseDataDecl(); yield null; }
             case "struct" -> { parseStructDecl(); yield null; }
@@ -156,6 +175,133 @@ public class SpnParser {
             case "return" -> parseYieldStatement(); // return is syntactic sugar for yield
             default -> parseExpressionStatement();
         };
+    }
+
+    // ── Import declarations ────────────────────────────────────────────────
+
+    /**
+     * Parses an import declaration:
+     *   import Math
+     *   import Math (abs, sqrt, pow)
+     *   import Math as M
+     *   import spn.mylib.utils
+     *   import spn.mylib.utils (helperA, helperB)
+     *   import String (join as glue)
+     */
+    private void parseImportDecl() {
+        tokens.expect("import");
+
+        // Parse the module path
+        StringBuilder path = new StringBuilder();
+        SpnParseToken first = tokens.peek();
+
+        if (first.type() == TokenType.TYPE_NAME) {
+            // Short name: import Math, import Canvas
+            path.append(tokens.advance().text());
+        } else {
+            // FQ namespace: import spn.mylib.utils
+            path.append(tokens.expectType(TokenType.IDENTIFIER).text());
+            while (tokens.check(".")) {
+                tokens.advance(); // consume '.'
+                SpnParseToken segment = tokens.advance();
+                path.append(".").append(segment.text());
+            }
+        }
+
+        // Optional selective import list: (abs, min, max)
+        List<ImportDirective.ImportedName> names = null;
+        if (tokens.check("(")) {
+            tokens.advance();
+            names = new ArrayList<>();
+            while (!tokens.check(")")) {
+                String name = tokens.advance().text();
+                String alias = null;
+                if (tokens.check("as")) {
+                    tokens.advance(); // consume 'as' contextually
+                    alias = tokens.advance().text();
+                }
+                names.add(new ImportDirective.ImportedName(name, alias));
+                tokens.match(",");
+            }
+            tokens.expect(")");
+        }
+
+        // Optional qualifier: as M
+        String qualifier = null;
+        if (tokens.check("as")) {
+            tokens.advance(); // consume 'as' contextually
+            qualifier = tokens.advance().text();
+        }
+
+        ImportDirective directive = new ImportDirective(path.toString(), names, qualifier);
+        resolveAndApplyImport(directive);
+    }
+
+    /**
+     * Resolves an import directive and applies it to the current parser's registries.
+     */
+    private void resolveAndApplyImport(ImportDirective directive) {
+        if (moduleRegistry == null) {
+            throw tokens.error("Module system not available — cannot resolve import '"
+                    + directive.modulePath() + "'");
+        }
+
+        // Look up the module (native short name first, then FQ namespace)
+        SpnModule module = moduleRegistry.lookupNative(directive.modulePath())
+                .or(() -> moduleRegistry.lookup(directive.modulePath()))
+                .orElse(null);
+
+        if (module == null) {
+            throw tokens.error("Unknown module: " + directive.modulePath());
+        }
+
+        if (directive.isQualified()) {
+            // import X as Q — store module for qualified access
+            qualifiedModules.put(directive.qualifier(), module);
+            // Also apply selective imports if both qualifier and selective list are present
+            if (directive.isSelective()) {
+                applySelectiveImport(module, directive);
+            }
+        } else if (directive.isSelective()) {
+            // import X (a, b, c) — copy only named exports
+            applySelectiveImport(module, directive);
+        } else {
+            // import X — copy all exports
+            applyFullImport(module);
+        }
+    }
+
+    private void applyFullImport(SpnModule module) {
+        functionRegistry.putAll(module.getFunctions());
+        builtinRegistry.putAll(module.getBuiltinFactories());
+        typeRegistry.putAll(module.getTypes());
+        structRegistry.putAll(module.getStructs());
+        variantRegistry.putAll(module.getVariants());
+    }
+
+    private void applySelectiveImport(SpnModule module, ImportDirective directive) {
+        for (ImportDirective.ImportedName imp : directive.selectiveNames()) {
+            String src = imp.name();
+            String dst = imp.localName();
+
+            CallTarget fn = module.getFunction(src);
+            if (fn != null) { functionRegistry.put(dst, fn); continue; }
+
+            spn.node.BuiltinFactory bf = module.getBuiltinFactory(src);
+            if (bf != null) { builtinRegistry.put(dst, bf); continue; }
+
+            SpnTypeDescriptor td = module.getType(src);
+            if (td != null) { typeRegistry.put(dst, td); continue; }
+
+            SpnStructDescriptor sd = module.getStruct(src);
+            if (sd != null) { structRegistry.put(dst, sd); continue; }
+
+            SpnVariantSet vs = module.getVariant(src);
+            if (vs != null) { variantRegistry.put(dst, vs); continue; }
+
+            throw tokens.error("Module '" + module.getNamespace()
+                    + "' does not export '" + src + "'");
+        }
     }
 
     // ── Type declarations ──────────────────────────────────────────────────
@@ -793,6 +939,11 @@ public class SpnParser {
         if (name.equals("true")) return new SpnBooleanLiteralNode(true);
         if (name.equals("false")) return new SpnBooleanLiteralNode(false);
 
+        // Qualified module access: M.name or M.name(args)
+        if (tokens.check(".") && qualifiedModules.containsKey(name)) {
+            return parseQualifiedAccess(name);
+        }
+
         // Function call: name(args)
         if (tokens.check("(")) {
             tokens.advance();
@@ -823,15 +974,75 @@ public class SpnParser {
                 return deferred;
             }
 
+            // Indirect call — variable might hold a function value
+            int callSlot = currentScope.lookupLocal(name);
+            if (callSlot >= 0) {
+                return new SpnIndirectInvokeNode(
+                        new SpnReadLocalVariableNodeWrapper(callSlot),
+                        args.toArray(new SpnExpressionNode[0]));
+            }
+
             throw tokens.error("Unknown function: " + name, tok);
         }
 
         // Variable read
         int slot = currentScope.lookupLocal(name);
-        if (slot < 0) {
-            throw tokens.error("Undefined variable: " + name, tok);
+        if (slot >= 0) {
+            return new SpnReadLocalVariableNodeWrapper(slot);
         }
-        return new SpnReadLocalVariableNodeWrapper(slot);
+
+        // Function reference as value (bare name, no call)
+        CallTarget refTarget = functionRegistry.get(name);
+        if (refTarget != null) {
+            return new SpnFunctionRefNode(refTarget);
+        }
+
+        throw tokens.error("Undefined variable: " + name, tok);
+    }
+
+    /**
+     * Parses qualified module access: M.name or M.name(args...)
+     * Called when we've seen an identifier that matches a qualified module prefix
+     * and the next token is '.'.
+     */
+    private SpnExpressionNode parseQualifiedAccess(String qualifier) {
+        tokens.expect("."); // consume the dot
+        SpnParseToken memberTok = tokens.advance();
+        String memberName = memberTok.text();
+        SpnModule module = qualifiedModules.get(qualifier);
+
+        // Qualified function call: M.name(args...)
+        if (tokens.check("(")) {
+            tokens.advance();
+            List<SpnExpressionNode> args = new ArrayList<>();
+            while (!tokens.check(")")) {
+                args.add(parseExpression());
+                tokens.match(",");
+            }
+            tokens.expect(")");
+
+            CallTarget target = module.getFunction(memberName);
+            if (target != null) {
+                return new SpnInvokeNode(target, args.toArray(new SpnExpressionNode[0]));
+            }
+
+            spn.node.BuiltinFactory builtin = module.getBuiltinFactory(memberName);
+            if (builtin != null) {
+                return builtin.create(args.toArray(new SpnExpressionNode[0]));
+            }
+
+            throw tokens.error("Module '" + qualifier + "' (" + module.getNamespace()
+                    + ") does not export function '" + memberName + "'", memberTok);
+        }
+
+        // Qualified function reference: M.name (no call)
+        CallTarget refTarget = module.getFunction(memberName);
+        if (refTarget != null) {
+            return new SpnFunctionRefNode(refTarget);
+        }
+
+        throw tokens.error("Module '" + qualifier + "' (" + module.getNamespace()
+                + ") does not export '" + memberName + "'", memberTok);
     }
 
     private SpnExpressionNode parseTypeConstructor() {

@@ -1,9 +1,9 @@
 package spn.canvas;
 
-import com.oracle.truffle.api.CallTarget;
 import spn.canvas.node.*;
+import spn.language.SpnModule;
+import spn.language.SpnModuleRegistry;
 import spn.node.BuiltinFactory;
-import spn.node.SpnExpressionNode;
 
 import java.util.Map;
 
@@ -16,8 +16,8 @@ public final class CanvasBuiltins {
     private CanvasBuiltins() {}
 
     /**
-     * @param registry       the parser's builtin registry
-     * @param callTargetResolver resolves a function name to its CallTarget (for animate's callback)
+     * Legacy registration into a flat builtin map.
+     * @param registry the parser's builtin registry
      */
     public static void register(Map<String, BuiltinFactory> registry) {
         registry.put("canvas", args -> SpnCanvasOpenNodeGen.create(args[0], args[1]));
@@ -29,7 +29,24 @@ public final class CanvasBuiltins {
         registry.put("rect",   args -> SpnCanvasRectNodeGen.create(args[0], args[1], args[2], args[3]));
         registry.put("circle", args -> SpnCanvasCircleNodeGen.create(args[0], args[1], args[2]));
         registry.put("line",   args -> SpnCanvasLineNodeGen.create(args[0], args[1], args[2], args[3]));
-        // animate(fps, drawFn) is handled specially — the second arg is a function reference
-        // that needs CallTarget resolution. This will be wired when the parser supports it.
+        registry.put("animate", args -> SpnCanvasAnimateNodeGen.create(args[0], args[1]));
+    }
+
+    /**
+     * Registers the Canvas module into the module system.
+     */
+    public static void registerModule(SpnModuleRegistry registry) {
+        SpnModule.Builder builder = SpnModule.builder("Canvas");
+        builder.builtinFactory("canvas", args -> SpnCanvasOpenNodeGen.create(args[0], args[1]));
+        builder.builtinFactory("show",   args -> SpnCanvasShowNodeGen.create());
+        builder.builtinFactory("clear",  args -> SpnCanvasClearNodeGen.create(args[0], args[1], args[2]));
+        builder.builtinFactory("fill",   args -> SpnCanvasFillNodeGen.create(args[0], args[1], args[2]));
+        builder.builtinFactory("stroke", args -> SpnCanvasStrokeNodeGen.create(args[0], args[1], args[2]));
+        builder.builtinFactory("strokeWeight", args -> SpnCanvasStrokeWeightNodeGen.create(args[0]));
+        builder.builtinFactory("rect",   args -> SpnCanvasRectNodeGen.create(args[0], args[1], args[2], args[3]));
+        builder.builtinFactory("circle", args -> SpnCanvasCircleNodeGen.create(args[0], args[1], args[2]));
+        builder.builtinFactory("line",   args -> SpnCanvasLineNodeGen.create(args[0], args[1], args[2], args[3]));
+        builder.builtinFactory("animate", args -> SpnCanvasAnimateNodeGen.create(args[0], args[1]));
+        registry.register("Canvas", builder.build());
     }
 }

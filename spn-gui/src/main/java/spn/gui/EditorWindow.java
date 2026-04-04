@@ -219,8 +219,9 @@ public class EditorWindow {
         spn.canvas.CanvasState.set(canvasState);
         try {
             SpnSymbolTable symbolTable = new SpnSymbolTable();
-            SpnParser parser = new SpnParser(source, null, symbolTable);
-            spn.canvas.CanvasBuiltins.register(parser.getBuiltinRegistry());
+            spn.language.SpnModuleRegistry moduleRegistry = new spn.language.SpnModuleRegistry();
+            spn.canvas.CanvasBuiltins.registerModule(moduleRegistry);
+            SpnParser parser = new SpnParser(source, null, symbolTable, moduleRegistry);
             SpnRootNode root = parser.parse();
             Object result = root.getCallTarget().call();
 

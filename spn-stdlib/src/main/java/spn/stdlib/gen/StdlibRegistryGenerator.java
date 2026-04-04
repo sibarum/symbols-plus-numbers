@@ -1,12 +1,15 @@
 package spn.stdlib.gen;
 
 import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.dsl.Specialization;
 import spn.node.builtin.SpnBuiltin;
 import spn.node.builtin.SpnParamHint;
 
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -39,7 +42,8 @@ public final class StdlibRegistryGenerator {
             List<ParamHintInfo> hints,
             boolean hasCallTargetCtor,  // constructor takes CallTarget
             String ctorParamName,       // name of the CallTarget param in @SpnParamHint
-            boolean isAbstract          // true = DSL node (use Gen class), false = concrete (use directly)
+            boolean isAbstract,         // true = DSL node (use Gen class), false = concrete (use directly)
+            List<String> inferredParamTypes  // SPN type names inferred from @Specialization methods
     ) {}
 
     record ParamHintInfo(String name, String type, boolean function) {}
@@ -69,8 +73,15 @@ public final class StdlibRegistryGenerator {
             generate(builtins, out);
         }
 
+        // Generate SPN interface declarations
+        Path spnFile = outputDir.resolve("spn-stdlib.spn");
+        try (var out = new PrintWriter(Files.newBufferedWriter(spnFile))) {
+            generateSpnInterface(builtins, out);
+        }
+
         System.out.println("[StdlibRegistryGenerator] Generated SpnStdlibRegistry with "
                 + builtins.size() + " builtins.");
+        System.out.println("[StdlibRegistryGenerator] Generated " + spnFile);
     }
 
     /** Scans the classes directory for .class files annotated with @SpnBuiltin. */
@@ -130,14 +141,19 @@ public final class StdlibRegistryGenerator {
 
                     // Abstract nodes get a Truffle-generated *Gen factory class;
                     // concrete (final) nodes are used directly
-                    boolean isAbstract = java.lang.reflect.Modifier.isAbstract(clazz.getModifiers());
+                    boolean isAbstract = Modifier.isAbstract(clazz.getModifiers());
                     String genClassName = isAbstract ? className + "Gen" : className;
+
+                    // Infer parameter and return types from @Specialization methods
+                    List<String> inferredParamTypes = inferParamTypes(clazz, nodeChildren, hints);
+                    String resolvedReturn = annotation.returns().isEmpty()
+                            ? inferReturnType(clazz) : annotation.returns();
 
                     builtins.add(new BuiltinInfo(
                             annotation.name(), annotation.module(), annotation.pure(),
-                            annotation.returns(), className, genClassName,
+                            resolvedReturn, className, genClassName,
                             nodeChildren, hints, hasCallTargetCtor, ctorParamName,
-                            isAbstract));
+                            isAbstract, inferredParamTypes));
 
                 } catch (ClassNotFoundException | NoClassDefFoundError e) {
                     // Skip classes that can't be loaded
@@ -328,6 +344,161 @@ public final class StdlibRegistryGenerator {
         out.println("    }");
         out.println();
     }
+
+    // ── SPN interface generation ─────────────────────────────────────────────
+
+    /**
+     * Infers SPN type names for each @NodeChild parameter by inspecting @Specialization methods.
+     * Picks the "widest" type seen across all specializations for each parameter position.
+     */
+    private static List<String> inferParamTypes(Class<?> clazz, List<String> params,
+                                                 List<ParamHintInfo> hints) {
+        if (params.isEmpty()) return List.of();
+
+        // Collect all @Specialization methods (they're protected, on the abstract class)
+        List<Method> specMethods = new ArrayList<>();
+        for (Method m : clazz.getDeclaredMethods()) {
+            if (m.isAnnotationPresent(Specialization.class)) {
+                specMethods.add(m);
+            }
+        }
+
+        // null = not yet inferred, "_" = definitively untyped
+        String[] result = new String[params.size()];
+
+        // Check @SpnParamHint overrides first (these are final — skip inference)
+        for (int i = 0; i < params.size(); i++) {
+            String paramName = params.get(i);
+            for (var hint : hints) {
+                if (hint.name().equals(paramName) && !hint.type().isEmpty()) {
+                    result[i] = hint.type();
+                }
+                if (hint.name().equals(paramName) && hint.function()) {
+                    result[i] = "Function";
+                }
+            }
+        }
+
+        // Infer from @Specialization method signatures (widen across all specializations)
+        for (Method m : specMethods) {
+            Class<?>[] paramTypes = m.getParameterTypes();
+            for (int i = 0; i < Math.min(paramTypes.length, params.size()); i++) {
+                if (result[i] != null && (result[i].equals("Function") || result[i].equals("_"))) continue;
+                String spnType = javaTypeToSpnType(paramTypes[i]);
+                if (spnType == null) continue;
+                if (result[i] == null) {
+                    result[i] = spnType;
+                } else {
+                    result[i] = widenType(result[i], spnType);
+                }
+            }
+        }
+
+        // Replace remaining nulls with "_"
+        for (int i = 0; i < result.length; i++) {
+            if (result[i] == null) result[i] = "_";
+        }
+
+        return List.of(result);
+    }
+
+    /** Infers the SPN return type by widening across all @Specialization method return types. */
+    private static String inferReturnType(Class<?> clazz) {
+        String result = null;
+        for (Method m : clazz.getDeclaredMethods()) {
+            if (!m.isAnnotationPresent(Specialization.class)) continue;
+            String spnType = javaTypeToSpnType(m.getReturnType());
+            if (spnType == null) continue;
+            if (result == null) {
+                result = spnType;
+            } else {
+                result = widenType(result, spnType);
+            }
+        }
+        return result;
+    }
+
+    /** Maps a Java parameter type to an SPN type name. */
+    private static String javaTypeToSpnType(Class<?> javaType) {
+        if (javaType == long.class || javaType == Long.class) return "Long";
+        if (javaType == double.class || javaType == Double.class) return "Double";
+        if (javaType == boolean.class || javaType == Boolean.class) return "Boolean";
+        if (javaType == String.class) return "String";
+        String name = javaType.getSimpleName();
+        if (name.equals("SpnArrayValue")) return "Array";
+        if (name.equals("SpnSetValue")) return "Set";
+        if (name.equals("SpnDictionaryValue")) return "Dict";
+        if (name.equals("SpnSymbol")) return "Symbol";
+        if (name.equals("SpnStructValue")) return "Option"; // structs in stdlib are Option/Result
+        if (name.equals("Object")) return "_";
+        return null;
+    }
+
+    /** Picks the wider of two SPN types (e.g., Long + Double → Double). */
+    private static String widenType(String existing, String candidate) {
+        if (existing.equals(candidate)) return existing;
+        // Long + Double → Double (numeric widening)
+        if (Set.of("Long", "Double").containsAll(Set.of(existing, candidate))) return "Double";
+        // Object or mismatched types → untyped
+        return "_";
+    }
+
+    /** Generates the SPN interface declaration file. */
+    private static void generateSpnInterface(List<BuiltinInfo> builtins, PrintWriter out) {
+        out.println("-- ═══════════════════════════════════════════════════════════════════════");
+        out.println("-- SPN Standard Library — Interface Declarations");
+        out.println("-- ═══════════════════════════════════════════════════════════════════════");
+        out.println("-- Auto-generated from @SpnBuiltin annotations.");
+        out.println("-- DO NOT EDIT — changes will be overwritten on rebuild.");
+        out.println("-- ═══════════════════════════════════════════════════════════════════════");
+        out.println();
+
+        // Group by module
+        Map<String, List<BuiltinInfo>> byModule = builtins.stream()
+                .collect(Collectors.groupingBy(BuiltinInfo::module, LinkedHashMap::new, Collectors.toList()));
+
+        for (var entry : byModule.entrySet()) {
+            String module = entry.getKey();
+            List<BuiltinInfo> fns = entry.getValue();
+
+            out.println();
+            out.println("-- ─── " + module.toUpperCase() + " "
+                    + "─".repeat(Math.max(1, 66 - module.length())) + "──");
+            out.println();
+
+            for (BuiltinInfo b : fns) {
+                out.println(formatSpnDeclaration(b));
+            }
+        }
+    }
+
+    /** Formats a single SPN function declaration. */
+    private static String formatSpnDeclaration(BuiltinInfo b) {
+        var sb = new StringBuilder();
+        sb.append(b.pure() ? "pure " : "");
+        sb.append(b.name()).append("(");
+
+        // Build the parameter type list
+        List<String> paramTypes = new ArrayList<>(b.inferredParamTypes());
+
+        // Append function param if higher-order
+        if (b.hasCallTargetCtor()) {
+            paramTypes.add("Function");
+        }
+
+        sb.append(String.join(", ", paramTypes));
+        sb.append(")");
+
+        // Return type (skip if untyped/unknown)
+        String ret = b.returns();
+        if (ret != null && !ret.isEmpty() && !"_".equals(ret)) {
+            sb.append(" -> ").append(ret);
+        }
+
+        return sb.toString();
+    }
+
+    // ── Java registry helpers ───────────────────────────────────────────────
 
     /** Infers a FieldType expression for a @NodeChild based on @SpnParamHint or naming conventions. */
     private static String inferFieldType(BuiltinInfo b, String childName) {

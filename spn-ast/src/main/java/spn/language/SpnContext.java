@@ -13,10 +13,12 @@ public final class SpnContext {
 
     private final SpnLanguage language;
     private final TruffleLanguage.Env env;
+    private final SpnModuleRegistry moduleRegistry;
 
     public SpnContext(SpnLanguage language, TruffleLanguage.Env env) {
         this.language = language;
         this.env = env;
+        this.moduleRegistry = new SpnModuleRegistry();
     }
 
     public SpnLanguage getLanguage() {
@@ -25,5 +27,9 @@ public final class SpnContext {
 
     public TruffleLanguage.Env getEnv() {
         return env;
+    }
+
+    public SpnModuleRegistry getModuleRegistry() {
+        return moduleRegistry;
     }
 }
