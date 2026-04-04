@@ -7,7 +7,16 @@
       "Read(//c/Users/Owner/AppData/Local/**)",
       "Bash(jar tf:*)",
       "Bash(mvn package:*)",
-      "Bash(unzip -l spn-intellij-plugin/target/spn-intellij-plugin.zip)"
+      "Bash(unzip -l spn-intellij-plugin/target/spn-intellij-plugin.zip)",
+      "Bash(mv cott/pem/traction/spn/*.java spn/gui/lang/)",
+      "Bash(mv cott/pem/traction/*.java spn/gui/)",
+      "Bash(rm -rf cott)",
+      "Bash(find spn-gui/src -name \"*.java\" -exec sed -i 's/cott\\\\.pem\\\\.traction\\\\.spn/spn.gui.lang/g' {} +)",
+      "Bash(find spn-gui/src -name \"*.java\" -exec sed -i 's/cott\\\\.pem\\\\.traction/spn.gui/g' {} +)",
+      "Bash(xargs grep:*)",
+      "Bash(grep -E \"\\\\.java$\")",
+      "Bash(mvn process-classes:*)",
+      "Bash(mvn clean:*)"
     ]
   }
 }

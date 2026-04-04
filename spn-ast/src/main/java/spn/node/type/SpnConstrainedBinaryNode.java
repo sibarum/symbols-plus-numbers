@@ -143,7 +143,8 @@ public final class SpnConstrainedBinaryNode extends SpnExpressionNode {
             if (!constraint.check(result)) {
                 throw new SpnException(
                         "Operation result " + result + " violates constraint '"
-                                + constraint.describe() + "' of type " + typeDescriptor.getName(),
+                                + typeDescriptor.describeConstraint(constraint)
+                                + "' of type " + typeDescriptor.getName(),
                         this);
             }
         }

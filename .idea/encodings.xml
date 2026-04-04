@@ -3,12 +3,20 @@
   <component name="Encoding">
     <file url="file://$PROJECT_DIR$/spn-ast/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-ast/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-canvas/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-canvas/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-gui/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-gui/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-intellij-plugin/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-intellij-plugin/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-maven-plugin/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-maven-plugin/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-parse/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-parse/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-pkg/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/spn-pkg/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-stdlib/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/spn-stdlib/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/src/main/resources" charset="UTF-8" />
   </component>

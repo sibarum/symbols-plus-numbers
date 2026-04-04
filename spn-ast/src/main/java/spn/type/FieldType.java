@@ -53,6 +53,10 @@ public sealed interface FieldType {
         return new OfStruct(descriptor);
     }
 
+    static FieldType ofVariant(SpnVariantSet variantSet) {
+        return new OfVariant(variantSet);
+    }
+
     static FieldType ofConstrainedType(SpnTypeDescriptor descriptor) {
         return new OfConstrainedType(descriptor);
     }
@@ -112,6 +116,23 @@ public sealed interface FieldType {
         @Override
         public String describe() {
             return descriptor.getName();
+        }
+    }
+
+    /** Accepts SpnStructValue instances belonging to any variant in a variant set (ADT). */
+    record OfVariant(SpnVariantSet variantSet) implements FieldType {
+        @Override
+        public boolean accepts(Object value) {
+            if (!(value instanceof SpnStructValue sv)) return false;
+            for (var variant : variantSet.getVariants()) {
+                if (sv.getDescriptor() == variant) return true;
+            }
+            return false;
+        }
+
+        @Override
+        public String describe() {
+            return variantSet.getName();
         }
     }
 

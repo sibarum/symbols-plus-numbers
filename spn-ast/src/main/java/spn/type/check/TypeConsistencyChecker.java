@@ -135,7 +135,7 @@ public final class TypeConsistencyChecker {
                 if (!moduloConstraintsCompatible(m1, m2)) {
                     diagnostics.add(Diagnostic.error(EMPTY_TYPE,
                             "Type '" + type.getName() + "' has incompatible modular constraints: "
-                                    + m1.describe() + " and " + m2.describe()
+                                    + type.describeConstraint(m1) + " and " + type.describeConstraint(m2)
                                     + " have no common solutions."));
                     return;
                 }
@@ -160,7 +160,7 @@ public final class TypeConsistencyChecker {
             desc.append(" where ");
             for (int i = 0; i < moduloConstraints.size(); i++) {
                 if (i > 0) desc.append(" and ");
-                desc.append(moduloConstraints.get(i).describe());
+                desc.append(type.describeConstraint(moduloConstraints.get(i)));
             }
         }
         diagnostics.add(Diagnostic.info(FEASIBILITY, desc.toString()));
@@ -224,7 +224,7 @@ public final class TypeConsistencyChecker {
                 diagnostics.add(Diagnostic.error(RULE_OUTPUT_VIOLATION,
                         "Rule [" + rule.describe() + "] in type '" + type.getName()
                                 + "' produces " + result + " which violates constraint '"
-                                + violation.describe() + "'."));
+                                + type.describeConstraint(violation) + "'."));
             }
         }
     }

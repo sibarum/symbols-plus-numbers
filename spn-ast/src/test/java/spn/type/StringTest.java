@@ -308,11 +308,11 @@ class StringTest {
 
             var httpBranch = new SpnMatchBranchNode(
                     new MatchPattern.StringPrefix("http://"), new int[]{restSlot},
-                    SpnAddNodeGen.create(new SpnStringLiteralNode("web: "),
+                    SpnStringConcatNodeGen.create(new SpnStringLiteralNode("web: "),
                             spn.node.local.SpnReadLocalVariableNodeGen.create(restSlot)));
             var ftpBranch = new SpnMatchBranchNode(
                     new MatchPattern.StringPrefix("ftp://"), new int[]{restSlot},
-                    SpnAddNodeGen.create(new SpnStringLiteralNode("file: "),
+                    SpnStringConcatNodeGen.create(new SpnStringLiteralNode("file: "),
                             spn.node.local.SpnReadLocalVariableNodeGen.create(restSlot)));
             var fallback = new SpnMatchBranchNode(
                     new MatchPattern.Wildcard(), new int[]{},
@@ -325,7 +325,7 @@ class StringTest {
             // Need fresh nodes for second execution
             var ftpBranch2 = new SpnMatchBranchNode(
                     new MatchPattern.StringPrefix("ftp://"), new int[]{restSlot},
-                    SpnAddNodeGen.create(new SpnStringLiteralNode("file: "),
+                    SpnStringConcatNodeGen.create(new SpnStringLiteralNode("file: "),
                             spn.node.local.SpnReadLocalVariableNodeGen.create(restSlot)));
             var fallback2 = new SpnMatchBranchNode(
                     new MatchPattern.Wildcard(), new int[]{},

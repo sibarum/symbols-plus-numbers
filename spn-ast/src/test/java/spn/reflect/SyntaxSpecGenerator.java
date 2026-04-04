@@ -41,6 +41,7 @@ class SyntaxSpecGenerator {
 
         // Natural numbers
         var natural = SpnTypeDescriptor.builder("Natural")
+                .valueParam("n")
                 .constraint(new Constraint.GreaterThanOrEqual(0))
                 .constraint(new Constraint.ModuloEquals(1, 0))
                 .build();
@@ -49,6 +50,7 @@ class SyntaxSpecGenerator {
         // Extended natural with Omega
         var omega = new SpnDistinguishedElement("Omega");
         var extNat = SpnTypeDescriptor.builder("ExtendedNatural")
+                .valueParam("n")
                 .constraint(new Constraint.GreaterThanOrEqual(0))
                 .constraint(new Constraint.ModuloEquals(1, 0))
                 .element(omega)
@@ -124,6 +126,7 @@ class SyntaxSpecGenerator {
                 """);
 
         var identifier = SpnTypeDescriptor.builder("Identifier")
+                .valueParam("s")
                 .constraint(new Constraint.MinLength(1))
                 .constraint(new Constraint.MaxLength(64))
                 .constraint(new Constraint.MatchesPattern("[a-zA-Z_][a-zA-Z0-9_]*"))
@@ -131,6 +134,7 @@ class SyntaxSpecGenerator {
         sb.append(SpnSourceReflector.reflectType(identifier)).append("\n\n");
 
         var hexColor = SpnTypeDescriptor.builder("HexColor")
+                .valueParam("s")
                 .constraint(new Constraint.MinLength(6))
                 .constraint(new Constraint.MaxLength(6))
                 .constraint(new Constraint.CharSetConstraint(Constraint.CharClass.HEX))
@@ -196,15 +200,16 @@ class SyntaxSpecGenerator {
                 """);
 
         var areaFunc = SpnFunctionDescriptor.pure("area")
-                .param("shape")
+                .param("shape", FieldType.ofVariant(shape))
                 .returns(FieldType.DOUBLE)
                 .build();
-        sb.append(SpnSourceReflector.reflectFunction(areaFunc)).append(" =\n");
+        sb.append(SpnSourceReflector.reflectFunction(areaFunc)).append(" = (shape) {\n");
         sb.append("""
                   match shape
                     | Circle(r)          -> 3.14159 * r * r
                     | Rectangle(w, h)    -> w * h
                     | Triangle(a, b, c)  -> heron(a, b, c)
+                }
 
                 """);
 
@@ -213,23 +218,23 @@ class SyntaxSpecGenerator {
                 .param("b", FieldType.LONG)
                 .returns(FieldType.LONG)
                 .build();
-        sb.append(SpnSourceReflector.reflectFunction(addFunc)).append(" = a + b\n\n");
+        sb.append(SpnSourceReflector.reflectFunction(addFunc)).append(" = (a, b) { a + b }\n\n");
 
+        var dirType = SpnTypeDescriptor.builder("Direction")
+                .valueParam("d")
+                .constraint(new Constraint.IsSymbol()).build();
         var oppositeFunc = SpnFunctionDescriptor.pure("opposite")
-                .param("dir", FieldType.ofConstrainedType(
-                        SpnTypeDescriptor.builder("Direction")
-                                .constraint(new Constraint.IsSymbol()).build()))
-                .returns(FieldType.ofConstrainedType(
-                        SpnTypeDescriptor.builder("Direction")
-                                .constraint(new Constraint.IsSymbol()).build()))
+                .param("dir", FieldType.ofConstrainedType(dirType))
+                .returns(FieldType.ofConstrainedType(dirType))
                 .build();
-        sb.append(SpnSourceReflector.reflectFunction(oppositeFunc)).append(" =\n");
+        sb.append(SpnSourceReflector.reflectFunction(oppositeFunc)).append(" = (dir) {\n");
         sb.append("""
                   match dir
                     | :north -> :south
                     | :south -> :north
                     | :east  -> :west
                     | :west  -> :east
+                }
 
                 """);
 
@@ -240,76 +245,84 @@ class SyntaxSpecGenerator {
                 -- array structure, set membership, dictionary keys, or wildcard.
 
                 -- String patterns
-                pure parseUrl(url: String) -> String =
+                pure parseUrl(String) -> String = (url) {
                   match url
                     | "http://" ++ rest                -> "web: " ++ rest
                     | "ftp://" ++ rest                 -> "file: " ++ rest
                     | /(\\w+):\\/\\/(.*)/(_,proto,path) -> proto ++ "://" ++ path
                     | _                                -> "unknown"
+                }
 
                 -- Array patterns
-                pure sum(arr: Array<Long>) -> Long =
+                pure sum(Array<Long>) -> Long = (arr) {
                   match arr
                     | []      -> 0
                     | [h | t] -> h + sum(t)
+                }
 
-                pure head3(arr) =
+                pure head3(_) = (arr) {
                   match arr
                     | [a, b, c] -> (a, b, c)
                     | _         -> (:error, 0, 0)
+                }
 
                 -- Set patterns (membership only, no positional)
-                pure describeColors(colors: Set<Symbol>) -> String =
+                pure describeColors(Set<Symbol>) -> String = (colors) {
                   match colors
                     | {}                       -> "none"
                     | {contains :red, :blue}   -> "has red and blue"
                     | {contains :red}          -> "has red"
                     | _                        -> "other"
+                }
 
                 -- Dictionary patterns (key destructuring, binds values)
-                pure greet(person: Dict) -> String =
+                pure greet(Dict) -> String = (person) {
                   match person
                     | {:name n, :age a} -> "Hello " ++ n ++ ", age " ++ show(a)
                     | {:name n}         -> "Hello " ++ n
                     | {:}               -> "Hello stranger"
                     | _                 -> "not a dict"
+                }
 
                 -- Guards
-                pure classify(n: Long) -> String =
-                  match n
-                    | x | x < 0  -> "negative"
-                    | x | x > 0  -> "positive"
-                    | _           -> "zero"
+                pure classify(Long) -> String = (x) {
+                  match x
+                    | v | v < 0  -> "negative"
+                    | v | v > 0  -> "positive"
+                    | _          -> "zero"
+                }
 
                 """);
 
         sb.append("""
 
-                -- ─── LAMBDA SCOPE & STREAMING ───────────────────────────────────────────
-                -- Lambda blocks execute in the caller's frame (read/write parent vars).
-                -- They cannot be passed by reference. Used with yield for streaming.
+                -- ─── CLOSURES & STREAMING ───────────────────────────────────────────────
+                -- Closure blocks execute in the caller's frame (read/write parent vars).
+                -- They cannot be passed by reference. Used with yield-based producers
+                -- via the "while ... do" syntax.
 
                 -- Accumulation via streaming
                 let sum = 0
-                stream range(1, 10) { |n|
+                while range(1, 10) do (n) {
                   sum = sum + n
                 }
                 -- sum == 45
 
                 -- Map-like transformation
                 let results = []
-                stream range(0, 5) { |i|
+                while range(0, 5) do (i) {
                   results = append(results, i * i)
                 }
                 -- results == [0, 1, 4, 9, 16]
 
                 -- Producer function (uses yield)
-                pure range(start: Long, end: Long) =
+                pure range(Long, Long) = (start, end) {
                   let i = start
-                  while i < end do
+                  while {i < end} do {
                     yield i
                     i = i + 1
-                  end
+                  }
+                }
 
                 """);
 

@@ -32,9 +32,7 @@ import spn.node.SpnExpressionNode;
  *      The "replaces" parameter means: once we activate addDoubles, remove addLongs
  *      from consideration (since doubles subsume longs via our @ImplicitCast).
  *
- *   3. addStrings: String concatenation -- a completely separate type specialization.
- *
- *   4. typeError: The @Fallback catches any type combination not handled above.
+ *   3. typeError: The @Fallback catches any type combination not handled above.
  *
  * At steady state, if this node always sees long+long, only addLongs exists in the
  * compiled code. No type checks, no boxing, no polymorphic dispatch -- just a single
@@ -66,16 +64,12 @@ public abstract class SpnAddNode extends SpnExpressionNode {
     }
 
     /**
-     * String concatenation.
-     */
-    @Specialization
-    protected String addStrings(String left, String right) {
-        return left + right;
-    }
-
-    /**
      * Type error fallback. @Fallback matches any combination of types not covered
      * by the specializations above.
+     *
+     * String concatenation is handled separately by SpnStringConcatNode (the ++ operator)
+     * to keep string handling in a single place -- future work will allow configurable
+     * string strategies (StringBuilder, StringBuffer, LinkedList, etc.).
      */
     @Fallback
     protected Object typeError(Object left, Object right) {

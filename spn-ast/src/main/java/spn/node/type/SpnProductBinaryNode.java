@@ -11,6 +11,7 @@ import spn.type.ComponentDescriptor;
 import spn.type.ComponentExpression;
 import spn.type.Operation;
 import spn.type.ProductOperationDef;
+import spn.type.SpnConstrainedValue;
 import spn.type.SpnDistinguishedElement;
 import spn.type.SpnProductValue;
 import spn.type.SpnTypeDescriptor;
@@ -153,7 +154,9 @@ public final class SpnProductBinaryNode extends SpnExpressionNode {
     }
 
     private static Object unwrap(Object value) {
-        if (value instanceof SpnProductValue) return value;
+        if (value instanceof SpnConstrainedValue constrained) {
+            return constrained.getValue();
+        }
         return value;
     }
 }

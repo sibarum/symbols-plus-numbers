@@ -17,11 +17,17 @@ public abstract class SpnDivideNode extends SpnExpressionNode {
 
     @Specialization
     protected long divLongs(long left, long right) {
+        if (right == 0) {
+            throw new SpnException("Division by zero", this);
+        }
         return left / right;
     }
 
     @Specialization
     protected double divDoubles(double left, double right) {
+        if (right == 0.0) {
+            throw new SpnException("Division by zero", this);
+        }
         return left / right;
     }
 

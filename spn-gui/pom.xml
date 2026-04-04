@@ -33,6 +33,11 @@
             <artifactId>spn-parse</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>sibarum.spn.core</groupId>
+            <artifactId>spn-canvas</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
         <!-- LWJGL Core -->
         <dependency>
@@ -99,7 +104,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>cott.pem.traction.Main</mainClass>
+                            <mainClass>spn.gui.Main</mainClass>
                         </manifest>
                     </archive>
                 </configuration>

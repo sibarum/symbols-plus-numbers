@@ -27,6 +27,11 @@ public final class SpnSourceReflector {
     public static String reflectType(SpnTypeDescriptor type) {
         var sb = new StringBuilder("type ").append(type.getName());
 
+        // Value parameter for scalar constrained types
+        if (type.hasValueParam() && type.getComponentDescriptors().length == 0) {
+            sb.append("(").append(type.getValueParam()).append(")");
+        }
+
         // Product components
         ComponentDescriptor[] comps = type.getComponentDescriptors();
         if (comps.length > 0) {
@@ -50,7 +55,7 @@ public final class SpnSourceReflector {
             sb.append(" where ");
             for (int i = 0; i < constraints.length; i++) {
                 if (i > 0) sb.append(", ");
-                sb.append(constraints[i].describe());
+                sb.append(type.describeConstraint(constraints[i]));
             }
         }
 
@@ -141,6 +146,10 @@ public final class SpnSourceReflector {
 
     // ── Function descriptors ────────────────────────────────────────────────
 
+    /**
+     * Reflects a function signature. The signature lists types only (no param names);
+     * param names appear in the body binding: {@code pure add(Long, Long) -> Long = (a, b) { ... }}
+     */
     public static String reflectFunction(SpnFunctionDescriptor func) {
         var sb = new StringBuilder();
         if (func.isPure()) sb.append("pure ");
@@ -148,10 +157,7 @@ public final class SpnSourceReflector {
         FieldDescriptor[] params = func.getParams();
         for (int i = 0; i < params.length; i++) {
             if (i > 0) sb.append(", ");
-            sb.append(params[i].name());
-            if (params[i].isTyped()) {
-                sb.append(": ").append(params[i].type().describe());
-            }
+            sb.append(params[i].type().describe());
         }
         sb.append(")");
         if (func.hasTypedReturn()) {

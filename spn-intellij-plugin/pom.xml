@@ -35,24 +35,31 @@
         <!-- IntelliJ Platform (compile-only, provided at runtime by the IDE) -->
         <dependency>
             <groupId>com.jetbrains.intellij</groupId>
-            <artifactId>platform-util</artifactId>
+            <artifactId>platform-core</artifactId>
+            <version>local</version>
+            <scope>system</scope>
+            <systemPath>${intellij.home}/lib/intellij.platform.core.jar</systemPath>
+        </dependency>
+        <dependency>
+            <groupId>com.jetbrains.intellij</groupId>
+            <artifactId>platform-app</artifactId>
+            <version>local</version>
+            <scope>system</scope>
+            <systemPath>${intellij.home}/lib/app.jar</systemPath>
+        </dependency>
+        <dependency>
+            <groupId>com.jetbrains.intellij</groupId>
+            <artifactId>platform-util-ui</artifactId>
+            <version>local</version>
+            <scope>system</scope>
+            <systemPath>${intellij.home}/lib/intellij.platform.util.ui.jar</systemPath>
+        </dependency>
+        <dependency>
+            <groupId>com.jetbrains.intellij</groupId>
+            <artifactId>platform-util-8</artifactId>
             <version>local</version>
             <scope>system</scope>
             <systemPath>${intellij.home}/lib/util-8.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jetbrains.intellij</groupId>
-            <artifactId>platform-app-client</artifactId>
-            <version>local</version>
-            <scope>system</scope>
-            <systemPath>${intellij.home}/lib/app-client.jar</systemPath>
-        </dependency>
-        <dependency>
-            <groupId>com.jetbrains.intellij</groupId>
-            <artifactId>platform-lib-client</artifactId>
-            <version>local</version>
-            <scope>system</scope>
-            <systemPath>${intellij.home}/lib/lib-client.jar</systemPath>
         </dependency>
     </dependencies>
 

@@ -17,11 +17,17 @@ public abstract class SpnModuloNode extends SpnExpressionNode {
 
     @Specialization
     protected long modLongs(long left, long right) {
+        if (right == 0) {
+            throw new SpnException("Modulo by zero", this);
+        }
         return left % right;
     }
 
     @Specialization
     protected double modDoubles(double left, double right) {
+        if (right == 0.0) {
+            throw new SpnException("Modulo by zero", this);
+        }
         return left % right;
     }
 

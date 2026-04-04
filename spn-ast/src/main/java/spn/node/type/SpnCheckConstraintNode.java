@@ -88,7 +88,8 @@ public final class SpnCheckConstraintNode extends SpnExpressionNode {
         for (Constraint constraint : constraints) {
             if (!constraint.check(value)) {
                 throw new SpnException(
-                        "Value " + value + " violates constraint '" + constraint.describe()
+                        "Value " + value + " violates constraint '"
+                                + typeDescriptor.describeConstraint(constraint)
                                 + "' of type " + typeDescriptor.getName(),
                         this);
             }

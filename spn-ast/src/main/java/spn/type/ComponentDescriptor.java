@@ -70,7 +70,7 @@ public final class ComponentDescriptor {
         }
         for (Constraint c : constraints) {
             if (!c.check(value)) {
-                return "component '" + name + "' violates constraint '" + c.describe() + "'";
+                return "component '" + name + "' violates constraint '" + c.describe(name) + "'";
             }
         }
         return null;

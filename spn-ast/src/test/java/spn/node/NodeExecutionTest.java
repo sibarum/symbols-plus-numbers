@@ -80,11 +80,11 @@ class NodeExecutionTest {
         }
 
         @Test
-        void addStrings() {
-            var add = SpnAddNodeGen.create(
+        void concatStrings() {
+            var concat = SpnStringConcatNodeGen.create(
                     new SpnStringLiteralNode("hello "),
                     new SpnStringLiteralNode("world"));
-            assertEquals("hello world", execute(add));
+            assertEquals("hello world", execute(concat));
         }
 
         @Test

@@ -54,4 +54,16 @@ public final class SpnConstrainedValue {
     public String toString() {
         return value + " : " + type.getName();
     }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) return true;
+        if (!(obj instanceof SpnConstrainedValue other)) return false;
+        return type == other.type && java.util.Objects.equals(value, other.value);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hashCode(value) * 31 + System.identityHashCode(type);
+    }
 }

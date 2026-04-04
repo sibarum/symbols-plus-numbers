@@ -46,6 +46,7 @@ public class SpnParser {
     private final Map<String, SpnStructDescriptor> structRegistry = new LinkedHashMap<>();
     private final Map<String, SpnVariantSet> variantRegistry = new LinkedHashMap<>();
     private final Map<String, CallTarget> functionRegistry = new LinkedHashMap<>();
+    private final Map<String, spn.node.BuiltinFactory> builtinRegistry = new LinkedHashMap<>();
 
     // Current scope for frame slot management
     private Scope currentScope;
@@ -54,6 +55,10 @@ public class SpnParser {
         this.tokens = new SpnTokenizer(source);
         this.language = language;
         this.symbolTable = symbolTable;
+    }
+
+    public Map<String, spn.node.BuiltinFactory> getBuiltinRegistry() {
+        return builtinRegistry;
     }
 
     // ── Scope management ───────────────────────────────────────────────────
@@ -802,6 +807,12 @@ public class SpnParser {
             CallTarget target = functionRegistry.get(name);
             if (target != null) {
                 return new SpnInvokeNode(target, args.toArray(new SpnExpressionNode[0]));
+            }
+
+            // Builtin function (stdlib, canvas, etc.)
+            spn.node.BuiltinFactory builtin = builtinRegistry.get(name);
+            if (builtin != null) {
+                return builtin.create(args.toArray(new SpnExpressionNode[0]));
             }
 
             // Self-recursive call — the function is being defined right now

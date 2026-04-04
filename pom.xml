@@ -14,6 +14,8 @@
         <module>spn-pkg</module>
         <module>spn-intellij-plugin</module>
         <module>spn-gui</module>
+        <module>spn-stdlib</module>
+        <module>spn-canvas</module>
     </modules>
 
     <properties>

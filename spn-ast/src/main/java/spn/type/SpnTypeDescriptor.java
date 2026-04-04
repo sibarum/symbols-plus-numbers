@@ -51,6 +51,9 @@ public final class SpnTypeDescriptor {
 
     private final String name;
 
+    /** The name of the constrained value parameter, e.g. "n" in type Natural(n). */
+    private final String valueParam;
+
     @CompilationFinal(dimensions = 1)
     private final Constraint[] constraints;
 
@@ -66,11 +69,12 @@ public final class SpnTypeDescriptor {
     @CompilationFinal(dimensions = 1)
     private final ProductOperationDef[] productOperationDefs;
 
-    private SpnTypeDescriptor(String name, Constraint[] constraints,
+    private SpnTypeDescriptor(String name, String valueParam, Constraint[] constraints,
                               SpnDistinguishedElement[] elements, AlgebraicRule[] rules,
                               ComponentDescriptor[] componentDescriptors,
                               ProductOperationDef[] productOperationDefs) {
         this.name = name;
+        this.valueParam = valueParam;
         this.constraints = constraints;
         this.elements = elements;
         this.rules = rules;
@@ -80,7 +84,7 @@ public final class SpnTypeDescriptor {
 
     /** Simple constructor for scalar types with only constraints (no elements or rules). */
     public SpnTypeDescriptor(String name, Constraint... constraints) {
-        this(name, constraints, new SpnDistinguishedElement[0], new AlgebraicRule[0],
+        this(name, null, constraints, new SpnDistinguishedElement[0], new AlgebraicRule[0],
                 new ComponentDescriptor[0], new ProductOperationDef[0]);
     }
 
@@ -92,6 +96,22 @@ public final class SpnTypeDescriptor {
 
     public String getName() {
         return name;
+    }
+
+    /**
+     * Returns the value parameter name for scalar constrained types, e.g. "n" in
+     * type Natural(n) where n >= 0. Returns null if no value parameter was declared
+     * (backwards compatibility with the simple constructor).
+     */
+    public String getValueParam() {
+        return valueParam;
+    }
+
+    /**
+     * Returns true if this type has an explicit value parameter name.
+     */
+    public boolean hasValueParam() {
+        return valueParam != null;
     }
 
     public Constraint[] getConstraints() {
@@ -129,6 +149,17 @@ public final class SpnTypeDescriptor {
             }
         }
         return null;
+    }
+
+    /**
+     * Describes a constraint using this type's value parameter name (if set),
+     * falling back to the constraint's default description.
+     */
+    public String describeConstraint(Constraint constraint) {
+        if (valueParam != null) {
+            return constraint.describe(valueParam);
+        }
+        return constraint.describe();
     }
 
     /**
@@ -239,6 +270,9 @@ public final class SpnTypeDescriptor {
     @Override
     public String toString() {
         var sb = new StringBuilder(name);
+        if (valueParam != null && componentDescriptors.length == 0) {
+            sb.append("(").append(valueParam).append(")");
+        }
         if (componentDescriptors.length > 0) {
             sb.append("(");
             for (int i = 0; i < componentDescriptors.length; i++) {
@@ -251,7 +285,7 @@ public final class SpnTypeDescriptor {
             sb.append(" where ");
             for (int i = 0; i < constraints.length; i++) {
                 if (i > 0) sb.append(", ");
-                sb.append(constraints[i].describe());
+                sb.append(describeConstraint(constraints[i]));
             }
         }
         if (elements.length > 0) {
@@ -268,6 +302,7 @@ public final class SpnTypeDescriptor {
 
     public static final class Builder {
         private final String name;
+        private String valueParam;
         private final List<Constraint> constraints = new ArrayList<>();
         private final List<SpnDistinguishedElement> elements = new ArrayList<>();
         private final List<AlgebraicRule> rules = new ArrayList<>();
@@ -276,6 +311,18 @@ public final class SpnTypeDescriptor {
 
         private Builder(String name) {
             this.name = name;
+        }
+
+        /**
+         * Sets the value parameter name for scalar constrained types.
+         * This is the variable name used in constraint descriptions:
+         * <pre>
+         *   type Natural(n) where n >= 0, n % 1 == 0
+         * </pre>
+         */
+        public Builder valueParam(String name) {
+            this.valueParam = name;
+            return this;
         }
 
         public Builder constraint(Constraint constraint) {
@@ -341,6 +388,7 @@ public final class SpnTypeDescriptor {
         public SpnTypeDescriptor build() {
             return new SpnTypeDescriptor(
                     name,
+                    valueParam,
                     constraints.toArray(new Constraint[0]),
                     elements.toArray(new SpnDistinguishedElement[0]),
                     rules.toArray(new AlgebraicRule[0]),

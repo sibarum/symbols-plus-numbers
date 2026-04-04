@@ -24,6 +24,16 @@ public sealed interface Constraint {
     /** Human-readable description for error messages, e.g. "n >= 0". */
     String describe();
 
+    /**
+     * Human-readable description using a specific variable name.
+     * For numeric constraints, replaces the default "n" with the given name.
+     * Non-numeric constraints (string, symbol, etc.) ignore the name and
+     * delegate to describe().
+     */
+    default String describe(String varName) {
+        return describe();
+    }
+
     // ── Comparison constraints ──────────────────────────────────────────────
 
     record GreaterThanOrEqual(double bound) implements Constraint {
@@ -39,6 +49,11 @@ public sealed interface Constraint {
         @Override
         public String describe() {
             return "n >= " + formatBound(bound);
+        }
+
+        @Override
+        public String describe(String varName) {
+            return varName + " >= " + formatBound(bound);
         }
     }
 
@@ -56,6 +71,11 @@ public sealed interface Constraint {
         public String describe() {
             return "n > " + formatBound(bound);
         }
+
+        @Override
+        public String describe(String varName) {
+            return varName + " > " + formatBound(bound);
+        }
     }
 
     record LessThanOrEqual(double bound) implements Constraint {
@@ -72,6 +92,11 @@ public sealed interface Constraint {
         public String describe() {
             return "n <= " + formatBound(bound);
         }
+
+        @Override
+        public String describe(String varName) {
+            return varName + " <= " + formatBound(bound);
+        }
     }
 
     record LessThan(double bound) implements Constraint {
@@ -87,6 +112,11 @@ public sealed interface Constraint {
         @Override
         public String describe() {
             return "n < " + formatBound(bound);
+        }
+
+        @Override
+        public String describe(String varName) {
+            return varName + " < " + formatBound(bound);
         }
     }
 
@@ -116,6 +146,14 @@ public sealed interface Constraint {
                 return "n % " + divisor + " == 0";
             }
             return "n % " + divisor + " == " + remainder;
+        }
+
+        @Override
+        public String describe(String varName) {
+            if (remainder == 0) {
+                return varName + " % " + divisor + " == 0";
+            }
+            return varName + " % " + divisor + " == " + remainder;
         }
     }
 
