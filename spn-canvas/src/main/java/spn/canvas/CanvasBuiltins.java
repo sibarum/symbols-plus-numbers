@@ -5,8 +5,6 @@ import spn.language.SpnModule;
 import spn.language.SpnModuleRegistry;
 import spn.node.BuiltinFactory;
 import spn.node.array.SpnArrayLengthNodeGen;
-import spn.stdlib.math.*;
-import spn.stdlib.string.SpnFormatNumNodeGen;
 import spn.stdlib.string.SpnShowNodeGen;
 
 import java.util.Map;
@@ -55,25 +53,9 @@ public final class CanvasBuiltins {
     }
 
     private static void addUtilities(Map<String, BuiltinFactory> r) {
-        // Array
+        // Array (not yet in stdlib generator)
         r.put("length",    args -> SpnArrayLengthNodeGen.create(args[0]));
-        // String conversion
+        // String conversion alias
         r.put("str",       args -> SpnShowNodeGen.create(args[0]));
-        r.put("formatNum", args -> SpnFormatNumNodeGen.create(args[0]));
-        // Math
-        r.put("sin",       args -> SpnSinNodeGen.create(args[0]));
-        r.put("cos",       args -> SpnCosNodeGen.create(args[0]));
-        r.put("tan",       args -> SpnTanNodeGen.create(args[0]));
-        r.put("asin",      args -> SpnAsinNodeGen.create(args[0]));
-        r.put("acos",      args -> SpnAcosNodeGen.create(args[0]));
-        r.put("atan",      args -> SpnAtanNodeGen.create(args[0]));
-        r.put("abs",       args -> SpnAbsNodeGen.create(args[0]));
-        r.put("floor",     args -> SpnFloorNodeGen.create(args[0]));
-        r.put("ceil",      args -> SpnCeilNodeGen.create(args[0]));
-        r.put("sqrt",      args -> SpnSqrtNodeGen.create(args[0]));
-        r.put("round",     args -> SpnRoundNodeGen.create(args[0]));
-        r.put("pow",       args -> SpnPowNodeGen.create(args[0], args[1]));
-        r.put("min",       args -> SpnMinNodeGen.create(args[0], args[1]));
-        r.put("max",       args -> SpnMaxNodeGen.create(args[0], args[1]));
     }
 }

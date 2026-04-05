@@ -1,5 +1,7 @@
 -- spn.canvas.plot — 2D plotting abstractions built on Canvas
 import Canvas
+import Math
+import String (formatNum)
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- HELPERS

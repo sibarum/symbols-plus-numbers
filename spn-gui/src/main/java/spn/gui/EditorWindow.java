@@ -255,6 +255,7 @@ public class EditorWindow {
         try {
             SpnSymbolTable symbolTable = new SpnSymbolTable();
             spn.language.SpnModuleRegistry moduleRegistry = new spn.language.SpnModuleRegistry();
+            registerStdlibModules(moduleRegistry);
             spn.canvas.CanvasBuiltins.registerModule(moduleRegistry);
             moduleRegistry.addLoader(new spn.lang.ClasspathModuleLoader(null, symbolTable));
             SpnParser parser = new SpnParser(source, null, symbolTable, moduleRegistry);
@@ -296,6 +297,16 @@ public class EditorWindow {
         textArea.setText(content);
         currentFile = path;
         updateTitle();
+    }
+
+    private static void registerStdlibModules(spn.language.SpnModuleRegistry registry) {
+        // Group stdlib builtins by module name and register each as an SpnModule
+        var byModule = new java.util.LinkedHashMap<String, spn.language.SpnModule.Builder>();
+        for (var entry : spn.stdlib.gen.SpnStdlibRegistry.allBuiltins()) {
+            byModule.computeIfAbsent(entry.module(), spn.language.SpnModule::builder)
+                    .function(entry.name(), entry.callTarget());
+        }
+        byModule.forEach((name, builder) -> registry.register(name, builder.build()));
     }
 
     void openFile() {

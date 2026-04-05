@@ -6,7 +6,7 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import spn.node.SpnExpressionNode;
 import spn.node.builtin.SpnBuiltin;
 
-@SpnBuiltin(name = "atan", module = "Math")
+@SpnBuiltin(name = "atan", module = "Math", params = {"value"}, returns = "Double")
 @NodeChild("value")
 @NodeInfo(shortName = "atan")
 public abstract class SpnAtanNode extends SpnExpressionNode {

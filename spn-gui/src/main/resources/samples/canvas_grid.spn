@@ -1,5 +1,6 @@
 -- Function Plot — plot sin(x) with automatic axes
 import Canvas
+import Math
 import spn.canvas.plot
 
 pure sinFn(_) = (x) { sin(x) }

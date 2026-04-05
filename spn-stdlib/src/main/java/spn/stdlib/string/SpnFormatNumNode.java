@@ -10,7 +10,7 @@ import spn.node.builtin.SpnBuiltin;
  * Formats a number as a short string suitable for display/labels.
  * Integers render without decimals. Doubles render with up to 2 decimal places.
  */
-@SpnBuiltin(name = "formatNum", module = "String", returns = "String")
+@SpnBuiltin(name = "formatNum", module = "String", params = {"value"}, returns = "String")
 @NodeChild("value")
 @NodeInfo(shortName = "formatNum")
 public abstract class SpnFormatNumNode extends SpnExpressionNode {
