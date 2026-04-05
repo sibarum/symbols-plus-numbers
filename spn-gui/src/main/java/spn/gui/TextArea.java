@@ -37,6 +37,9 @@ public class TextArea {
     private float cellHeight;
     private static final float PAD = 10f;
     private static final float GUTTER_PAD = 8f;  // gap between line numbers and text
+    // Vertical offset for highlight rects so they cover descenders (g, y, p)
+    // rather than sitting too high above the text baseline.
+    private static final float HIGHLIGHT_OFFSET_Y = 9f;
 
     // Cursor position in the document
     private int cursorRow;
@@ -127,8 +130,16 @@ public class TextArea {
 
     public UndoManager.Info getUndoInfo() { return undo.getInfo(); }
 
+    UndoManager getUndoManager() { return undo; }
+
     public int getCursorRow() { return cursorRow; }
     public int getCursorCol() { return cursorCol; }
+
+    void setCursorPosition(int row, int col) {
+        cursorRow = Math.max(0, Math.min(row, buffer.lineCount() - 1));
+        cursorCol = Math.max(0, Math.min(col, buffer.lineLength(cursorRow)));
+        clearSelection();
+    }
 
     public boolean isCurrentLineBlank() {
         return buffer.lineLength(cursorRow) == 0;
@@ -253,7 +264,7 @@ public class TextArea {
                     if (drawEnd <= 0 || drawStart >= visibleCols) continue;
                     int vRow = m.row() - scrollRow;
                     float rx = textX + drawStart * cellWidth;
-                    float ry = textY + vRow * cellHeight;
+                    float ry = textY + vRow * cellHeight + HIGHLIGHT_OFFSET_Y;
                     float rw = (drawEnd - drawStart) * cellWidth;
                     font.drawRect(rx, ry, rw, cellHeight, 0.25f, 0.25f, 0.18f);
                 }
@@ -277,7 +288,7 @@ public class TextArea {
                 if (drawEnd <= 0 || drawStart >= visibleCols) continue;
 
                 float rx = textX + drawStart * cellWidth;
-                float ry = textY + i * cellHeight;
+                float ry = textY + i * cellHeight + HIGHLIGHT_OFFSET_Y;
                 float rw = (drawEnd - drawStart) * cellWidth;
                 font.drawRect(rx, ry, rw, cellHeight, 0.2f, 0.35f, 0.55f);
             }
@@ -657,7 +668,7 @@ public class TextArea {
     // Undo / redo
     // ------------------------------------------------------------------
 
-    private void performUndo() {
+    void performUndo() {
         UndoManager.Entry e = undo.undo();
         if (e == null) return;
         undoRedoInProgress = true;
@@ -678,7 +689,7 @@ public class TextArea {
         }
     }
 
-    private void performRedo() {
+    void performRedo() {
         UndoManager.Entry e = undo.redo();
         if (e == null) return;
         undoRedoInProgress = true;
@@ -806,10 +817,44 @@ public class TextArea {
         return new int[]{start, end};
     }
 
+    // ------------------------------------------------------------------
+    // Grid metrics — exposed for overlay positioning (template mode)
+    // ------------------------------------------------------------------
+
+    public float getCellWidth()  { return cellWidth; }
+    public float getCellHeight() { return cellHeight; }
+    public float getFontScale()  { return fontScale; }
+    public float getBoundsX()    { return boundsX; }
+    public float getBoundsY()    { return boundsY; }
+    public float getBoundsW()    { return boundsW; }
+    public float getBoundsH()    { return boundsH; }
+    public int   getScrollRowVal() { return scrollRow; }
+    public int   getScrollColVal() { return scrollCol; }
+
+    void zoomIn() {
+        fontScale = Math.min(FONT_SCALE_MAX, fontScale + FONT_SCALE_STEP);
+        recomputeMetrics();
+    }
+
+    void zoomOut() {
+        fontScale = Math.max(FONT_SCALE_MIN, fontScale - FONT_SCALE_STEP);
+        recomputeMetrics();
+    }
+
+    void zoomReset() {
+        fontScale = FONT_SCALE_DEFAULT;
+        recomputeMetrics();
+    }
+
+    public float getGutterWidth() { return gutterWidth(); }
+    public float getTextOriginX() { return boundsX + PAD + gutterWidth(); }
+    public float getTextOriginY() { return boundsY + PAD; }
+    public float getHighlightOffsetY() { return HIGHLIGHT_OFFSET_Y; }
+
     /**
      * Returns the word under the cursor, or null if the cursor is not on a word.
      */
-    private String wordAtCursor() {
+    String wordAtCursor() {
         int[] bounds = wordBoundsAt(cursorRow, cursorCol);
         if (bounds[0] == bounds[1]) return null;
         return buffer.getLine(cursorRow).substring(bounds[0], bounds[1]);

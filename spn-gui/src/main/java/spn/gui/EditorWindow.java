@@ -1,10 +1,6 @@
 package spn.gui;
 
 import spn.fonts.SdfFontRenderer;
-import spn.gui.lang.ContextDetector;
-import spn.gui.lang.EditorContext;
-import spn.gui.lang.Suggestion;
-import spn.gui.lang.SuggestionProvider;
 import spn.lang.SpnParser;
 import spn.node.SpnRootNode;
 import spn.type.SpnSymbolTable;
@@ -14,34 +10,37 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
+import java.util.ArrayDeque;
+import java.util.Deque;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.system.MemoryUtil.*;
 
 /**
- * A single editor window: owns its GLFW window handle and all UI components
- * (TextArea, Scrollbars, HUD). Shares the GL context and font renderer with
- * other windows via GLFW context sharing.
+ * A single editor window: owns its GLFW window handle and all UI components.
+ * Delegates input and rendering to the active {@link Mode} on the mode stack.
  */
 public class EditorWindow {
-
-    private static final float SCROLLBAR_SIZE = 12f;
 
     private final long handle;
     private SdfFontRenderer font;
     private TextArea textArea;
-    private Scrollbar vScroll;
-    private Scrollbar hScroll;
     private Hud hud;
+
+    private final Deque<Mode> modeStack = new ArrayDeque<>();
+    private final ActionRegistry actionRegistry = new ActionRegistry();
 
     private Path currentFile;
     private boolean initialized;
 
-    private ContextDetector contextDetector;
-    private SuggestionProvider suggestionProvider;
-    private List<Suggestion> currentSuggestions = List.of();
+    // ---- Sample scripts -------------------------------------------------
+
+    record Sample(int key, String label, String resource) {}
+    static final Sample[] SAMPLES = {
+            new Sample(GLFW_KEY_F1, "Shapes",   "/samples/canvas_shapes.spn"),
+            new Sample(GLFW_KEY_F2, "Plot",     "/samples/canvas_grid.spn"),
+    };
 
     /**
      * Creates the GLFW window. Call {@link #initComponents(SdfFontRenderer)} after
@@ -67,8 +66,6 @@ public class EditorWindow {
         this.font = font;
         initialized = true;
 
-        setupCallbacks();
-
         ScrollbarTheme sbTheme = ScrollbarTheme.dark();
 
         textArea = new TextArea(font);
@@ -77,22 +74,83 @@ public class EditorWindow {
             @Override public String get() { return glfwGetClipboardString(handle); }
         });
 
-        vScroll = new Scrollbar(font, Scrollbar.Orientation.VERTICAL);
+        Scrollbar vScroll = new Scrollbar(font, Scrollbar.Orientation.VERTICAL);
         vScroll.setTheme(sbTheme);
         vScroll.setOnChange(v -> textArea.setScrollRow(v));
 
-        hScroll = new Scrollbar(font, Scrollbar.Orientation.HORIZONTAL);
+        Scrollbar hScroll = new Scrollbar(font, Scrollbar.Orientation.HORIZONTAL);
         hScroll.setTheme(sbTheme);
         hScroll.setOnChange(v -> textArea.setScrollCol(v));
 
         hud = new Hud(font);
-        hud.setText(BASE_SHORTCUTS);
+        hud.setText(EditorMode.BASE_SHORTCUTS);
 
-        contextDetector = new ContextDetector();
-        suggestionProvider = new SuggestionProvider();
+        // EditorMode is always at the bottom of the stack
+        EditorMode editorMode = new EditorMode(this, textArea, vScroll, hScroll);
+        modeStack.push(editorMode);
+
+        registerActions();
+        setupCallbacks();
     }
 
+    // ---- Mode stack -----------------------------------------------------
+
+    /** Push a new mode onto the stack — it becomes the active mode. */
+    void pushMode(Mode mode) {
+        modeStack.push(mode);
+    }
+
+    /** Pop the current mode, returning to the one below. Never pops EditorMode. */
+    void popMode() {
+        if (modeStack.size() > 1) {
+            modeStack.pop();
+        }
+    }
+
+    /** The active mode (top of stack). */
+    private Mode activeMode() {
+        return modeStack.peek();
+    }
+
+    // ---- Action registration --------------------------------------------
+
+    private void registerActions() {
+        actionRegistry.register("New Window",    "File", "Ctrl+N",       () -> Main.instance.spawnWindow());
+        actionRegistry.register("Open File",     "File", "Ctrl+O",       this::openFile);
+        actionRegistry.register("Save File",     "File", "Ctrl+S",       () -> saveFile(false));
+        actionRegistry.register("Save As",       "File", "Ctrl+Shift+S", () -> saveFile(true));
+        actionRegistry.register("Run",           "Run",  "F5",           this::runCurrentFile);
+        actionRegistry.register("Undo",          "Edit", "Ctrl+Z",       () -> textArea.performUndo());
+        actionRegistry.register("Redo",          "Edit", "Ctrl+Y",       () -> textArea.performRedo());
+        actionRegistry.register("Zoom In",       "View", "Ctrl+=",       () -> textArea.zoomIn());
+        actionRegistry.register("Zoom Out",      "View", "Ctrl+-",       () -> textArea.zoomOut());
+        actionRegistry.register("Zoom Reset",    "View", "Ctrl+0",       () -> textArea.zoomReset());
+        actionRegistry.register("Shapes Sample", "Sample", "F1",         () -> openSample(SAMPLES[0]));
+        actionRegistry.register("Plot Sample",   "Sample", "F2",         () -> openSample(SAMPLES[1]));
+        actionRegistry.register("Action Menu",   "View",   "Ctrl+P",     () -> pushMode(new ActionMenuMode(this, actionRegistry)));
+
+        // Template actions (insert keyword then activate template)
+        for (String kw : spn.gui.template.TemplateCatalog.keywords()) {
+            actionRegistry.register("Template: " + kw, "Template", "Ctrl+,",
+                    () -> {
+                        textArea.insertSnippet(kw);
+                        // Simulate Ctrl+Comma to activate the template
+                        ((EditorMode) modeStack.peekLast()).activateTemplateForKeyword(kw);
+                    });
+        }
+    }
+
+    // ---- Accessors for EditorMode / other modes -------------------------
+
     long getHandle() { return handle; }
+
+    Hud getHud() { return hud; }
+
+    ActionRegistry getActionRegistry() { return actionRegistry; }
+
+    TextArea getTextArea() { return textArea; }
+
+    SdfFontRenderer getFont() { return font; }
 
     void show() {
         glfwShowWindow(handle);
@@ -110,6 +168,8 @@ public class EditorWindow {
         glfwMakeContextCurrent(handle);
     }
 
+    // ---- Rendering ------------------------------------------------------
+
     void render() {
         int[] w = new int[1], h = new int[1];
         glfwGetFramebufferSize(handle, w, h);
@@ -118,25 +178,17 @@ public class EditorWindow {
 
         float sw = w[0], sh = h[0];
         float hudH = hud.preferredHeight();
-        float bottomBar = hudH + SCROLLBAR_SIZE;
+        float scrollbarSize = 12f;
 
-        textArea.setBounds(0, 0, sw - SCROLLBAR_SIZE, sh - bottomBar);
-        vScroll.setBounds(sw - SCROLLBAR_SIZE, 0, SCROLLBAR_SIZE, sh - bottomBar);
-        hud.setBounds(0, sh - bottomBar, sw, hudH);
-        hScroll.setBounds(0, sh - SCROLLBAR_SIZE, sw - SCROLLBAR_SIZE, SCROLLBAR_SIZE);
+        hud.setBounds(0, sh - hudH - scrollbarSize, sw, hudH);
 
         font.beginText(w[0], h[0]);
-        textArea.render();
 
-        vScroll.setContent(textArea.getContentRows(), textArea.getVisibleRows());
-        vScroll.setValue(textArea.getScrollRow());
-        hScroll.setContent(textArea.getContentCols(), textArea.getVisibleCols());
-        hScroll.setValue(textArea.getScrollCol());
+        activeMode().render(sw, sh);
 
-        vScroll.render();
-        hScroll.render();
-        updateHud();
+        hud.setText(activeMode().hudText());
         hud.render();
+
         font.endText();
 
         glfwSwapBuffers(handle);
@@ -146,20 +198,9 @@ public class EditorWindow {
         glfwDestroyWindow(handle);
     }
 
-    // ---- HUD ------------------------------------------------------------
+    // ---- Sample loading -------------------------------------------------
 
-    private static final String BASE_SHORTCUTS =
-            "F1 Shapes | F2 Plot | F5 Run | Ctrl+N New | Ctrl+O Open | Ctrl+S Save";
-
-    // ---- Sample scripts -------------------------------------------------
-
-    private record Sample(int key, String label, String resource) {}
-    private static final Sample[] SAMPLES = {
-            new Sample(GLFW_KEY_F1, "Shapes",   "/samples/canvas_shapes.spn"),
-            new Sample(GLFW_KEY_F2, "Plot",     "/samples/canvas_grid.spn"),
-    };
-
-    private void openSample(Sample sample) {
+    void openSample(Sample sample) {
         try (InputStream in = getClass().getResourceAsStream(sample.resource())) {
             if (in == null) {
                 hud.flash("Sample not found: " + sample.resource(), true);
@@ -168,12 +209,10 @@ public class EditorWindow {
             String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
 
             if (currentFile == null && textArea.getText().isBlank()) {
-                // Load into current window
                 textArea.setText(content);
                 currentFile = null;
                 glfwSetWindowTitle(handle, sample.label() + " - Symbols+Numbers");
             } else {
-                // Open in a new window
                 EditorWindow w = Main.instance.spawnWindow();
                 w.textArea.setText(content);
                 glfwSetWindowTitle(w.handle, sample.label() + " - Symbols+Numbers");
@@ -183,67 +222,9 @@ public class EditorWindow {
         }
     }
 
-    private void updateHud() {
-        // Detect semantic context and update available suggestions
-        EditorContext ctx = contextDetector.detect(
-                textArea.getBuffer(), textArea.getHighlightCache(), textArea.getCursorRow());
-        currentSuggestions = suggestionProvider.getSuggestions(ctx);
-
-        StringBuilder sb = new StringBuilder();
-
-        // Show numbered contextual suggestions on blank lines
-        if (textArea.isCurrentLineBlank() && !textArea.hasSelection()
-                && !currentSuggestions.isEmpty()) {
-            for (int i = 0; i < currentSuggestions.size(); i++) {
-                if (i > 0) sb.append(" | ");
-                sb.append(i + 1).append(' ').append(currentSuggestions.get(i).label());
-            }
-            sb.append(" | ").append(BASE_SHORTCUTS);
-            hud.setText(sb.toString());
-            return;
-        }
-
-        // Undo state summary
-        UndoManager.Info info = textArea.getUndoInfo();
-        if (info.depth() > 0 || info.branches() > 0) {
-            sb.append("History depth ").append(info.depth());
-            if (info.branches() > 1) {
-                sb.append(" | Branch ").append(info.activeBranch())
-                  .append(" of ").append(info.branches())
-                  .append(" | Ctrl+[ Prev | Ctrl+] Next");
-            } else if (info.branches() == 1) {
-                sb.append(" | Ctrl+Z Undo | Ctrl+Y Redo");
-            }
-            if (info.canUndo() && info.branches() <= 1) {
-                // already shown
-            } else if (!info.canUndo()) {
-                sb.append(" | (at root)");
-            }
-            sb.append(" | ").append(BASE_SHORTCUTS);
-        } else {
-            sb.append(BASE_SHORTCUTS);
-        }
-
-        hud.setText(sb.toString());
-    }
-
-    // ---- Contextual shortcuts -------------------------------------------
-
-    /**
-     * Attempts to handle a contextual shortcut (Ctrl+1..9 on a blank line).
-     * Returns true if the key was consumed.
-     */
-    private boolean tryContextShortcut(int key) {
-        int index = key - GLFW_KEY_1;
-        if (index < 0 || index > 8) return false;
-        if (index >= currentSuggestions.size()) return false;
-        textArea.insertSnippet(currentSuggestions.get(index).snippet());
-        return true;
-    }
-
     // ---- Build & Run ----------------------------------------------------
 
-    private void runCurrentFile() {
+    void runCurrentFile() {
         String source = textArea.getText();
         if (source.isBlank()) {
             hud.flash("Nothing to run", true);
@@ -274,7 +255,6 @@ public class EditorWindow {
                     }
                 } finally {
                     cw.close();
-                    // Restore editor GL context
                     makeCurrent();
                 }
             } else {
@@ -300,7 +280,6 @@ public class EditorWindow {
     }
 
     private static void registerStdlibModules(spn.language.SpnModuleRegistry registry) {
-        // Group stdlib builtins by module name and register each as an SpnModule
         var byModule = new java.util.LinkedHashMap<String, spn.language.SpnModule.Builder>();
         for (var entry : spn.stdlib.gen.SpnStdlibRegistry.allBuiltins()) {
             byModule.computeIfAbsent(entry.module(), spn.language.SpnModule::builder)
@@ -346,63 +325,29 @@ public class EditorWindow {
         glfwSetWindowTitle(handle, name + " - Symbols+Numbers");
     }
 
-    // ---- Callbacks ------------------------------------------------------
+    // ---- Callbacks — delegate to active mode ----------------------------
 
     private void setupCallbacks() {
-        glfwSetCharCallback(handle, (win, codepoint) -> textArea.onCharInput(codepoint));
+        glfwSetCharCallback(handle, (win, codepoint) ->
+                activeMode().onChar(codepoint));
 
-        glfwSetKeyCallback(handle, (win, key, scancode, action, mods) -> {
-            if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-                boolean ctrl = (mods & GLFW_MOD_CONTROL) != 0;
-                // Sample shortcuts (F1, F2, ...)
-                if (!ctrl && action == GLFW_PRESS) {
-                    boolean handled = false;
-                    for (Sample s : SAMPLES) {
-                        if (key == s.key()) { openSample(s); handled = true; break; }
-                    }
-                    if (handled) return;
-                }
-                if (ctrl && key == GLFW_KEY_N && action == GLFW_PRESS) {
-                    Main.instance.spawnWindow();
-                } else if (ctrl && key == GLFW_KEY_O && action == GLFW_PRESS) {
-                    openFile();
-                } else if (ctrl && key == GLFW_KEY_S && action == GLFW_PRESS) {
-                    saveFile((mods & GLFW_MOD_SHIFT) != 0);
-                } else if ((key == GLFW_KEY_F5 || (ctrl && key == GLFW_KEY_R))
-                        && action == GLFW_PRESS) {
-                    runCurrentFile();
-                } else if (ctrl && action == GLFW_PRESS
-                        && textArea.isCurrentLineBlank()
-                        && !textArea.hasSelection()
-                        && tryContextShortcut(key)) {
-                    // handled by tryContextShortcut
-                } else {
-                    textArea.onKey(key, mods);
-                }
-            }
-        });
+        glfwSetKeyCallback(handle, (win, key, scancode, action, mods) ->
+                activeMode().onKey(key, scancode, action, mods));
 
-        glfwSetScrollCallback(handle, (win, xoff, yoff) -> textArea.onScroll(xoff, yoff));
+        glfwSetScrollCallback(handle, (win, xoff, yoff) ->
+                activeMode().onScroll(xoff, yoff));
 
         glfwSetMouseButtonCallback(handle, (win, button, action, mods) -> {
             double[] mx = new double[1], my = new double[1];
             glfwGetCursorPos(win, mx, my);
-            vScroll.onMouseButton(button, action, mods, mx[0], my[0]);
-            hScroll.onMouseButton(button, action, mods, mx[0], my[0]);
-            if (!vScroll.isDragging() && !hScroll.isDragging()) {
-                textArea.onMouseButton(button, action, mods, mx[0], my[0]);
-            }
+            activeMode().onMouseButton(button, action, mods, mx[0], my[0]);
         });
 
-        glfwSetCursorPosCallback(handle, (win, xpos, ypos) -> {
-            vScroll.onCursorPos(xpos, ypos);
-            hScroll.onCursorPos(xpos, ypos);
-            if (!vScroll.isDragging() && !hScroll.isDragging()) {
-                textArea.onCursorPos(xpos, ypos);
-            }
-        });
+        glfwSetCursorPosCallback(handle, (win, xpos, ypos) ->
+                activeMode().onCursorPos(xpos, ypos));
 
-        glfwSetCursorEnterCallback(handle, (win, entered) -> textArea.onCursorEnter(entered));
+        glfwSetCursorEnterCallback(handle, (win, entered) ->
+                activeMode().onCursorEnter(entered));
 
         glfwSetWindowCloseCallback(handle, win -> {
             glfwSetWindowShouldClose(win, false);
@@ -412,7 +357,8 @@ public class EditorWindow {
             glfwSetWindowShouldClose(win, true);
         });
 
-        glfwSetWindowFocusCallback(handle, (win, focused) -> Main.instance.onWindowFocusChanged());
+        glfwSetWindowFocusCallback(handle, (win, focused) ->
+                Main.instance.onWindowFocusChanged());
 
         glfwSetWindowRefreshCallback(handle, win -> {
             makeCurrent();
