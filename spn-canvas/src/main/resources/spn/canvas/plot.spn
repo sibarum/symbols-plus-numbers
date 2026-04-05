@@ -1,49 +1,210 @@
--- spn.canvas.plot — Plotting abstractions built on Canvas
+-- spn.canvas.plot — 2D plotting abstractions built on Canvas
 import Canvas
 
--- Draw a horizontal line across the canvas
-pure drawHLine(_, _, _, _) = (y, x1, x2, weight) {
-    strokeWeight(weight)
-    line(x1, y, x2, y)
+-- ═══════════════════════════════════════════════════════════════════════
+-- HELPERS
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- Map a data-space value to pixel-space
+pure mapX(_, _, _, _) = (x, xMin, xMax, pxW) {
+    (x - xMin) / (xMax - xMin) * pxW
 }
 
--- Draw a vertical line across the canvas
-pure drawVLine(_, _, _, _) = (x, y1, y2, weight) {
-    strokeWeight(weight)
-    line(x, y1, x, y2)
+pure mapY(_, _, _, _) = (y, yMin, yMax, pxH) {
+    pxH - (y - yMin) / (yMax - yMin) * pxH
 }
 
--- Draw a grid with the given spacing
-pure drawGrid(_, _, _, _, _) = (w, h, spacingX, spacingY, weight) {
-    stroke(0.3, 0.3, 0.3)
-    strokeWeight(weight)
-    let x = 0.0
-    while {x < w} do {
-        line(x, 0.0, x, h)
-        x = x + spacingX
+-- Compute a nice tick step for a given data range
+pure niceStep(_) = (range) {
+    let rough = range / 5.0
+    let p = 1.0
+    -- scale down
+    while {rough >= 10.0} do {
+        rough = rough / 10.0
+        p = p * 10.0
     }
-    let y = 0.0
-    while {y < h} do {
-        line(0.0, y, w, y)
-        y = y + spacingY
+    -- scale up
+    while {rough < 1.0} do {
+        rough = rough * 10.0
+        p = p / 10.0
     }
+    -- snap to 1, 2, or 5
+    if rough < 1.5 { 1.0 * p }
+    else if rough < 3.5 { 2.0 * p }
+    else { 5.0 * p }
 }
 
--- Draw axes centered at (ox, oy)
-pure drawAxes(_, _, _, _, _) = (ox, oy, w, h, weight) {
-    stroke(0.6, 0.6, 0.6)
-    strokeWeight(weight)
-    line(0.0, oy, w, oy)
-    line(ox, 0.0, ox, h)
-}
+-- ═══════════════════════════════════════════════════════════════════════
+-- AXES
+-- ═══════════════════════════════════════════════════════════════════════
 
--- Draw a filled rectangle with a border
-pure drawBox(_, _, _, _) = (x, y, w, h) {
-    rect(x, y, w, h)
-    stroke(1.0, 1.0, 1.0)
+-- Draw 2D axes with tick marks and numeric labels.
+--   left, top, w, h — pixel viewport
+--   xMin..xMax, yMin..yMax — data range
+--   xLabel, yLabel — axis title strings
+pure drawAxes2D(_, _, _, _, _, _, _, _, _, _) = (left, top, w, h, xMin, xMax, yMin, yMax, xLabel, yLabel) {
+    let tickLen = 5.0
+
+    -- Find where zero-lines cross in pixel space
+    let zeroX = left + mapX(0.0, xMin, xMax, w)
+    let zeroY = top + mapY(0.0, yMin, yMax, h)
+
+    -- Draw axis lines (clamp to viewport)
+    stroke(0.5, 0.5, 0.5)
     strokeWeight(1.0)
-    line(x, y, x + w, y)
-    line(x + w, y, x + w, y + h)
-    line(x + w, y + h, x, y + h)
-    line(x, y + h, x, y)
+    -- X axis (horizontal line at y=0, or bottom if 0 not in range)
+    let axisY = zeroY
+    if axisY < top { axisY = top }
+    else if axisY > top + h { axisY = top + h }
+    else { 0 }
+    line(left, axisY, left + w, axisY)
+    -- Y axis (vertical line at x=0, or left if 0 not in range)
+    let axisX = zeroX
+    if axisX < left { axisX = left }
+    else if axisX > left + w { axisX = left + w }
+    else { 0 }
+    line(axisX, top, axisX, top + h)
+
+    -- X ticks
+    let xStep = niceStep(xMax - xMin)
+    let xTick = ceil(xMin / xStep) * xStep
+    fill(0.55, 0.55, 0.55)
+    while {xTick <= xMax} do {
+        let px = left + mapX(xTick, xMin, xMax, w)
+        stroke(0.35, 0.35, 0.35)
+        strokeWeight(1.0)
+        line(px, axisY - tickLen, px, axisY + tickLen)
+        fill(0.55, 0.55, 0.55)
+        text(px - 8.0, axisY + tickLen + 14.0, formatNum(xTick), 0.22)
+        xTick = xTick + xStep
+    }
+
+    -- Y ticks
+    let yStep = niceStep(yMax - yMin)
+    let yTick = ceil(yMin / yStep) * yStep
+    while {yTick <= yMax} do {
+        let py = top + mapY(yTick, yMin, yMax, h)
+        stroke(0.35, 0.35, 0.35)
+        strokeWeight(1.0)
+        line(axisX - tickLen, py, axisX + tickLen, py)
+        fill(0.55, 0.55, 0.55)
+        text(axisX - 35.0, py + 4.0, formatNum(yTick), 0.22)
+        yTick = yTick + yStep
+    }
+
+    -- Axis labels
+    fill(0.7, 0.7, 0.7)
+    text(left + w - 30.0, axisY + 28.0, xLabel, 0.28)
+    text(axisX + 8.0, top + 16.0, yLabel, 0.28)
+}
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- FUNCTION PLOTTING
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- Plot f(x) as connected line segments.
+pure plotFunction(_, _, _, _, _, _, _, _, _, _, _, _, _) = (f, left, top, w, h, xMin, xMax, yMin, yMax, samples, r, g, b) {
+    stroke(r, g, b)
+    strokeWeight(2.0)
+    let dx = (xMax - xMin) / samples
+    let i = 0
+    let prevPx = left + mapX(xMin, xMin, xMax, w)
+    let prevPy = top + mapY(f(xMin), yMin, yMax, h)
+    i = 1
+    while {i <= samples} do {
+        let x = xMin + i * dx
+        let y = f(x)
+        let px = left + mapX(x, xMin, xMax, w)
+        let py = top + mapY(y, yMin, yMax, h)
+        line(prevPx, prevPy, px, py)
+        prevPx = px
+        prevPy = py
+        i = i + 1
+    }
+}
+
+-- Plot f(x) with automatic y-range, axes, and title.
+pure plotFnAuto(_, _, _, _, _, _) = (f, w, h, xMin, xMax, title) {
+    let margin = 60.0
+    let plotW = w - margin * 2.0
+    let plotH = h - margin * 2.0
+
+    -- Sample to find y range
+    let samples = 200.0
+    let dx = (xMax - xMin) / samples
+    let yMin = f(xMin)
+    let yMax = yMin
+    let si = 1.0
+    while {si <= samples} do {
+        let yv = f(xMin + si * dx)
+        yMin = min(yMin, yv)
+        yMax = max(yMax, yv)
+        si = si + 1.0
+    }
+    -- Add 10% padding
+    let yPad = (yMax - yMin) * 0.1
+    if yPad < 0.01 { yPad = 0.5 } else { 0 }
+    yMin = yMin - yPad
+    yMax = yMax + yPad
+
+    -- Title
+    fill(0.9, 0.9, 0.9)
+    text(w / 2.0 - 40.0, margin / 2.0, title, 0.35)
+
+    -- Axes
+    drawAxes2D(margin, margin, plotW, plotH, xMin, xMax, yMin, yMax, "x", "y")
+
+    -- Plot the function
+    plotFunction(f, margin, margin, plotW, plotH, xMin, xMax, yMin, yMax, samples, 0.3, 0.7, 1.0)
+}
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- DATA PLOTTING (ARRAYS)
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- Plot connected line segments from parallel x/y arrays.
+pure plotLines(_, _, _, _, _, _, _, _, _, _, _, _, _) = (xs, ys, left, top, w, h, xMin, xMax, yMin, yMax, r, g, b) {
+    stroke(r, g, b)
+    strokeWeight(2.0)
+    let i = 0
+    while {i < length(xs) - 1} do {
+        let px0 = left + mapX(xs[i], xMin, xMax, w)
+        let py0 = top + mapY(ys[i], yMin, yMax, h)
+        let px1 = left + mapX(xs[i + 1], xMin, xMax, w)
+        let py1 = top + mapY(ys[i + 1], yMin, yMax, h)
+        line(px0, py0, px1, py1)
+        i = i + 1
+    }
+}
+
+-- Plot individual markers from parallel x/y arrays.
+pure plotMarkers(_, _, _, _, _, _, _, _, _, _, _, _, _, _) = (xs, ys, left, top, w, h, xMin, xMax, yMin, yMax, radius, r, g, b) {
+    fill(r, g, b)
+    let i = 0
+    while {i < length(xs)} do {
+        let px = left + mapX(xs[i], xMin, xMax, w)
+        let py = top + mapY(ys[i], yMin, yMax, h)
+        circle(px, py, radius)
+        i = i + 1
+    }
+}
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- GRID LAYOUT
+-- ═══════════════════════════════════════════════════════════════════════
+
+pure gridX(_, _, _, _) = (col, cols, w, margin) {
+    margin + col * (w - margin * 2.0) / cols
+}
+
+pure gridY(_, _, _, _) = (row, rows, h, margin) {
+    margin + row * (h - margin * 2.0) / rows
+}
+
+pure gridW(_, _, _) = (cols, w, margin) {
+    (w - margin * 2.0) / cols
+}
+
+pure gridH(_, _, _) = (rows, h, margin) {
+    (h - margin * 2.0) / rows
 }

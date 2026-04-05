@@ -17,6 +17,11 @@ public final class SpnFunctionRefNode extends SpnExpressionNode {
         this.callTarget = callTarget;
     }
 
+    /** Returns the wrapped CallTarget (for use by builtin factories at parse time). */
+    public CallTarget getCallTarget() {
+        return callTarget;
+    }
+
     @Override
     public Object executeGeneric(VirtualFrame frame) {
         return callTarget;

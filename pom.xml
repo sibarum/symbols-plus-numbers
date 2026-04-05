@@ -8,6 +8,12 @@
     <artifactId>spn-parent</artifactId>
     <version>1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
+
+    <!-- Default goal includes process-classes so spn-stdlib's generator runs -->
+    <build>
+        <defaultGoal>process-classes</defaultGoal>
+    </build>
+
     <modules>
         <module>spn-ast</module>
         <module>spn-parse</module>

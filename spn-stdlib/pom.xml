@@ -36,38 +36,17 @@
 
     <build>
         <plugins>
-            <!-- Step 1: Normal compile (Truffle DSL generates *Gen classes) -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
-                <configuration>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>org.graalvm.truffle</groupId>
-                            <artifactId>truffle-dsl-processor</artifactId>
-                            <version>${truffle.version}</version>
-                        </path>
-                    </annotationProcessorPaths>
-                </configuration>
-                <executions>
-                    <!-- Step 3: Compile the generated registry source -->
-                    <execution>
-                        <id>compile-generated</id>
-                        <phase>process-classes</phase>
-                        <goals>
-                            <goal>compile</goal>
-                        </goals>
-                        <configuration>
-                            <compileSourceRoots>
-                                <compileSourceRoot>${project.build.directory}/generated-sources/stdlib</compileSourceRoot>
-                            </compileSourceRoots>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
+            <!--
+                Build sequence for stdlib:
+                  1. compile phase: normal javac + Truffle DSL annotation processing
+                  2. process-classes: exec runs StdlibRegistryGenerator on compiled classes
+                  3. process-classes: second javac compiles the generated Registry + Loader
 
-            <!-- Step 2: Run the generator after initial compile -->
+                Plugin declaration order matters — exec MUST come before the second
+                compiler execution within process-classes.
+            -->
+
+            <!-- Declared FIRST so its process-classes execution runs before compiler's -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
@@ -85,6 +64,36 @@
                                 <argument>${project.build.outputDirectory}</argument>
                                 <argument>${project.build.directory}/generated-sources/stdlib</argument>
                             </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Declared SECOND so compile-generated runs after the generator -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.graalvm.truffle</groupId>
+                            <artifactId>truffle-dsl-processor</artifactId>
+                            <version>${truffle.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>compile-generated</id>
+                        <phase>process-classes</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <compileSourceRoots>
+                                <compileSourceRoot>${project.build.directory}/generated-sources/stdlib</compileSourceRoot>
+                            </compileSourceRoots>
                         </configuration>
                     </execution>
                 </executions>

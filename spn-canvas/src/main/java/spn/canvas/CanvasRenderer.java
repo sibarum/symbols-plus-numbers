@@ -1,5 +1,7 @@
 package spn.canvas;
 
+import spn.fonts.SdfFontRenderer;
+
 import java.util.List;
 
 import static org.lwjgl.opengl.GL11.*;
@@ -73,8 +75,11 @@ public final class CanvasRenderer {
     /**
      * Replay a list of draw commands. Caller must have an active GL context
      * and have already called glClear if desired.
+     *
+     * @param font optional font renderer for text commands (null = text is skipped)
      */
-    public void replay(List<DrawCommand> commands, int canvasWidth, int canvasHeight) {
+    public void replay(List<DrawCommand> commands, int canvasWidth, int canvasHeight,
+                       SdfFontRenderer font) {
         glUseProgram(program);
 
         // Orthographic projection: (0,0) top-left, (w,h) bottom-right
@@ -120,6 +125,24 @@ public final class CanvasRenderer {
                 case DrawCommand.StrokeLine line -> {
                     emitLine(line.x1(), line.y1(), line.x2(), line.y2(),
                              strokeR, strokeG, strokeB, strokeWeight);
+                }
+                case DrawCommand.Text text -> {
+                    if (font != null) {
+                        // Flush shapes, switch to font pipeline, render text, resume shapes
+                        flush();
+                        glUseProgram(0);
+                        font.beginText(canvasWidth, canvasHeight);
+                        font.drawText(text.text(), text.x(), text.y(),
+                                      text.scale(), fillR, fillG, fillB);
+                        font.endText();
+                        // Restore shape rendering state (endText enables depth test)
+                        glDisable(GL_DEPTH_TEST);
+                        glEnable(GL_BLEND);
+                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                        glUseProgram(program);
+                        glUniformMatrix4fv(uProjectionLoc, false, proj);
+                        glBindVertexArray(vao);
+                    }
                 }
             }
         }

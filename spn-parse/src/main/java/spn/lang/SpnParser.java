@@ -908,7 +908,9 @@ public class SpnParser {
         }
 
         // Identifier — variable read or function call
-        if (tok.type() == TokenType.IDENTIFIER) {
+        // PATTERN_KW tokens (length, contains, etc.) are contextual keywords
+        // that can also be used as identifiers in expression context.
+        if (tok.type() == TokenType.IDENTIFIER || tok.type() == TokenType.PATTERN_KW) {
             return parseIdentifierExpr();
         }
 

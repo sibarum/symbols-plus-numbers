@@ -79,9 +79,16 @@ public final class StdlibRegistryGenerator {
             generateSpnInterface(builtins, out);
         }
 
+        // Generate StdlibModuleLoader
+        Path loaderFile = outputDir.resolve("spn/stdlib/gen/StdlibModuleLoader.java");
+        try (var out = new PrintWriter(Files.newBufferedWriter(loaderFile))) {
+            generateModuleLoader(builtins, out);
+        }
+
         System.out.println("[StdlibRegistryGenerator] Generated SpnStdlibRegistry with "
                 + builtins.size() + " builtins.");
         System.out.println("[StdlibRegistryGenerator] Generated " + spnFile);
+        System.out.println("[StdlibRegistryGenerator] Generated " + loaderFile);
     }
 
     /** Scans the classes directory for .class files annotated with @SpnBuiltin. */
@@ -496,6 +503,80 @@ public final class StdlibRegistryGenerator {
         }
 
         return sb.toString();
+    }
+
+    // ── StdlibModuleLoader generation ─────────────────────────────────────
+
+    /**
+     * Generates StdlibModuleLoader.java which builds SpnModule instances
+     * from SpnStdlibRegistry and registers them in a SpnModuleRegistry.
+     */
+    private static void generateModuleLoader(List<BuiltinInfo> builtins, PrintWriter out) {
+        // Group by module, separating higher-order from simple
+        Map<String, List<BuiltinInfo>> byModule = builtins.stream()
+                .collect(Collectors.groupingBy(BuiltinInfo::module, LinkedHashMap::new, Collectors.toList()));
+
+        out.println("package spn.stdlib.gen;");
+        out.println();
+        out.println("import com.oracle.truffle.api.CallTarget;");
+        out.println("import spn.language.SpnModule;");
+        out.println("import spn.language.SpnModuleRegistry;");
+        out.println("import spn.node.BuiltinFactory;");
+        out.println("import spn.node.SpnExpressionNode;");
+        out.println("import spn.node.func.SpnFunctionRefNode;");
+        out.println("import spn.node.func.SpnInvokeNode;");
+        out.println();
+        out.println("/**");
+        out.println(" * Auto-generated loader that registers stdlib modules into SpnModuleRegistry.");
+        out.println(" * DO NOT EDIT — changes will be overwritten.");
+        out.println(" */");
+        out.println("public final class StdlibModuleLoader {");
+        out.println();
+        out.println("    private StdlibModuleLoader() {}");
+        out.println();
+        out.println("    /** Registers all stdlib modules into the given registry. */");
+        out.println("    public static void registerAll(SpnModuleRegistry registry) {");
+
+        for (var entry : byModule.entrySet()) {
+            String module = entry.getKey();
+            List<BuiltinInfo> fns = entry.getValue();
+            String varName = module.toLowerCase() + "Builder";
+
+            out.println("        var " + varName + " = SpnModule.builder(\"" + module + "\");");
+
+            for (BuiltinInfo b : fns) {
+                if (!b.hasCallTargetCtor()) {
+                    // Simple builtin — pre-compiled CallTarget
+                    out.println("        " + varName + ".function(\"" + b.name()
+                            + "\", SpnStdlibRegistry.create_" + b.name() + "().callTarget());");
+                }
+            }
+
+            // Higher-order builtins as BuiltinFactory
+            for (BuiltinInfo b : fns) {
+                if (b.hasCallTargetCtor()) {
+                    out.println("        " + varName + ".builtinFactory(\"" + b.name()
+                            + "\", args -> {");
+                    int valueArgCount = b.nodeChildren().size();
+                    out.println("            CallTarget fn = ((SpnFunctionRefNode) args["
+                            + valueArgCount + "]).getCallTarget();");
+                    out.println("            var entry = SpnStdlibRegistry.create_"
+                            + b.name() + "(fn);");
+                    out.println("            SpnExpressionNode[] valueArgs = new SpnExpressionNode["
+                            + valueArgCount + "];");
+                    out.println("            System.arraycopy(args, 0, valueArgs, 0, "
+                            + valueArgCount + ");");
+                    out.println("            return new SpnInvokeNode(entry.callTarget(), valueArgs);");
+                    out.println("        });");
+                }
+            }
+
+            out.println("        registry.register(\"" + module + "\", " + varName + ".build());");
+            out.println();
+        }
+
+        out.println("    }");
+        out.println("}");
     }
 
     // ── Java registry helpers ───────────────────────────────────────────────

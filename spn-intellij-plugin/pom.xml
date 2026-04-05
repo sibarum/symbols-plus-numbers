@@ -61,6 +61,13 @@
             <scope>system</scope>
             <systemPath>${intellij.home}/lib/util-8.jar</systemPath>
         </dependency>
+        <dependency>
+            <groupId>com.jetbrains.intellij</groupId>
+            <artifactId>kotlinx-collections-immutable</artifactId>
+            <version>local</version>
+            <scope>system</scope>
+            <systemPath>${intellij.home}/lib/intellij.libraries.kotlinx.collections.immutable.jar</systemPath>
+        </dependency>
     </dependencies>
 
     <build>

@@ -149,14 +149,14 @@ public class EditorWindow {
     // ---- HUD ------------------------------------------------------------
 
     private static final String BASE_SHORTCUTS =
-            "F1 Shapes | F2 Grid | F5 Run | Ctrl+N New | Ctrl+O Open | Ctrl+S Save";
+            "F1 Shapes | F2 Plot | F5 Run | Ctrl+N New | Ctrl+O Open | Ctrl+S Save";
 
     // ---- Sample scripts -------------------------------------------------
 
     private record Sample(int key, String label, String resource) {}
     private static final Sample[] SAMPLES = {
-            new Sample(GLFW_KEY_F1, "Shapes",  "/samples/canvas_shapes.spn"),
-            new Sample(GLFW_KEY_F2, "Grid",    "/samples/canvas_grid.spn"),
+            new Sample(GLFW_KEY_F1, "Shapes",   "/samples/canvas_shapes.spn"),
+            new Sample(GLFW_KEY_F2, "Plot",     "/samples/canvas_grid.spn"),
     };
 
     private void openSample(Sample sample) {
@@ -263,7 +263,7 @@ public class EditorWindow {
 
             if (canvasState.isCanvasRequested()) {
                 spn.canvas.CanvasWindow cw = new spn.canvas.CanvasWindow();
-                cw.open(canvasState.getWidth(), canvasState.getHeight(), handle);
+                cw.open(canvasState.getWidth(), canvasState.getHeight(), handle, font);
                 try {
                     if (canvasState.getAnimateCallback() != null) {
                         cw.showAnimated(canvasState.getAnimateFps(),

@@ -2,6 +2,7 @@ package spn.canvas;
 
 import com.oracle.truffle.api.CallTarget;
 import org.lwjgl.opengl.GL;
+import spn.fonts.SdfFontRenderer;
 
 import java.util.List;
 
@@ -17,6 +18,7 @@ public final class CanvasWindow {
 
     private long handle;
     private CanvasRenderer renderer;
+    private SdfFontRenderer font;
     private int width;
     private int height;
 
@@ -26,10 +28,12 @@ public final class CanvasWindow {
      * @param width       canvas width in pixels
      * @param height      canvas height in pixels
      * @param shareWith   GLFW window handle to share GL context with, or NULL
+     * @param font        shared font renderer for text commands (may be null)
      */
-    public void open(int width, int height, long shareWith) {
+    public void open(int width, int height, long shareWith, SdfFontRenderer font) {
         this.width = width;
         this.height = height;
+        this.font = font;
 
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
@@ -61,7 +65,7 @@ public final class CanvasWindow {
         // Render once
         glViewport(0, 0, width, height);
         glClear(GL_COLOR_BUFFER_BIT);
-        renderer.replay(commands, width, height);
+        renderer.replay(commands, width, height, font);
         glfwSwapBuffers(handle);
 
         // Wait loop — re-render on expose/resize
@@ -71,7 +75,7 @@ public final class CanvasWindow {
             glfwGetFramebufferSize(win, w, h);
             glViewport(0, 0, w[0], h[0]);
             glClear(GL_COLOR_BUFFER_BIT);
-            renderer.replay(commands, width, height);
+            renderer.replay(commands, width, height, font);
             glfwSwapBuffers(win);
         });
 
@@ -105,7 +109,7 @@ public final class CanvasWindow {
             glfwGetFramebufferSize(handle, w, h);
             glViewport(0, 0, w[0], h[0]);
             glClear(GL_COLOR_BUFFER_BIT);
-            renderer.replay(state.getCommands(), width, height);
+            renderer.replay(state.getCommands(), width, height, font);
             glfwSwapBuffers(handle);
 
             glfwPollEvents();
