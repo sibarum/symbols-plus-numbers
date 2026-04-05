@@ -1,17 +1,19 @@
-package spn.canvas.node;
+package spn.stdlib.string;
 
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.NodeInfo;
 import spn.node.SpnExpressionNode;
+import spn.node.builtin.SpnBuiltin;
 
 /**
- * Formats a number as a short string suitable for axis labels.
+ * Formats a number as a short string suitable for display/labels.
  * Integers render without decimals. Doubles render with up to 2 decimal places.
  */
+@SpnBuiltin(name = "formatNum", module = "String", returns = "String")
 @NodeChild("value")
 @NodeInfo(shortName = "formatNum")
-public abstract class SpnCanvasFormatNumNode extends SpnExpressionNode {
+public abstract class SpnFormatNumNode extends SpnExpressionNode {
 
     @Specialization
     protected String formatLong(long value) {
@@ -23,7 +25,6 @@ public abstract class SpnCanvasFormatNumNode extends SpnExpressionNode {
         if (value == Math.floor(value) && !Double.isInfinite(value)) {
             return Long.toString((long) value);
         }
-        // Up to 2 decimal places, strip trailing zeros
         String s = String.format("%.2f", value);
         if (s.contains(".")) {
             s = s.replaceAll("0+$", "");
