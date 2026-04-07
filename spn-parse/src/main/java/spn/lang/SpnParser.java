@@ -162,6 +162,8 @@ public class SpnParser {
         return switch (tok.text()) {
             case "import" -> { parseImportDecl(); yield null; }
             case "module" -> { skipModuleDecl(); yield null; }
+            case "version" -> { skipVersionDecl(); yield null; }
+            case "require" -> { skipRequireDecl(); yield null; }
             case "type" -> { parseTypeDecl(); yield null; }
             case "data" -> { parseDataDecl(); yield null; }
             case "struct" -> { parseStructDecl(); yield null; }
@@ -194,11 +196,26 @@ public class SpnParser {
      */
     private void skipModuleDecl() {
         tokens.expect("module");
-        // Skip the dotted namespace: ident.ident.ident
         tokens.advance(); // first segment
         while (tokens.match(".")) {
             tokens.advance(); // next segment
         }
+    }
+
+    /** Skip a version declaration (version "1.0.0" or version 1.0.0). */
+    private void skipVersionDecl() {
+        tokens.expect("version");
+        tokens.advance(); // the version string or first number segment
+        // Consume additional .segment parts for unquoted versions like 1.0.0
+        while (tokens.match(".")) {
+            tokens.advance();
+        }
+    }
+
+    /** Skip a require declaration (require "com.other.lib"). */
+    private void skipRequireDecl() {
+        tokens.expect("require");
+        tokens.advance(); // the dependency string
     }
 
     private void parseImportDecl() {

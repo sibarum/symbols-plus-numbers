@@ -90,17 +90,30 @@ public class TemplateInstantiationMode implements Mode {
 
         boolean shift = (mods & GLFW_MOD_SHIFT) != 0;
 
+        boolean ctrl = (mods & GLFW_MOD_CONTROL) != 0;
+
+        // File operations pass through
+        if (ctrl && key == GLFW_KEY_S) {
+            window.saveFile((mods & GLFW_MOD_SHIFT) != 0);
+            return true;
+        }
+
         switch (key) {
             case GLFW_KEY_TAB -> {
                 if (shift) {
                     if (activeIndex > 0) selectField(activeIndex - 1);
                 } else {
-                    if (activeIndex < fields.size() - 1) selectField(activeIndex + 1);
+                    if (activeIndex < fields.size() - 1) {
+                        selectField(activeIndex + 1);
+                    } else {
+                        // Tab past last field → done, pop mode, keep text
+                        window.popMode();
+                    }
                 }
                 return true;
             }
-            case GLFW_KEY_ESCAPE -> {
-                // Cancel handled by mode manager (Ctrl+Backspace) but also Escape
+            case GLFW_KEY_ENTER, GLFW_KEY_ESCAPE -> {
+                // Done — pop mode, text stays in editor ready to save
                 window.popMode();
                 return true;
             }
@@ -150,9 +163,9 @@ public class TemplateInstantiationMode implements Mode {
         float bottomBar = hudH + scrollbarSize;
 
         textArea.setBounds(0, 0, width, height - bottomBar);
-        textArea.render();
 
-        // Draw field highlights on top of the text
+        // Draw field highlights BEFORE text so text renders on top
+        // (need to call setBounds first so metrics are correct)
         float cellW = textArea.getCellWidth();
         float cellH = textArea.getCellHeight();
         float originX = textArea.getTextOriginX();
@@ -177,14 +190,18 @@ public class TemplateInstantiationMode implements Mode {
                 font.drawRect(rx, ry, Math.max(rw, cellW), cellH, bgR, bgG, bgB);
             }
         }
+
+        // Text renders on top of field highlights
+        textArea.render();
     }
 
     @Override
     public String hudText() {
-        if (fields.isEmpty()) return "Esc Cancel";
+        if (fields.isEmpty()) return "Enter Done | Ctrl+S Save";
         Field f = fields.get(activeIndex);
         return "Tab Next | Shift+Tab Prev | " + f.type + ": " + f.label
-                + " (" + (activeIndex + 1) + "/" + fields.size() + ") | Esc Cancel";
+                + " (" + (activeIndex + 1) + "/" + fields.size() + ")"
+                + " | Enter Done | Ctrl+S Save";
     }
 
     // ---- Field updates (with linked name sync) ----

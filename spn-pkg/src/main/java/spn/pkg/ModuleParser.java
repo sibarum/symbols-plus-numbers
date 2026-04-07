@@ -78,8 +78,21 @@ public final class ModuleParser {
 
     private void parseVersion() {
         tokens.expect("version");
-        var tok = tokens.expectType(TokenType.STRING);
-        this.version = unquote(tok.text());
+        var tok = tokens.advance();
+        if (tok.type() == TokenType.STRING) {
+            this.version = unquote(tok.text());
+        } else if (tok.type() == TokenType.NUMBER) {
+            // Version like 1.0.0 tokenizes as NUMBER(1.0) DOT NUMBER(0) DOT ...
+            // Consume additional .segment parts to build the full version string
+            StringBuilder vb = new StringBuilder(tok.text());
+            while (tokens.match(".")) {
+                vb.append('.');
+                vb.append(tokens.advance().text());
+            }
+            this.version = vb.toString();
+        } else {
+            throw tokens.error("Expected version string or number, got: " + tok.text());
+        }
     }
 
     // ── require "com.other.lib" ──────────────────────────────────────

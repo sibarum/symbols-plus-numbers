@@ -13,7 +13,7 @@ public class EditorMode implements Mode {
     private static final float SCROLLBAR_SIZE = 12f;
 
     static final String BASE_SHORTCUTS =
-            "F5 Run | Ctrl+N New | Ctrl+O Open | Ctrl+S Save";
+            "F5 Run | Ctrl+N New | Ctrl+O Open | Ctrl+S Save | Ctrl+G Logs";
 
     private final EditorWindow window;
     private final TextArea textArea;
@@ -68,17 +68,27 @@ public class EditorMode implements Mode {
             textArea.switchUndoBranch(1);
             return true;
         }
+        // Logs
+        if (ctrl && key == GLFW_KEY_G && action == GLFW_PRESS) {
+            window.pushLegacyMode(new LogViewMode(window));
+            return true;
+        }
+        // Module browser
+        if (ctrl && key == GLFW_KEY_M && action == GLFW_PRESS) {
+            ModuleContext ctx = window.getModuleContext();
+            if (ctx != null) {
+                window.pushLegacyMode(new ModuleMode(window, ctx));
+            } else {
+                window.flash(
+                        "No module loaded \u2014 cannot find module.spn", true);
+            }
+            return true;
+        }
         // Action menu
         if (ctrl && key == GLFW_KEY_P && action == GLFW_PRESS) {
             window.pushLegacyMode(new ActionMenuMode(window, window.getActionRegistry()));
             return true;
         }
-        // Create module (placeholder)
-        if (ctrl && key == GLFW_KEY_M && action == GLFW_PRESS) {
-            window.pushLegacyMode(new PlaceholderMode(window, "Create Module"));
-            return true;
-        }
-
         textArea.onKey(key, mods);
         return true;
     }
@@ -144,9 +154,12 @@ public class EditorMode implements Mode {
     public String hudText() {
         StringBuilder sb = new StringBuilder();
 
-        // Promoted hints for empty/new file
+        // Promoted hints
         if (textArea.getText().isBlank()) {
-            sb.append("*Ctrl+M New Module | ");
+            sb.append("*Ctrl+N New | ");
+        }
+        if (window.getModuleContext() != null) {
+            sb.append("*Ctrl+M Module Explorer | ");
         }
 
         // Undo state summary

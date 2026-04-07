@@ -13,7 +13,7 @@ public class SpnLexer {
     private static final Set<String> KEYWORDS = Set.of(
             "type", "where", "with", "rule", "data", "struct",
             "pure", "let", "while", "do", "match", "yield",
-            "if", "else", "import", "module", "return"
+            "if", "else", "import", "module", "version", "require", "return"
     );
 
     private static final Set<String> PATTERN_KEYWORDS = Set.of(

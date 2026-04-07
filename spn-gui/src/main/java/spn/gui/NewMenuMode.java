@@ -5,7 +5,7 @@ import spn.fonts.SdfFontRenderer;
 import static org.lwjgl.glfw.GLFW.*;
 
 /**
- * "New" menu: New File or New Template.
+ * "New" menu: New File, New Module, or New Template.
  * If the current editor is clean, acts on it directly.
  * If dirty, spawns a new window.
  */
@@ -20,8 +20,17 @@ class NewMenuMode implements Mode {
     private static final float FONT_SCALE = 0.35f;
     private static final float SMALL_SCALE = 0.25f;
 
-    private static final String[] LABELS = { "New File", "New Template (.spnt)" };
-    private static final String[] KEY_HINTS = { "1", "2" };
+    private static final String[] LABELS = {
+            "New File",
+            "New Module (module.spn)",
+            "New Template (.spnt)"
+    };
+    private static final String[] KEY_HINTS = { "1", "2", "3" };
+
+    private static final String MODULE_CONTENT = """
+            module %{name:com.mysite.mymodule}
+            version %{string:1.0.0}
+            """;
 
     private static final String TEMPLATE_CONTENT = """
             -- SPN Template (.spnt)
@@ -54,6 +63,7 @@ class NewMenuMode implements Mode {
             case GLFW_KEY_ESCAPE -> window.popMode();
             case GLFW_KEY_1     -> execute(0);
             case GLFW_KEY_2     -> execute(1);
+            case GLFW_KEY_3     -> execute(2);
         }
         return true;
     }
@@ -115,13 +125,12 @@ class NewMenuMode implements Mode {
 
     @Override
     public String hudText() {
-        return "1 New File | 2 New Template | Esc Cancel";
+        return "1 File | 2 Module | 3 Template | Esc Cancel";
     }
 
     private void execute(int option) {
-        window.popMode(); // remove this menu first
+        window.popMode();
 
-        // Determine target window: current if clean, new if dirty
         EditorWindow target = window;
         boolean dirty = !window.getTextArea().getText().equals(window.getSavedContent());
         if (dirty) {
@@ -130,7 +139,13 @@ class NewMenuMode implements Mode {
 
         switch (option) {
             case 0 -> target.clearForNewFile();
-            case 1 -> target.clearForNewFile(TEMPLATE_CONTENT);
+            case 1 -> {
+                // Open module template in instantiation mode
+                target.clearForNewFile();
+                target.pushLegacyMode(
+                        new spn.gui.template.TemplateInstantiationMode(target, MODULE_CONTENT));
+            }
+            case 2 -> target.clearForNewFile(TEMPLATE_CONTENT);
         }
     }
 

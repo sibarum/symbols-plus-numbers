@@ -38,6 +38,11 @@ public class Hud {
         this.segments = segments;
     }
 
+    /** Clear any active flash message, restoring normal HUD content. */
+    public void clearFlash() {
+        flashText = null;
+    }
+
     /** Show a timed flash message (4 seconds). */
     public void flash(String message, boolean isError) {
         this.flashText = message;

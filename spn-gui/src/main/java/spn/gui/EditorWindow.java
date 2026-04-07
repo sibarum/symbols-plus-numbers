@@ -40,6 +40,8 @@ public class EditorWindow {
 
     private Path currentFile;
     private String savedContent = "";  // snapshot of content at last save/load
+    private ModuleContext moduleContext; // cached module info (nullable)
+    private final LogBuffer logBuffer = new LogBuffer();
     private boolean initialized;
 
     // ---- Sample scripts -------------------------------------------------
@@ -156,8 +158,11 @@ public class EditorWindow {
         actionRegistry.register("Plot Sample",   "Sample", "F2",         () -> openSample(SAMPLES[1]));
         actionRegistry.register("Action Menu",   "View",   "Ctrl+P",
                 () -> pushLegacyMode(new ActionMenuMode(this, actionRegistry)));
-        actionRegistry.register("Create Module", "File",   "Ctrl+M",
-                () -> pushLegacyMode(new PlaceholderMode(this, "Create Module")));
+        actionRegistry.register("Module Browser", "File",   "Ctrl+M",
+                () -> {
+                    if (moduleContext != null) pushLegacyMode(new ModuleMode(this, moduleContext));
+                    else flash("No module loaded \u2014 cannot find module.spn", true);
+                });
     }
 
     // ---- Accessors -------------------------------------------------------
@@ -173,6 +178,16 @@ public class EditorWindow {
 
     public SdfFontRenderer getFont() { return font; }
 
+    public ModuleContext getModuleContext() { return moduleContext; }
+
+    public LogBuffer getLogBuffer() { return logBuffer; }
+
+    /** Flash a message in the HUD and append it to the log. */
+    public void flash(String message, boolean isError) {
+        frame.getHud().flash(message, isError);
+        logBuffer.append(message, isError);
+    }
+
     WindowFrame getFrame() { return frame; }
 
     String getSavedContent() { return savedContent; }
@@ -187,6 +202,7 @@ public class EditorWindow {
         textArea.setText(content);
         currentFile = null;
         savedContent = content;
+        moduleContext = null;
         glfwSetWindowTitle(handle, "untitled - Symbols+Numbers");
     }
 
@@ -251,7 +267,7 @@ public class EditorWindow {
     void openSample(Sample sample) {
         try (InputStream in = getClass().getResourceAsStream(sample.resource())) {
             if (in == null) {
-                legacyHud.flash("Sample not found: " + sample.resource(), true);
+                flash("Sample not found: " + sample.resource(), true);
                 return;
             }
             String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
@@ -267,7 +283,7 @@ public class EditorWindow {
                 glfwSetWindowTitle(ew.handle, sample.label() + " - Symbols+Numbers");
             }
         } catch (IOException e) {
-            legacyHud.flash("Error loading sample: " + e.getMessage(), true);
+            flash("Error loading sample: " + e.getMessage(), true);
         }
     }
 
@@ -275,8 +291,9 @@ public class EditorWindow {
 
     void runCurrentFile() {
         String source = textArea.getText();
+        String fileName = currentFile != null ? currentFile.getFileName().toString() : "untitled";
         if (source.isBlank()) {
-            legacyHud.flash("Nothing to run", true);
+            flash("[" + fileName + "] Nothing to run", true);
             return;
         }
 
@@ -308,15 +325,24 @@ public class EditorWindow {
                 }
             } else {
                 String display = result == null ? "(no result)" : result.toString();
-                legacyHud.flash("=> " + display, false);
+                flash("[" + fileName + "] => " + display, false);
             }
         } catch (Exception e) {
             String msg = e.getMessage();
             if (msg == null) msg = e.getClass().getSimpleName();
-            legacyHud.flash("Error: " + msg, true);
+            flash("[" + fileName + "] Error: " + msg, true);
         } finally {
             spn.canvas.CanvasState.clear();
         }
+    }
+
+    // ---- Module detection ------------------------------------------------
+
+    private void detectModule(Path filePath) {
+        // Skip if the file is already inside the cached module
+        if (moduleContext != null && moduleContext.contains(filePath)) return;
+        // Scan up for module.spn
+        moduleContext = ModuleContext.detect(filePath);
     }
 
     // ---- File operations ------------------------------------------------
@@ -338,6 +364,7 @@ public class EditorWindow {
         textArea.setText(content);
         currentFile = path;
         savedContent = content;
+        detectModule(path);
         updateTitle();
     }
 
@@ -372,7 +399,7 @@ public class EditorWindow {
         }
     }
 
-    void saveFile(boolean saveAs) {
+    public void saveFile(boolean saveAs) {
         Path target = currentFile;
         if (target == null || saveAs) {
             String defaultPath = target != null ? target.toString() : "";
@@ -405,6 +432,12 @@ public class EditorWindow {
                 frame.dispatch(new InputEvent.CharInput(codepoint)));
 
         glfwSetKeyCallback(handle, (win, key, scancode, action, mods) -> {
+            // Pressing Ctrl clears any flash message so shortcuts are visible
+            if (action == GLFW_PRESS
+                    && (key == GLFW_KEY_LEFT_CONTROL || key == GLFW_KEY_RIGHT_CONTROL)) {
+                frame.getHud().clearFlash();
+            }
+
             Key k = Key.fromGlfw(key);
             int m = Mod.fromGlfw(mods);
             InputEvent event = switch (action) {
