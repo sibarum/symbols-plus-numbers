@@ -3,6 +3,13 @@ package spn.gui;
 import spn.fonts.SdfFontRenderer;
 import spn.lang.SpnParser;
 import spn.node.SpnRootNode;
+import spn.stdui.input.ControlSignal;
+import spn.stdui.input.InputEvent;
+import spn.stdui.input.Key;
+import spn.stdui.input.Mod;
+import spn.stdui.widget.ScrollbarTheme;
+import spn.stdui.window.Clipboard;
+import spn.stdui.window.WindowFrame;
 import spn.type.SpnSymbolTable;
 
 import java.io.IOException;
@@ -10,28 +17,29 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayDeque;
-import java.util.Deque;
 
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.system.MemoryUtil.*;
 
 /**
- * A single editor window: owns its GLFW window handle and all UI components.
- * Delegates input and rendering to the active {@link Mode} on the mode stack.
+ * A single editor window: owns its GLFW window handle, bridges GLFW events
+ * to spn-stdui's {@link WindowFrame}, and handles SPN-specific file/run ops.
  */
 public class EditorWindow {
 
     private final long handle;
     private SdfFontRenderer font;
-    private TextArea textArea;
-    private Hud hud;
+    private TextArea textArea;   // legacy TextArea (used by EditorMode/templates)
+    private Hud legacyHud;       // legacy Hud (used by legacy modes for flash)
 
-    private final Deque<Mode> modeStack = new ArrayDeque<>();
+    // spn-stdui window frame — owns ModeManager and new Hud
+    private WindowFrame frame;
+
     private final ActionRegistry actionRegistry = new ActionRegistry();
 
     private Path currentFile;
+    private String savedContent = "";  // snapshot of content at last save/load
     private boolean initialized;
 
     // ---- Sample scripts -------------------------------------------------
@@ -42,12 +50,6 @@ public class EditorWindow {
             new Sample(GLFW_KEY_F2, "Plot",     "/samples/canvas_grid.spn"),
     };
 
-    /**
-     * Creates the GLFW window. Call {@link #initComponents(SdfFontRenderer)} after
-     * the GL context and font renderer are ready.
-     *
-     * @param shareWith GLFW window handle to share GL context with, or NULL for the first window
-     */
     EditorWindow(long shareWith) {
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
@@ -66,6 +68,29 @@ public class EditorWindow {
         this.font = font;
         initialized = true;
 
+        // Create clipboard bridge
+        Clipboard clipboard = new Clipboard() {
+            @Override public void set(String text) { glfwSetClipboardString(handle, text); }
+            @Override public String get() { return glfwGetClipboardString(handle); }
+        };
+
+        // Create spn-stdui WindowFrame
+        frame = new WindowFrame(
+                Main.instance.getWindowManager().buffers(),
+                clipboard,
+                Main.instance.getWindowManager().actions()
+        );
+
+        // Handle MODE_MENU signal → push action palette
+        frame.getModeManager().setSignalHandler((signal, active) -> {
+            if (signal == ControlSignal.MODE_MENU) {
+                pushLegacyMode(new ActionMenuMode(this, actionRegistry));
+                return true;
+            }
+            return false;
+        });
+
+        // Legacy components (still used by EditorMode and template system)
         ScrollbarTheme sbTheme = ScrollbarTheme.dark();
 
         textArea = new TextArea(font);
@@ -82,34 +107,36 @@ public class EditorWindow {
         hScroll.setTheme(sbTheme);
         hScroll.setOnChange(v -> textArea.setScrollCol(v));
 
-        hud = new Hud(font);
-        hud.setText(EditorMode.BASE_SHORTCUTS);
+        legacyHud = new Hud(font);
+        legacyHud.setText(EditorMode.BASE_SHORTCUTS);
 
-        // EditorMode is always at the bottom of the stack
+        // EditorMode (legacy) is always at the bottom — suppress SUBMIT/CANCEL
+        // so Ctrl+Space and Ctrl+Backspace reach it as normal keystrokes
         EditorMode editorMode = new EditorMode(this, textArea, vScroll, hScroll);
-        modeStack.push(editorMode);
+        frame.getModeManager().push(new LegacyModeAdapter(
+                editorMode, this::getSize,
+                java.util.Set.of(ControlSignal.SUBMIT, ControlSignal.CANCEL)));
 
         registerActions();
         setupCallbacks();
     }
 
-    // ---- Mode stack -----------------------------------------------------
+    // ---- Mode stack (bridged to spn-stdui ModeManager) ------------------
 
-    /** Push a new mode onto the stack — it becomes the active mode. */
-    void pushMode(Mode mode) {
-        modeStack.push(mode);
+    /** Push a legacy Mode onto the spn-stdui mode stack via adapter. */
+    void pushLegacyMode(Mode mode) {
+        frame.getModeManager().push(new LegacyModeAdapter(mode, this::getSize));
     }
 
-    /** Pop the current mode, returning to the one below. Never pops EditorMode. */
+    /** Pop the active mode. Never pops the bottom (EditorMode). */
     void popMode() {
-        if (modeStack.size() > 1) {
-            modeStack.pop();
-        }
+        frame.getModeManager().pop();
     }
 
-    /** The active mode (top of stack). */
-    private Mode activeMode() {
-        return modeStack.peek();
+    private float[] getSize() {
+        int[] w = new int[1], h = new int[1];
+        glfwGetFramebufferSize(handle, w, h);
+        return new float[]{ w[0], h[0] };
     }
 
     // ---- Action registration --------------------------------------------
@@ -127,24 +154,18 @@ public class EditorWindow {
         actionRegistry.register("Zoom Reset",    "View", "Ctrl+0",       () -> textArea.zoomReset());
         actionRegistry.register("Shapes Sample", "Sample", "F1",         () -> openSample(SAMPLES[0]));
         actionRegistry.register("Plot Sample",   "Sample", "F2",         () -> openSample(SAMPLES[1]));
-        actionRegistry.register("Action Menu",   "View",   "Ctrl+P",     () -> pushMode(new ActionMenuMode(this, actionRegistry)));
-
-        // Template actions (insert keyword then activate template)
-        for (String kw : spn.gui.template.TemplateCatalog.keywords()) {
-            actionRegistry.register("Template: " + kw, "Template", "Ctrl+,",
-                    () -> {
-                        textArea.insertSnippet(kw);
-                        // Simulate Ctrl+Comma to activate the template
-                        ((EditorMode) modeStack.peekLast()).activateTemplateForKeyword(kw);
-                    });
-        }
+        actionRegistry.register("Action Menu",   "View",   "Ctrl+P",
+                () -> pushLegacyMode(new ActionMenuMode(this, actionRegistry)));
+        actionRegistry.register("Create Module", "File",   "Ctrl+M",
+                () -> pushLegacyMode(new PlaceholderMode(this, "Create Module")));
     }
 
-    // ---- Accessors for EditorMode / other modes -------------------------
+    // ---- Accessors -------------------------------------------------------
 
     long getHandle() { return handle; }
 
-    Hud getHud() { return hud; }
+    /** Legacy Hud — used by legacy modes for flash messages. */
+    Hud getHud() { return legacyHud; }
 
     ActionRegistry getActionRegistry() { return actionRegistry; }
 
@@ -152,23 +173,46 @@ public class EditorWindow {
 
     SdfFontRenderer getFont() { return font; }
 
-    void show() {
-        glfwShowWindow(handle);
+    WindowFrame getFrame() { return frame; }
+
+    void show() { glfwShowWindow(handle); }
+
+    boolean shouldClose() { return glfwWindowShouldClose(handle); }
+
+    boolean isFocused() { return glfwGetWindowAttrib(handle, GLFW_FOCUSED) != 0; }
+
+    void makeCurrent() { glfwMakeContextCurrent(handle); }
+
+    /** Called by the GLFW close callback and by ConfirmExitMode after a decision. */
+    void requestClose() {
+        glfwSetWindowShouldClose(handle, true);
     }
 
-    boolean shouldClose() {
-        return glfwWindowShouldClose(handle);
+    /**
+     * Stack-aware close behavior:
+     * - If modes are stacked above the base editor, pop one.
+     * - If only the base editor remains and content is clean, close.
+     * - Otherwise push a ConfirmExitMode.
+     */
+    private void handleCloseRequest() {
+        // If there are modes above the base editor, pop one instead of closing
+        if (frame.getModeManager().depth() > 1) {
+            frame.getModeManager().pop();
+            return;
+        }
+
+        // Base editor is the only mode — check if content is dirty
+        boolean dirty = !textArea.getText().equals(savedContent);
+        if (!dirty) {
+            requestClose();
+            return;
+        }
+
+        // Unsaved changes — push confirmation prompt
+        pushLegacyMode(new ConfirmExitMode(this));
     }
 
-    boolean isFocused() {
-        return glfwGetWindowAttrib(handle, GLFW_FOCUSED) != 0;
-    }
-
-    void makeCurrent() {
-        glfwMakeContextCurrent(handle);
-    }
-
-    // ---- Rendering ------------------------------------------------------
+    // ---- Rendering (delegates to WindowFrame) ----------------------------
 
     void render() {
         int[] w = new int[1], h = new int[1];
@@ -176,49 +220,39 @@ public class EditorWindow {
         glViewport(0, 0, w[0], h[0]);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        float sw = w[0], sh = h[0];
-        float hudH = hud.preferredHeight();
-        float scrollbarSize = 12f;
+        double now = glfwGetTime();
 
-        hud.setBounds(0, sh - hudH - scrollbarSize, sw, hudH);
-
-        font.beginText(w[0], h[0]);
-
-        activeMode().render(sw, sh);
-
-        hud.setText(activeMode().hudText());
-        hud.render();
-
-        font.endText();
+        font.beginFrame(w[0], h[0]);
+        frame.render(font, w[0], h[0], now);
+        font.endFrame();
 
         glfwSwapBuffers(handle);
     }
 
-    void destroy() {
-        glfwDestroyWindow(handle);
-    }
+    void destroy() { glfwDestroyWindow(handle); }
 
     // ---- Sample loading -------------------------------------------------
 
     void openSample(Sample sample) {
         try (InputStream in = getClass().getResourceAsStream(sample.resource())) {
             if (in == null) {
-                hud.flash("Sample not found: " + sample.resource(), true);
+                legacyHud.flash("Sample not found: " + sample.resource(), true);
                 return;
             }
             String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
 
             if (currentFile == null && textArea.getText().isBlank()) {
                 textArea.setText(content);
+                savedContent = content;
                 currentFile = null;
                 glfwSetWindowTitle(handle, sample.label() + " - Symbols+Numbers");
             } else {
-                EditorWindow w = Main.instance.spawnWindow();
-                w.textArea.setText(content);
-                glfwSetWindowTitle(w.handle, sample.label() + " - Symbols+Numbers");
+                EditorWindow ew = Main.instance.spawnWindow();
+                ew.textArea.setText(content);
+                glfwSetWindowTitle(ew.handle, sample.label() + " - Symbols+Numbers");
             }
         } catch (IOException e) {
-            hud.flash("Error loading sample: " + e.getMessage(), true);
+            legacyHud.flash("Error loading sample: " + e.getMessage(), true);
         }
     }
 
@@ -227,7 +261,7 @@ public class EditorWindow {
     void runCurrentFile() {
         String source = textArea.getText();
         if (source.isBlank()) {
-            hud.flash("Nothing to run", true);
+            legacyHud.flash("Nothing to run", true);
             return;
         }
 
@@ -259,12 +293,12 @@ public class EditorWindow {
                 }
             } else {
                 String display = result == null ? "(no result)" : result.toString();
-                hud.flash("=> " + display, false);
+                legacyHud.flash("=> " + display, false);
             }
         } catch (Exception e) {
             String msg = e.getMessage();
             if (msg == null) msg = e.getClass().getSimpleName();
-            hud.flash("Error: " + msg, true);
+            legacyHud.flash("Error: " + msg, true);
         } finally {
             spn.canvas.CanvasState.clear();
         }
@@ -276,6 +310,7 @@ public class EditorWindow {
         String content = Files.readString(path);
         textArea.setText(content);
         currentFile = path;
+        savedContent = content;
         updateTitle();
     }
 
@@ -311,8 +346,10 @@ public class EditorWindow {
             target = Path.of(path);
         }
         try {
-            Files.writeString(target, textArea.getText());
+            String content = textArea.getText();
+            Files.writeString(target, content);
             currentFile = target;
+            savedContent = content;
             updateTitle();
         } catch (IOException e) {
             org.lwjgl.util.tinyfd.TinyFileDialogs.tinyfd_messageBox(
@@ -325,36 +362,47 @@ public class EditorWindow {
         glfwSetWindowTitle(handle, name + " - Symbols+Numbers");
     }
 
-    // ---- Callbacks — delegate to active mode ----------------------------
+    // ---- Callbacks — translate GLFW to InputEvent, dispatch to frame -----
 
     private void setupCallbacks() {
         glfwSetCharCallback(handle, (win, codepoint) ->
-                activeMode().onChar(codepoint));
+                frame.dispatch(new InputEvent.CharInput(codepoint)));
 
-        glfwSetKeyCallback(handle, (win, key, scancode, action, mods) ->
-                activeMode().onKey(key, scancode, action, mods));
+        glfwSetKeyCallback(handle, (win, key, scancode, action, mods) -> {
+            Key k = Key.fromGlfw(key);
+            int m = Mod.fromGlfw(mods);
+            InputEvent event = switch (action) {
+                case GLFW_PRESS   -> new InputEvent.KeyPress(k, m);
+                case GLFW_REPEAT  -> new InputEvent.KeyRepeat(k, m);
+                case GLFW_RELEASE -> new InputEvent.KeyRelease(k, m);
+                default -> null;
+            };
+            if (event != null) frame.dispatch(event);
+        });
 
         glfwSetScrollCallback(handle, (win, xoff, yoff) ->
-                activeMode().onScroll(xoff, yoff));
+                frame.dispatch(new InputEvent.MouseScroll(xoff, yoff)));
 
         glfwSetMouseButtonCallback(handle, (win, button, action, mods) -> {
             double[] mx = new double[1], my = new double[1];
             glfwGetCursorPos(win, mx, my);
-            activeMode().onMouseButton(button, action, mods, mx[0], my[0]);
+            int m = Mod.fromGlfw(mods);
+            if (action == GLFW_PRESS) {
+                frame.dispatch(new InputEvent.MousePress(button, m, mx[0], my[0]));
+            } else if (action == GLFW_RELEASE) {
+                frame.dispatch(new InputEvent.MouseRelease(button, m, mx[0], my[0]));
+            }
         });
 
         glfwSetCursorPosCallback(handle, (win, xpos, ypos) ->
-                activeMode().onCursorPos(xpos, ypos));
+                frame.dispatch(new InputEvent.MouseMove(xpos, ypos)));
 
         glfwSetCursorEnterCallback(handle, (win, entered) ->
-                activeMode().onCursorEnter(entered));
+                frame.dispatch(new InputEvent.MouseEnter(entered)));
 
         glfwSetWindowCloseCallback(handle, win -> {
             glfwSetWindowShouldClose(win, false);
-            boolean save = org.lwjgl.util.tinyfd.TinyFileDialogs.tinyfd_messageBox(
-                    "Quit", "Save before quitting?", "yesno", "question", true);
-            if (save) saveFile(false);
-            glfwSetWindowShouldClose(win, true);
+            handleCloseRequest();
         });
 
         glfwSetWindowFocusCallback(handle, (win, focused) ->

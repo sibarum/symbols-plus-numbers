@@ -223,6 +223,7 @@ public class Surface {
     }
 
     private boolean onKeyPress(Key key, int mods) {
+        phantomRow = -1; phantomCol = -1; // hide hover cursor while typing
         boolean ctrl = Mod.ctrl(mods);
         boolean shift = Mod.shift(mods);
 
@@ -373,6 +374,7 @@ public class Surface {
     }
 
     private boolean onCharInput(int codepoint) {
+        phantomRow = -1; phantomCol = -1;
         if (readOnly) return true;
         int rBefore = cursorRow, cBefore = cursorCol;
         String selRemoved = removeSelection();

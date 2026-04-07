@@ -1,6 +1,7 @@
 package spn.gui;
 
 import spn.fonts.SdfFontRenderer;
+import spn.stdui.widget.ScrollbarTheme;
 import java.util.function.IntConsumer;
 
 import static org.lwjgl.glfw.GLFW.*;

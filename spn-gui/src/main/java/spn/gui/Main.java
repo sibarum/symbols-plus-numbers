@@ -1,6 +1,7 @@
 package spn.gui;
 
 import spn.fonts.SdfFontRenderer;
+import spn.stdui.window.WindowManager;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.glfw.GLFWVidMode;
@@ -19,9 +20,12 @@ public class Main {
     static final PointerBuffer SPN_FILTER = createFilterPatterns("*.spn", "*.txt");
 
     private SdfFontRenderer font;
+    private final WindowManager windowManager = new WindowManager();
     private final List<EditorWindow> windows = new ArrayList<>();
     private final List<EditorWindow> pendingWindows = new ArrayList<>();
     private boolean anyWindowFocused = true;
+
+    WindowManager getWindowManager() { return windowManager; }
 
     private static PointerBuffer createFilterPatterns(String... patterns) {
         PointerBuffer buf = PointerBuffer.allocateDirect(patterns.length);

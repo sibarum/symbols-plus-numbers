@@ -1,6 +1,9 @@
 package spn.gui;
 
+import spn.stdui.buffer.TextBuffer;
+import spn.stdui.buffer.UndoManager;
 import spn.stdui.render.ColorSpan;
+import spn.stdui.widget.TermHighlighter;
 import spn.fonts.SdfFontRenderer;
 import spn.gui.lang.HighlightCache;
 import spn.lang.Token;
@@ -343,6 +346,7 @@ public class TextArea {
     // ------------------------------------------------------------------
 
     public void onCharInput(int codepoint) {
+        phantomRow = -1; phantomCol = -1; // hide hover cursor while typing
         int rBefore = cursorRow, cBefore = cursorCol;
         String selRemoved = removeSelection();
         int editRow = cursorRow, editCol = cursorCol;
@@ -362,6 +366,7 @@ public class TextArea {
     }
 
     public void onKey(int key, int mods) {
+        phantomRow = -1; phantomCol = -1; // hide hover cursor while typing
         boolean ctrl  = (mods & GLFW_MOD_CONTROL) != 0;
         boolean shift = (mods & GLFW_MOD_SHIFT) != 0;
 

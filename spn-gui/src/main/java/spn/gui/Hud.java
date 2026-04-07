@@ -6,8 +6,11 @@ import spn.fonts.SdfFontRenderer;
  * A read-only display bar for contextual information: keyboard shortcuts,
  * error messages, code generation hints, etc.
  *
- * Renders as a single-line strip with a distinct background color.
+ * <p>Renders as a single-line strip with a distinct background color.
  * Call {@link #render()} between {@code font.beginText()} and {@code font.endText()}.
+ *
+ * <p>Segments are separated by {@code " | "}. Segments prefixed with {@code *}
+ * are "promoted" — rendered brighter and placed first in the bar.
  */
 public class Hud {
 
@@ -20,9 +23,15 @@ public class Hud {
     private static final float PAD_X = 10f;
     private static final float BG_R = 0.16f, BG_G = 0.16f, BG_B = 0.20f;
     private static final float SEP_R = 0.28f, SEP_G = 0.28f, SEP_B = 0.35f;
+    private static final float SEP_HEIGHT = 1f;
+
+    // General hint colors
     private static final float LABEL_R = 0.50f, LABEL_G = 0.50f, LABEL_B = 0.55f;
     private static final float KEY_R = 0.75f, KEY_G = 0.70f, KEY_B = 0.50f;
-    private static final float SEP_HEIGHT = 1f;
+
+    // Promoted hint colors (brighter, stands out)
+    private static final float PROMO_LABEL_R = 0.70f, PROMO_LABEL_G = 0.75f, PROMO_LABEL_B = 0.85f;
+    private static final float PROMO_KEY_R = 0.55f, PROMO_KEY_G = 0.75f, PROMO_KEY_B = 0.95f;
 
     // Flash message colors
     private static final float OK_R = 0.40f, OK_G = 0.75f, OK_B = 0.45f;
@@ -43,7 +52,7 @@ public class Hud {
         boundsX = x; boundsY = y; boundsW = w; boundsH = h;
     }
 
-    /** Set the HUD content. Segments are separated by " | " delimiters. */
+    /** Set the HUD content. Segments separated by " | ". Prefix with * for promoted. */
     public void setText(String text) {
         this.text = text;
     }
@@ -86,30 +95,55 @@ public class Hud {
         float textY = boundsY + (boundsH + lineH) * 0.5f;
         float x = boundsX + PAD_X;
 
-        // Parse and render segments: "Ctrl+O Open | Ctrl+S Save | ..."
-        // Keys (before space) get KEY color, labels (after space) get LABEL color
+        // Split segments; render promoted first, then general
         String[] segments = text.split(" \\| ");
-        for (int i = 0; i < segments.length; i++) {
-            if (i > 0) {
-                // Draw separator
+        boolean first = true;
+
+        // Pass 1: promoted segments (prefixed with *)
+        for (String raw : segments) {
+            String seg = raw.trim();
+            if (!seg.startsWith("*")) continue;
+            seg = seg.substring(1); // strip marker
+            if (!first) {
                 String sep = " | ";
                 font.drawText(sep, x, textY, FONT_SCALE, SEP_R, SEP_G, SEP_B);
                 x += font.getTextWidth(sep, FONT_SCALE);
             }
-
-            String seg = segments[i].trim();
-            int space = seg.indexOf(' ');
-            if (space > 0) {
-                String key = seg.substring(0, space);
-                String label = seg.substring(space);
-                font.drawText(key, x, textY, FONT_SCALE, KEY_R, KEY_G, KEY_B);
-                x += font.getTextWidth(key, FONT_SCALE);
-                font.drawText(label, x, textY, FONT_SCALE, LABEL_R, LABEL_G, LABEL_B);
-                x += font.getTextWidth(label, FONT_SCALE);
-            } else {
-                font.drawText(seg, x, textY, FONT_SCALE, LABEL_R, LABEL_G, LABEL_B);
-                x += font.getTextWidth(seg, FONT_SCALE);
-            }
+            x = renderSegment(seg, x, textY, PROMO_KEY_R, PROMO_KEY_G, PROMO_KEY_B,
+                    PROMO_LABEL_R, PROMO_LABEL_G, PROMO_LABEL_B);
+            first = false;
         }
+
+        // Pass 2: general segments (no * prefix)
+        for (String raw : segments) {
+            String seg = raw.trim();
+            if (seg.startsWith("*")) continue;
+            if (!first) {
+                String sep = " | ";
+                font.drawText(sep, x, textY, FONT_SCALE, SEP_R, SEP_G, SEP_B);
+                x += font.getTextWidth(sep, FONT_SCALE);
+            }
+            x = renderSegment(seg, x, textY, KEY_R, KEY_G, KEY_B,
+                    LABEL_R, LABEL_G, LABEL_B);
+            first = false;
+        }
+    }
+
+    private float renderSegment(String seg, float x, float textY,
+                                 float keyR, float keyG, float keyB,
+                                 float labelR, float labelG, float labelB) {
+        int space = seg.indexOf(' ');
+        if (space > 0) {
+            String key = seg.substring(0, space);
+            String label = seg.substring(space);
+            font.drawText(key, x, textY, FONT_SCALE, keyR, keyG, keyB);
+            x += font.getTextWidth(key, FONT_SCALE);
+            font.drawText(label, x, textY, FONT_SCALE, labelR, labelG, labelB);
+            x += font.getTextWidth(label, FONT_SCALE);
+        } else {
+            font.drawText(seg, x, textY, FONT_SCALE, labelR, labelG, labelB);
+            x += font.getTextWidth(seg, FONT_SCALE);
+        }
+        return x;
     }
 }
