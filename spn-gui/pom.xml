@@ -43,6 +43,11 @@
             <artifactId>spn-fonts</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>sibarum.spn.core</groupId>
+            <artifactId>spn-stdui</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
         <!-- LWJGL Core -->
         <dependency>

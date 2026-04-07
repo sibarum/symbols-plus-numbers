@@ -28,6 +28,13 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- spn-stdui (for Renderer interface and ColorSpan) -->
+        <dependency>
+            <groupId>sibarum.spn.core</groupId>
+            <artifactId>spn-stdui</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- LWJGL Core -->
         <dependency>
             <groupId>org.lwjgl</groupId>

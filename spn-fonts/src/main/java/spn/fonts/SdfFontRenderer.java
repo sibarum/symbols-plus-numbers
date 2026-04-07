@@ -1,5 +1,8 @@
 package spn.fonts;
 
+import spn.stdui.render.ColorSpan;
+import spn.stdui.render.Renderer;
+
 import org.lwjgl.stb.STBTTFontinfo;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -27,7 +30,7 @@ import static org.lwjgl.stb.STBTruetype.*;
  * grows incrementally using shelf-packing — no fixed character set is
  * pre-loaded at init time.
  */
-public class SdfFontRenderer {
+public class SdfFontRenderer implements Renderer {
 
     private static final int ATLAS_SIZE = 1024;
     private static final int SDF_PADDING = 8;
@@ -368,6 +371,11 @@ public class SdfFontRenderer {
 
         flushBatch(1, bufPos);
     }
+
+    // ---- Renderer interface aliases ----
+
+    @Override public void beginFrame(int screenWidth, int screenHeight) { beginText(screenWidth, screenHeight); }
+    @Override public void endFrame() { endText(); }
 
     /** Restore GL state after text rendering. */
     public void endText() {

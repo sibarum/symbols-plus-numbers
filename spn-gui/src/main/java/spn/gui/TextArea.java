@@ -1,6 +1,6 @@
 package spn.gui;
 
-import spn.fonts.ColorSpan;
+import spn.stdui.render.ColorSpan;
 import spn.fonts.SdfFontRenderer;
 import spn.gui.lang.HighlightCache;
 import spn.lang.Token;

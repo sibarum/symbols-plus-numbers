@@ -1,9 +1,0 @@
-# Create Module
-# Creates a .spn module file and artifact.spn manifest if needed.
-# Namespace is derived from file path relative to artifact.spn.
-# Ctrl+Space to submit. Ctrl+O to browse for folder.
-
-group: spn
-name:
-version: 1.0.0
-folder:
