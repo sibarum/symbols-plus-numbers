@@ -48,8 +48,9 @@ public class ModuleContext {
             if (Files.isRegularFile(moduleFile)) {
                 try {
                     return load(dir, moduleFile);
-                } catch (IOException e) {
-                    return null; // malformed module.spn
+                } catch (Exception e) {
+                    System.err.println("Failed to parse " + moduleFile + ": " + e.getMessage());
+                    return null;
                 }
             }
             dir = dir.getParent();

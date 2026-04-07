@@ -343,6 +343,9 @@ public class EditorWindow {
         if (moduleContext != null && moduleContext.contains(filePath)) return;
         // Scan up for module.spn
         moduleContext = ModuleContext.detect(filePath);
+        if (moduleContext != null) {
+            flash("Module: " + moduleContext.getNamespace(), false);
+        }
     }
 
     // ---- File operations ------------------------------------------------
