@@ -8,7 +8,7 @@ import java.util.*;
  *
  * Resolution order (per spec):
  *   1. Current artifact's own files (local namespace)
- *   2. Embedded artifacts (subdirectories with artifact.spn)
+ *   2. Embedded artifacts (subdirectories with module.spn)
  *   3. Declared dependencies (require section) — matched by namespace prefix
  *   4. Ancestor artifact defaults for version resolution
  */

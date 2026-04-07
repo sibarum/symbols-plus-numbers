@@ -124,12 +124,12 @@ public class EditorWindow {
     // ---- Mode stack (bridged to spn-stdui ModeManager) ------------------
 
     /** Push a legacy Mode onto the spn-stdui mode stack via adapter. */
-    void pushLegacyMode(Mode mode) {
+    public void pushLegacyMode(Mode mode) {
         frame.getModeManager().push(new LegacyModeAdapter(mode, this::getSize));
     }
 
     /** Pop the active mode. Never pops the bottom (EditorMode). */
-    void popMode() {
+    public void popMode() {
         frame.getModeManager().pop();
     }
 
@@ -142,7 +142,7 @@ public class EditorWindow {
     // ---- Action registration --------------------------------------------
 
     private void registerActions() {
-        actionRegistry.register("New Window",    "File", "Ctrl+N",       () -> Main.instance.spawnWindow());
+        actionRegistry.register("New",           "File", "Ctrl+N",       () -> pushLegacyMode(new NewMenuMode(this)));
         actionRegistry.register("Open File",     "File", "Ctrl+O",       this::openFile);
         actionRegistry.register("Save File",     "File", "Ctrl+S",       () -> saveFile(false));
         actionRegistry.register("Save As",       "File", "Ctrl+Shift+S", () -> saveFile(true));
@@ -162,18 +162,33 @@ public class EditorWindow {
 
     // ---- Accessors -------------------------------------------------------
 
-    long getHandle() { return handle; }
+    public long getHandle() { return handle; }
 
     /** Legacy Hud — used by legacy modes for flash messages. */
-    Hud getHud() { return legacyHud; }
+    public Hud getHud() { return legacyHud; }
 
-    ActionRegistry getActionRegistry() { return actionRegistry; }
+    public ActionRegistry getActionRegistry() { return actionRegistry; }
 
-    TextArea getTextArea() { return textArea; }
+    public TextArea getTextArea() { return textArea; }
 
-    SdfFontRenderer getFont() { return font; }
+    public SdfFontRenderer getFont() { return font; }
 
     WindowFrame getFrame() { return frame; }
+
+    String getSavedContent() { return savedContent; }
+
+    /** Reset the editor to a blank, untitled state. */
+    void clearForNewFile() {
+        clearForNewFile("");
+    }
+
+    /** Reset the editor with the given initial content (treated as clean). */
+    void clearForNewFile(String content) {
+        textArea.setText(content);
+        currentFile = null;
+        savedContent = content;
+        glfwSetWindowTitle(handle, "untitled - Symbols+Numbers");
+    }
 
     void show() { glfwShowWindow(handle); }
 
@@ -308,10 +323,31 @@ public class EditorWindow {
 
     void loadFile(Path path) throws IOException {
         String content = Files.readString(path);
+
+        // .spnt files get a dialog: instantiate or edit
+        if (spn.gui.template.SpntParser.isTemplate(path.toString())) {
+            pushLegacyMode(new spn.gui.template.TemplateOpenMode(this, path, content));
+            return;
+        }
+
+        loadFileDirectly(path, content);
+    }
+
+    /** Load file content into the editor without any .spnt interception. */
+    public void loadFileDirectly(Path path, String content) {
         textArea.setText(content);
         currentFile = path;
         savedContent = content;
         updateTitle();
+    }
+
+    /** Parse a .spnt template and enter instantiation mode. */
+    public void loadTemplateForInstantiation(Path path, String content) {
+        // Set the file context (so title shows the template name)
+        currentFile = path;
+        updateTitle();
+        // Push instantiation mode — it loads editable text into textArea
+        pushLegacyMode(new spn.gui.template.TemplateInstantiationMode(this, content));
     }
 
     private static void registerStdlibModules(spn.language.SpnModuleRegistry registry) {

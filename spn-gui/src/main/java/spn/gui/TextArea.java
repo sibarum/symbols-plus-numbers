@@ -138,7 +138,7 @@ public class TextArea {
     public int getCursorRow() { return cursorRow; }
     public int getCursorCol() { return cursorCol; }
 
-    void setCursorPosition(int row, int col) {
+    public void setCursorPosition(int row, int col) {
         cursorRow = Math.max(0, Math.min(row, buffer.lineCount() - 1));
         cursorCol = Math.max(0, Math.min(col, buffer.lineLength(cursorRow)));
         clearSelection();

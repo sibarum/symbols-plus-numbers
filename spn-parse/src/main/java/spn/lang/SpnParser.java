@@ -161,9 +161,7 @@ public class SpnParser {
 
         return switch (tok.text()) {
             case "import" -> { parseImportDecl(); yield null; }
-            case "module" -> throw tokens.error(
-                    "Module declarations are implicit in SPN — the namespace is derived "
-                    + "from the file's position relative to artifact.spn");
+            case "module" -> { skipModuleDecl(); yield null; }
             case "type" -> { parseTypeDecl(); yield null; }
             case "data" -> { parseDataDecl(); yield null; }
             case "struct" -> { parseStructDecl(); yield null; }
@@ -188,6 +186,21 @@ public class SpnParser {
      *   import spn.mylib.utils (helperA, helperB)
      *   import String (join as glue)
      */
+    /**
+     * Skip a module declaration (module com.mysite.mymodule).
+     * Module declarations are only meaningful in module.spn files,
+     * which are parsed by ModuleParser. In regular source files
+     * they are silently skipped.
+     */
+    private void skipModuleDecl() {
+        tokens.expect("module");
+        // Skip the dotted namespace: ident.ident.ident
+        tokens.advance(); // first segment
+        while (tokens.match(".")) {
+            tokens.advance(); // next segment
+        }
+    }
+
     private void parseImportDecl() {
         tokens.expect("import");
 

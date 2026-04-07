@@ -13,7 +13,7 @@ public class EditorMode implements Mode {
     private static final float SCROLLBAR_SIZE = 12f;
 
     static final String BASE_SHORTCUTS =
-            "F1 Shapes | F2 Plot | F5 Run | Ctrl+N New | Ctrl+O Open | Ctrl+S Save";
+            "F5 Run | Ctrl+N New | Ctrl+O Open | Ctrl+S Save";
 
     private final EditorWindow window;
     private final TextArea textArea;
@@ -44,7 +44,7 @@ public class EditorMode implements Mode {
         }
 
         if (ctrl && key == GLFW_KEY_N && action == GLFW_PRESS) {
-            Main.instance.spawnWindow();
+            window.pushLegacyMode(new NewMenuMode(window));
             return true;
         }
         if (ctrl && key == GLFW_KEY_O && action == GLFW_PRESS) {

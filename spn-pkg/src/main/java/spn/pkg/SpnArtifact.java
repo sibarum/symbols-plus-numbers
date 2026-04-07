@@ -7,7 +7,7 @@ import java.util.*;
  * A resolved SPN artifact — a package with its identity, files, dependencies,
  * defaults, profiles, and nested sub-artifacts.
  *
- * The artifact's root directory contains an artifact.spn file. Every .spn file
+ * The artifact's root directory contains an module.spn file. Every .spn file
  * under this directory (that isn't claimed by a nested artifact) belongs to
  * this artifact. Namespaces are derived from file position relative to the
  * artifact root.

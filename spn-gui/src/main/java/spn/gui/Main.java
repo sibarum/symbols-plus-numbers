@@ -17,7 +17,7 @@ import static org.lwjgl.system.MemoryUtil.*;
 public class Main {
 
     static Main instance;
-    static final PointerBuffer SPN_FILTER = createFilterPatterns("*.spn", "*.txt");
+    static final PointerBuffer SPN_FILTER = createFilterPatterns("*.spn", "*.spnt", "*.txt");
 
     private SdfFontRenderer font;
     private final WindowManager windowManager = new WindowManager();

@@ -8,88 +8,107 @@ import java.util.*;
 /**
  * Resolves a directory tree into an SpnArtifact by:
  *
- *   1. Finding artifact.spn in the given root
+ *   1. Finding module.spn in the given root
  *   2. Parsing it for identity, deps, defaults, profiles
  *   3. Scanning for .spn source files (computing namespaces)
- *   4. Recursing into subdirectories that have their own artifact.spn
+ *   4. Recursing into subdirectories that have their own module.spn
  *   5. Applying version defaults from ancestor artifacts
  */
 public final class ArtifactResolver {
 
-    private static final String ARTIFACT_FILE = "artifact.spn";
+    private static final String MODULE_FILE = "module.spn";
 
     /**
-     * Resolves the artifact rooted at the given directory.
-     * This is the entry point for the root project.
+     * Resolves the module rooted at the given directory.
      *
-     * @param root directory containing artifact.spn
-     * @return the fully resolved artifact tree
+     * @param root directory containing module.spn
+     * @return the fully resolved module tree
      */
     public SpnArtifact resolve(Path root) throws IOException {
         return resolve(root, List.of(), Map.of());
     }
 
     /**
-     * Resolves with inherited defaults and profiles from ancestor artifacts.
+     * Resolves with inherited defaults and profiles from ancestor modules.
      */
     private SpnArtifact resolve(Path root, List<ArtifactId> inheritedDefaults,
                                 Map<String, String> inheritedProfiles) throws IOException {
-        Path artifactFile = root.resolve(ARTIFACT_FILE);
-        if (!Files.exists(artifactFile)) {
-            throw new IOException("No " + ARTIFACT_FILE + " found in " + root);
+        Path moduleFile = root.resolve(MODULE_FILE);
+        if (!Files.exists(moduleFile)) {
+            throw new IOException("No " + MODULE_FILE + " found in " + root);
         }
 
-        String source = Files.readString(artifactFile);
-        ArtifactParser.ParseResult parsed = new ArtifactParser(source).parse();
+        ModuleParser.ParseResult parsed = parseModuleFile(moduleFile);
+
+        // Split namespace into ArtifactId (group = all but last segment, name = last)
+        ArtifactId id = toArtifactId(parsed.id());
 
         // Apply version inheritance
-        ArtifactId id = parsed.id();
         if (id.version() == null) {
             String resolved = resolveVersionFromDefaults(id.group(), id.name(), inheritedDefaults);
             if (resolved != null) {
                 id = id.withVersion(resolved);
             } else {
-                throw new IOException("Unversioned artifact: " + id.coordinate()
+                throw new IOException("Unversioned module: " + parsed.id().namespace()
                         + " — no version declared and none found in ancestor defaults");
             }
         }
 
-        // Merge defaults: this artifact's defaults + inherited (local wins)
-        List<ArtifactId> mergedDefaults = mergeDefaults(parsed.defaults(), inheritedDefaults);
+        // Convert requires to ArtifactId for dependency resolution
+        List<ArtifactId> dependencies = parsed.requires().stream()
+                .map(ArtifactResolver::requireToArtifactId)
+                .toList();
 
-        // Merge profiles: ancestor profiles win (root project sets them)
-        Map<String, String> mergedProfiles = mergeProfiles(parsed.profiles(), inheritedProfiles);
+        // Merge inherited profiles (ancestor wins)
+        Map<String, String> mergedProfiles = new LinkedHashMap<>(inheritedProfiles);
 
-        // Discover nested artifacts and source files
+        // Discover nested modules and source files
         List<SpnArtifact> nested = new ArrayList<>();
         Map<String, Path> sourceFiles = new LinkedHashMap<>();
         Set<Path> nestedRoots = new HashSet<>();
 
-        // First pass: find all nested artifact roots
         findNestedArtifactRoots(root, nestedRoots);
 
-        // Resolve nested artifacts (pass merged defaults and profiles down)
         for (Path nestedRoot : nestedRoots) {
-            nested.add(resolve(nestedRoot, mergedDefaults, mergedProfiles));
+            nested.add(resolve(nestedRoot, inheritedDefaults, mergedProfiles));
         }
 
-        // Check for version conflicts among sibling nested artifacts
         detectVersionConflicts(nested);
-
-        // Second pass: collect source files not claimed by nested artifacts
         collectSourceFiles(root, id, sourceFiles, nestedRoots);
 
-        return new SpnArtifact(id, root, parsed.dependencies(),
-                parsed.defaults(), mergedProfiles, nested, sourceFiles);
+        return new SpnArtifact(id, root, dependencies,
+                List.of(), mergedProfiles, nested, sourceFiles);
+    }
+
+    private ModuleParser.ParseResult parseModuleFile(Path moduleFile) throws IOException {
+        String source = Files.readString(moduleFile);
+        return new ModuleParser(source).parse();
+    }
+
+    private static ArtifactId toArtifactId(ModuleId moduleId) {
+        String ns = moduleId.namespace();
+        int lastDot = ns.lastIndexOf('.');
+        String group = lastDot > 0 ? ns.substring(0, lastDot) : "";
+        String name = lastDot > 0 ? ns.substring(lastDot + 1) : ns;
+        return new ArtifactId(group, name, moduleId.version());
+    }
+
+    private static ArtifactId requireToArtifactId(String namespace) {
+        int lastDot = namespace.lastIndexOf('.');
+        if (lastDot > 0) {
+            return new ArtifactId(namespace.substring(0, lastDot),
+                    namespace.substring(lastDot + 1), null);
+        }
+        return new ArtifactId("", namespace, null);
     }
 
     /**
-     * Finds immediate subdirectories that contain artifact.spn.
+     * Finds immediate subdirectories that contain module.spn.
      * Does NOT recurse into those — they handle their own children.
      */
     private void findNestedArtifactRoots(Path root, Set<Path> result) throws IOException {
         try (var stream = Files.walk(root)) {
-            stream.filter(p -> p.getFileName().toString().equals(ARTIFACT_FILE))
+            stream.filter(p -> p.getFileName().toString().equals(MODULE_FILE))
                   .filter(p -> !p.getParent().equals(root)) // skip self
                   .forEach(p -> {
                       Path nestedRoot = p.getParent();
@@ -123,7 +142,7 @@ public final class ArtifactResolver {
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                 String name = file.getFileName().toString();
-                if (name.endsWith(".spn") && !name.equals(ARTIFACT_FILE)) {
+                if (name.endsWith(".spn") && !name.equals(MODULE_FILE)) {
                     String namespace = computeNamespace(root, file, id);
                     sourceFiles.put(namespace, file);
                 }
