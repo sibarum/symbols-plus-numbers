@@ -105,7 +105,7 @@ class LogViewMode implements Mode {
             refreshContent();
         }
 
-        float hudH = window.getHud().preferredHeight();
+        float hudH = window.getHudHeight();
         float bottomBar = hudH + SCROLLBAR_SIZE;
 
         textArea.setBounds(0, 0, width - SCROLLBAR_SIZE, height - bottomBar);

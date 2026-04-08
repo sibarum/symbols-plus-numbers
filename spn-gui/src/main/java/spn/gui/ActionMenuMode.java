@@ -1,6 +1,8 @@
 package spn.gui;
 
 import spn.fonts.SdfFontRenderer;
+import spn.stdui.action.Action;
+import spn.stdui.action.ActionRegistry;
 
 import java.util.List;
 

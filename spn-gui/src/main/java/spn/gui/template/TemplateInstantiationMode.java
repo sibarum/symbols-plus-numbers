@@ -158,7 +158,7 @@ public class TemplateInstantiationMode implements Mode {
 
     @Override
     public void render(float width, float height) {
-        float hudH = window.getHud().preferredHeight();
+        float hudH = window.getHudHeight();
         float scrollbarSize = 12f;
         float bottomBar = hudH + scrollbarSize;
 

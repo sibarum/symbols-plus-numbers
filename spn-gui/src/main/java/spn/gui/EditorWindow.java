@@ -3,6 +3,7 @@ package spn.gui;
 import spn.fonts.SdfFontRenderer;
 import spn.lang.SpnParser;
 import spn.node.SpnRootNode;
+import spn.stdui.action.ActionRegistry;
 import spn.stdui.input.ControlSignal;
 import spn.stdui.input.InputEvent;
 import spn.stdui.input.Key;
@@ -31,7 +32,6 @@ public class EditorWindow {
     private final long handle;
     private SdfFontRenderer font;
     private TextArea textArea;   // legacy TextArea (used by EditorMode/templates)
-    private Hud legacyHud;       // legacy Hud (used by legacy modes for flash)
 
     // spn-stdui window frame — owns ModeManager and new Hud
     private WindowFrame frame;
@@ -109,8 +109,6 @@ public class EditorWindow {
         hScroll.setTheme(sbTheme);
         hScroll.setOnChange(v -> textArea.setScrollCol(v));
 
-        legacyHud = new Hud(font);
-        legacyHud.setText(EditorMode.BASE_SHORTCUTS);
 
         // EditorMode (legacy) is always at the bottom — suppress SUBMIT/CANCEL
         // so Ctrl+Space and Ctrl+Backspace reach it as normal keystrokes
@@ -170,7 +168,10 @@ public class EditorWindow {
     public long getHandle() { return handle; }
 
     /** Legacy Hud — used by legacy modes for flash messages. */
-    public Hud getHud() { return legacyHud; }
+    /** Height of the HUD bar in pixels, for layout calculations. */
+    public float getHudHeight() {
+        return font.getLineHeight(0.25f) * 1.4f;
+    }
 
     public ActionRegistry getActionRegistry() { return actionRegistry; }
 
