@@ -6,8 +6,12 @@ import spn.stdui.render.Renderer;
 import java.util.function.IntConsumer;
 
 /**
- * Reusable scrollbar component (horizontal or vertical).
+ * Platform-neutral scrollbar component (horizontal or vertical).
  * Renders via a {@link Renderer}; handles mouse interaction through {@link InputEvent}s.
+ *
+ * <p>This is the stdui version used by new {@link spn.stdui.mode.Mode} implementations.
+ * The legacy equivalent in spn-gui renders directly via {@code SdfFontRenderer}
+ * and consumes raw GLFW callbacks.
  */
 public class Scrollbar {
 

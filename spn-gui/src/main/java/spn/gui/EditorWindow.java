@@ -167,7 +167,6 @@ public class EditorWindow {
 
     public long getHandle() { return handle; }
 
-    /** Legacy Hud — used by legacy modes for flash messages. */
     /** Height of the HUD bar in pixels, for layout calculations. */
     public float getHudHeight() {
         return font.getLineHeight(0.25f) * 1.4f;

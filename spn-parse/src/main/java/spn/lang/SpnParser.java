@@ -2014,7 +2014,7 @@ public class SpnParser {
      * Thin wrapper around SpnReadLocalVariableNode that remembers its slot
      * so the parser can convert reads to writes for reassignment (x = expr).
      */
-    static final class SpnReadLocalVariableNodeWrapper extends SpnExpressionNode {
+    private static final class SpnReadLocalVariableNodeWrapper extends SpnExpressionNode {
         final int slot;
         @Child private SpnExpressionNode delegate;
 
@@ -2049,7 +2049,7 @@ public class SpnParser {
 
     // ── Deferred invoke (for recursive functions) ────────────────────────
 
-    static final class SpnDeferredInvokeNode extends SpnExpressionNode {
+    private static final class SpnDeferredInvokeNode extends SpnExpressionNode {
         final String name;
         @Children private final SpnExpressionNode[] argNodes;
         @Child private com.oracle.truffle.api.nodes.IndirectCallNode callNode =
@@ -2078,7 +2078,7 @@ public class SpnParser {
 
     // ── Block expression (executes statements, returns last value) ──────────
 
-    static final class SpnBlockExprNode extends SpnExpressionNode {
+    private static final class SpnBlockExprNode extends SpnExpressionNode {
         @Children private final SpnStatementNode[] statements;
 
         SpnBlockExprNode(SpnStatementNode[] statements) {

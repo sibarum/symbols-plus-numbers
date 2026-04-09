@@ -448,8 +448,8 @@ x + y
 """;
         Object result = run(source);
         assertNotNull(result);
-        // Result is a Rational (constrained type) — verify it's the right value
-        System.out.println("Rational result: " + result);
+        assertTrue(result.toString().contains("10"), "Numerator should be 10: " + result);
+        assertTrue(result.toString().contains("8"), "Denominator should be 8: " + result);
     }
 
     @Test
@@ -472,7 +472,7 @@ let y = ComplexPolar(Rational(2,1),Rational(3,1))
 x+y
 """);
         assertNotNull(result);
-        System.out.println("ComplexPolar result: " + result);
+        assertTrue(result.toString().contains("ComplexPolar"), "Should be ComplexPolar: " + result);
     }
 
     @Test

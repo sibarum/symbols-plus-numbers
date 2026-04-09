@@ -28,15 +28,15 @@ public final class SpnLanguage extends TruffleLanguage<SpnContext> {
     }
 
     /**
-     * Parses SPN source code into an executable CallTarget.
-     * This is where a parser would build the AST from source text.
-     * For now, this is a placeholder -- you'll wire in a parser once syntax is designed.
+     * Parses SPN source code into an executable CallTarget via the Polyglot API.
+     *
+     * Note: The editor (spn-gui) drives parsing directly through {@code SpnParser},
+     * bypassing this entry point. This method exists for GraalVM polyglot embedding
+     * and is not yet wired up.
      */
     @Override
     protected CallTarget parse(ParsingRequest request) {
-        Source source = request.getSource();
-        // TODO: parse source.getCharacters() into an AST, wrap in SpnRootNode,
-        //       then return SpnRootNode.getCallTarget()
-        throw new UnsupportedOperationException("Parser not yet implemented");
+        throw new UnsupportedOperationException(
+                "Polyglot parse not yet wired — use SpnParser directly");
     }
 }

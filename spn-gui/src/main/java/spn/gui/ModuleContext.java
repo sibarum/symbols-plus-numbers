@@ -49,7 +49,8 @@ public class ModuleContext {
                 try {
                     return load(dir, moduleFile);
                 } catch (Exception e) {
-                    System.err.println("Failed to parse " + moduleFile + ": " + e.getMessage());
+                    // Caller (EditorWindow.detectModule) will show "No module loaded"
+                    // if we return null — no need to log separately
                     return null;
                 }
             }

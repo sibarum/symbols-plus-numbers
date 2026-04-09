@@ -7,19 +7,28 @@ SPN runs on GraalVM with the Truffle framework for JIT compilation to native mac
 ## Quick Look
 
 ```
--- Define a numeric type with algebraic operations
-type Complex(real: Double, imag: Double)
-  +(a, b) = ((left[0] + right[0]), (left[1] + right[1]))
-  *(a, b) = (((left[0]*right[0])-(left[1]*right[1])), ((left[0]*right[1])+(left[1]*right[0])))
+-- Define a numeric type with validation
+type Rational(int, int) where (_, denominator) { denominator != 0 }
+
+-- Promotion rule: int can be lifted to Rational
+promote int -> Rational = (i) { Rational(i, 1) }
+
+-- Externalized arithmetic as pure functions
+pure *(Rational, Rational) -> Rational = ((n1, d1), (n2, d2)) {
+  Rational(n1*n2, d1*d2)
+}
+pure +(Rational, Rational) -> Rational = ((n1, d1), (n2, d2)) {
+  Rational(n1*d2 + d1*n2, d1*d2)
+}
 
 -- Define a data type with variants
 data Shape
-  = Circle(radius)
+  | Circle(radius)
   | Rectangle(width, height)
   | Triangle(a, b, c)
 
 -- Pure functions with exhaustive pattern matching
-pure area(Shape) -> Double = (shape) {
+pure area(Shape) -> float = (shape) {
   match shape
     | Circle(r)          -> 3.14159 * r * r
     | Rectangle(w, h)    -> w * h
@@ -31,26 +40,33 @@ pure area(Shape) -> Double = (shape) {
 
 ### Custom Numeric Types
 
-Types can carry constraints, distinguished elements, and user-defined algebraic rules. The runtime enforces these at construction time.
+Types carry closure-based validation. Arithmetic is externalized into pure functions with automatic promotion dispatch.
 
 ```
 -- Constrained scalars
-type Natural(n) where n >= 0, n % 1 == 0
+type Natural(int) where (n) { n >= 0 && n % 1 == 0 }
 
--- Distinguished elements with algebraic rules
-type ExtendedNatural(n) where n >= 0, n % 1 == 0 with Omega
-  rule n / 0 = Omega
-  rule Omega + n = Omega
+-- Distinguished elements
+type ExtendedNatural(int) where (n) { n >= 0 && n % 1 == 0 } with Omega
 
--- Multi-component product types with operations
-type Vec3(x: Double, y: Double, z: Double)
-  +(a, b) = ((left[0]+right[0]), (left[1]+right[1]), (left[2]+right[2]))
-  *(a, b) = (((left[1]*right[2])-(left[2]*right[1])),
-             ((left[2]*right[0])-(left[0]*right[2])),
-             ((left[0]*right[1])-(left[1]*right[0])))
+-- Named-field product types
+type Complex(real: float, imag: float)
+type Vec3(x: float, y: float, z: float)
 
--- Constrained symbols (enum-like)
-type Direction = Symbol where oneOf(:north, :south, :east, :west)
+-- Positional product types
+type Rational(int, int) where (_, d) { d != 0 }
+
+-- Externalized operations
+pure +(Complex, Complex) -> Complex = ((r1, i1), (r2, i2)) {
+  Complex(r1 + r2, i1 + i2)
+}
+
+-- Type promotions for dispatch
+promote Rational -> Complex = (r) { Complex(r, Rational(0, 1)) }
+
+-- Constrained symbol types
+type Direction = Symbol
+type Color = Symbol
 ```
 
 ### Pure Functions & Pattern Matching
@@ -67,7 +83,7 @@ pure opposite(Direction) -> Direction = (dir) {
 }
 
 -- String decomposition via prefix matching and regex capture
-pure parseUrl(String) -> String = (url) {
+pure parseUrl(string) -> string = (url) {
   match url
     | "http://" ++ rest                -> "web: " ++ rest
     | "ftp://" ++ rest                 -> "file: " ++ rest
@@ -76,18 +92,18 @@ pure parseUrl(String) -> String = (url) {
 }
 
 -- Array head|tail destructuring
-pure sum(Array<Long>) -> Long = (arr) {
+pure sum(Array) -> int = (arr) {
   match arr
     | []      -> 0
     | [h | t] -> h + sum(t)
 }
 
 -- Guards
-pure classify(Long) -> String = (n) {
-  match n
-    | x | x < 0  -> "negative"
-    | x | x > 0  -> "positive"
-    | _           -> "zero"
+pure classify(int) -> string = (x) {
+  match x
+    | v if {v < 0}  -> "negative"
+    | v if {v > 0}  -> "positive"
+    | _              -> "zero"
 }
 ```
 
@@ -106,7 +122,7 @@ while range(1, 10) do (n) {
 -- sum == 45
 
 -- Producer functions use yield
-pure range(Long, Long) = (start, end) {
+pure range(int, int) = (start, end) {
   let i = start
   while {i < end} do {
     yield i
@@ -159,18 +175,19 @@ An OpenGL-based editor with syntax highlighting, code suggestions, parameter hin
 
 ## Standard Library
 
-63 built-in functions across 9 modules:
+60 built-in functions across 7 modules:
 
 | Module | Functions |
 |--------|-----------|
-| **Math** | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `ceil`, `floor`, `round`, `abs`, `sign`, `min`, `max`, `clamp`, `pow`, `sqrt`, `heron`, `formatNum` |
+| **Math** | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `ceil`, `floor`, `round`, `abs`, `sign`, `min`, `max`, `clamp`, `pow`, `sqrt`, `heron` |
 | **Array** | `map`, `filter`, `fold`, `flatten`, `zip`, `reverse`, `take`, `drop`, `find`, `all`, `any`, `sort`, `enumerate` |
-| **Dictionary** | `hasKey`, `keys`, `values`, `entries`, `size`, `merge`, `remove` |
-| **Set** | `union`, `intersection`, `difference`, `isSubset`, `fromArray`, `toArray` |
-| **String** | `toUpper`, `toLower`, `trim`, `replace`, `substring`, `split`, `startsWith`, `show` |
-| **Range** | `range`, `rangeStep`, `repeat`, `iterate` |
-| **Option** | `mapOption`, `flatMapOption`, `unwrap`, `unwrapOr` |
-| **Canvas** | `canvas`, `show`, `clear`, `fill`, `stroke`, `strokeWeight`, `rect`, `circle`, `line`, `text`, `animate` |
+| **Dict** | `hasKey`, `keys`, `values`, `entries`, `merge`, `remove`, `mapValues` |
+| **Set** | `difference`, `intersection`, `isSubset`, `fromArray`, `toArray`, `size` |
+| **String** | `toUpper`, `toLower`, `trim`, `replace`, `substring`, `split`, `startsWith`, `show`, `join`, `formatNum` |
+| **Range** | `rangeStep`, `repeat`, `iterate` |
+| **Option** | `mapOption`, `flatMap`, `unwrap`, `unwrapOr` |
+
+Canvas functions (`canvas`, `show`, `clear`, `fill`, `stroke`, `strokeWeight`, `rect`, `circle`, `line`, `text`, `animate`) are provided by the spn-canvas module.
 
 ## Architecture
 
@@ -181,7 +198,8 @@ spn-parent/
   spn-stdlib/     Standard library with post-compile code generation
   spn-canvas/     OpenGL 2D drawing API + plotting library
   spn-fonts/      SDF font rendering via STB/LWJGL
-  spn-gui/        OpenGL mini-IDE (GLFW/LWJGL)
+  spn-stdui/      Platform-neutral UI framework (modes, widgets, input)
+  spn-gui/        OpenGL mini-IDE (GLFW/LWJGL), bridges to spn-stdui
   spn-pkg/        Package management & import resolution
   spn-intellij-plugin/  IntelliJ IDE support
 ```
@@ -190,9 +208,9 @@ spn-parent/
 
 SPN uses nominal typing throughout. The type hierarchy includes:
 
-- **Primitives** -- Long, Double, String, Boolean, Symbol
+- **Primitives** -- int (64-bit long), float (64-bit double), string, bool
 - **Constrained types** -- scalars with runtime-checked invariants
-- **Product types** -- multi-component types with algebraic operations
+- **Product types** -- multi-component types with externalized operations
 - **Structs** -- named record types
 - **Variants (ADTs)** -- tagged unions with exhaustiveness checking
 - **Tuples** -- anonymous structurally-typed products
@@ -202,9 +220,10 @@ SPN uses nominal typing throughout. The type hierarchy includes:
 ### Design Principles
 
 - **Every body is a lambda.** `(params) { body }` or `{expr}` for no-arg lambdas. `=` binds a lambda to a name. `do` executes it.
-- **Signatures carry types, lambdas carry names.** `pure add(Long, Long) -> Long = (a, b) { a + b }`
+- **Signatures carry types, lambdas carry names.** `pure add(int, int) -> int = (a, b) { a + b }`
 - **Pure and pragmatic coexist.** Pure functions for logic, closures for control flow and mutation.
 - **Types are smart, structs are dumb.** Numeric types carry algebraic rules. Structs are plain containers whose fields may reference smart types.
+- **Arithmetic is externalized.** Operations are defined as `pure` functions outside the type, with `promote` rules for automatic dispatch across the type hierarchy.
 
 ## Building
 

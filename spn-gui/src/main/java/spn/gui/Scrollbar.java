@@ -9,8 +9,10 @@ import static org.lwjgl.glfw.GLFW.*;
 /**
  * Reusable scrollbar component (horizontal or vertical).
  *
- * Renders via a shared {@link SdfFontRenderer} — call {@link #render()} between
- * {@code font.beginText()} and {@code font.endText()}.
+ * <p>Legacy version that renders directly via {@link SdfFontRenderer} and
+ * consumes raw GLFW callbacks. Used by legacy {@link Mode} implementations.
+ * The platform-neutral equivalent is {@link spn.stdui.widget.Scrollbar},
+ * which takes a {@code Renderer} parameter and uses {@code InputEvent}.
  */
 public class Scrollbar {
 

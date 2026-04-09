@@ -23,15 +23,12 @@ public class WindowFrame {
 
     public WindowFrame(BufferRegistry buffers, Clipboard clipboard, ActionRegistry actions) {
         this.hud = new Hud();
-        // ModeContext references itself via modeManager — create manager after context
-        ModeManager[] mm = new ModeManager[1];
-        this.context = new ModeContext(buffers, clipboard, actions, hud, null);
+        // Circular dependency: ModeContext needs ModeManager and vice versa.
+        // Bootstrap with a temporary context, then replace once both exist.
         this.modeManager = new ModeManager(
                 new ModeContext(buffers, clipboard, actions, hud, null));
-        // Rebuild context with the real mode manager
-        ModeContext realCtx = new ModeContext(buffers, clipboard, actions, hud, modeManager);
-        // Re-create modeManager with real context
-        this.modeManager.setContext(realCtx);
+        this.context = new ModeContext(buffers, clipboard, actions, hud, modeManager);
+        this.modeManager.setContext(context);
     }
 
     /** Dispatch an input event through the mode manager. */

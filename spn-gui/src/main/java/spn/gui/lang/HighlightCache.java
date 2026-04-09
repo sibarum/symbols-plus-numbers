@@ -9,6 +9,10 @@ import java.util.List;
 /**
  * Per-line token cache with lazy re-lex on access.
  * Call the invalidation methods when the underlying TextBuffer mutates.
+ *
+ * <p>Legacy version hardcoded to {@link SpnLexer} and its {@link Token} type.
+ * The platform-neutral equivalent is {@link spn.stdui.highlight.HighlightCache},
+ * which uses a pluggable {@code Highlighter} and returns {@code ColorSpan} arrays.
  */
 public class HighlightCache {
 
