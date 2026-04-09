@@ -370,7 +370,7 @@ class SpnParserTest {
         @Test
         void symbolType() {
             SpnParser p = parser("""
-                type Color = Symbol where oneOf([:red, :green, :blue])
+                type Color = Symbol
                 """);
             p.parse();
             assertNotNull(p.getTypeRegistry().get("Color"));

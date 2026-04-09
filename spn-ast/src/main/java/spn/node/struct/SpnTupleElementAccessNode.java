@@ -1,5 +1,6 @@
 package spn.node.struct;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.NodeField;
@@ -50,6 +51,6 @@ public abstract class SpnTupleElementAccessNode extends SpnExpressionNode {
     @Fallback
     protected Object notTuple(Object value) {
         throw new SpnException("Expected a tuple value, got: "
-                + value.getClass().getSimpleName(), this);
+                + SpnTypeName.of(value), this);
     }
 }

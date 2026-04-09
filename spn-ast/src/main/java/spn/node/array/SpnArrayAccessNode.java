@@ -1,5 +1,6 @@
 package spn.node.array;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -38,9 +39,9 @@ public abstract class SpnArrayAccessNode extends SpnExpressionNode {
     protected Object typeError(Object array, Object index) {
         if (!(array instanceof SpnArrayValue)) {
             throw new SpnException("Expected an array, got: "
-                    + array.getClass().getSimpleName(), this);
+                    + SpnTypeName.of(array), this);
         }
         throw new SpnException("Array index must be a Long, got: "
-                + index.getClass().getSimpleName(), this);
+                + SpnTypeName.of(index), this);
     }
 }

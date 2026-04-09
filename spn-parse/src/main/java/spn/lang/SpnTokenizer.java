@@ -13,10 +13,15 @@ public class SpnTokenizer {
     private final SpnLexer lexer = new SpnLexer();
     private final List<SpnParseToken> tokens;
     private int pos;
+    private String sourceName; // optional file name for error messages
 
     public SpnTokenizer(String source) {
         this.tokens = tokenize(source);
         this.pos = 0;
+    }
+
+    public void setSourceName(String sourceName) {
+        this.sourceName = sourceName;
     }
 
     private List<SpnParseToken> tokenize(String source) {
@@ -120,12 +125,12 @@ public class SpnTokenizer {
     public SpnParseException error(String message) {
         SpnParseToken tok = peek();
         if (tok != null) {
-            return new SpnParseException(message + " at " + tok.location());
+            return new SpnParseException(message, sourceName, tok.line(), tok.col());
         }
-        return new SpnParseException(message + " at end of input");
+        return new SpnParseException(message, sourceName, -1, -1);
     }
 
     public SpnParseException error(String message, SpnParseToken tok) {
-        return new SpnParseException(message + " at " + tok.location());
+        return new SpnParseException(message, sourceName, tok.line(), tok.col());
     }
 }

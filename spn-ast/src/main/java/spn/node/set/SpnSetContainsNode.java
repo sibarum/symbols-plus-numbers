@@ -1,5 +1,6 @@
 package spn.node.set;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -24,6 +25,6 @@ public abstract class SpnSetContainsNode extends SpnExpressionNode {
     @Fallback
     protected Object typeError(Object set, Object element) {
         throw new SpnException("Expected a set, got: "
-                + set.getClass().getSimpleName(), this);
+                + SpnTypeName.of(set), this);
     }
 }

@@ -1,5 +1,6 @@
 package spn.node.type;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -74,6 +75,6 @@ public abstract class SpnUnwrapConstrainedNode extends SpnExpressionNode {
     @Fallback
     protected Object notConstrained(Object value) {
         throw new SpnException("Expected a constrained value, got: "
-                + value.getClass().getSimpleName(), this);
+                + SpnTypeName.of(value), this);
     }
 }

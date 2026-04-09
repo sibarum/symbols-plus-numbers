@@ -44,6 +44,8 @@ public final class SpnProductConstructNode extends SpnExpressionNode {
     @CompilationFinal
     private final boolean needsValidation;
 
+    public SpnTypeDescriptor getDescriptor() { return typeDescriptor; }
+
     public SpnProductConstructNode(SpnTypeDescriptor typeDescriptor,
                                    SpnExpressionNode... componentNodes) {
         this.typeDescriptor = typeDescriptor;

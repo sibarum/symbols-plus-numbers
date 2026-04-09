@@ -446,7 +446,7 @@ public class Surface {
 
     private void onScroll(double yoff) {
         if (yoff == 0) return;
-        int delta = (int) Math.round(yoff * 3.75);
+        int delta = (int) Math.round(yoff * 4);
         if (delta == 0) delta = (yoff > 0) ? 1 : -1;
         scrollRow = clampScrollRow(scrollRow - delta);
     }
@@ -549,23 +549,23 @@ public class Surface {
             }
         }
 
-        // Phantom cursor
+        // Phantom cursor (aligned to highlight offset like selections)
         if (mouseInBounds && !mouseDragging && phantomRow >= 0
                 && (phantomRow != cursorRow || phantomCol != cursorCol)) {
             int pRow = phantomRow - scrollRow, pCol = phantomCol - scrollCol;
             if (pRow >= 0 && pRow < visibleRows && pCol >= 0) {
                 float px = textX + pCol * cellWidth;
-                float py = textY + pRow * cellHeight;
+                float py = textY + pRow * cellHeight + HIGHLIGHT_OFFSET_Y;
                 renderer.drawRect(px, py, 2f, cellHeight, 0.4f, 0.4f, 0.2f);
             }
         }
 
-        // Cursor
+        // Cursor (aligned to highlight offset so it covers descenders)
         if (cursorVisible) {
             int sRow = cursorRow - scrollRow, sCol = cursorCol - scrollCol;
             if (sRow >= 0 && sRow < visibleRows && sCol >= 0) {
                 float cx = textX + sCol * cellWidth;
-                float cy = textY + sRow * cellHeight;
+                float cy = textY + sRow * cellHeight + HIGHLIGHT_OFFSET_Y;
                 renderer.drawRect(cx, cy, 2f, cellHeight, 0.9f, 0.9f, 0.3f);
             }
         }
@@ -647,7 +647,7 @@ public class Surface {
     private int[] screenToDocPos(double mx, double my) {
         if (cellWidth == 0 || cellHeight == 0) return new int[]{0, 0};
         float gutter = lineNumbers ? gutterWidth() : 0;
-        int row = (int) ((my - boundsY - PAD) / cellHeight) + scrollRow;
+        int row = (int) ((my - boundsY - PAD - HIGHLIGHT_OFFSET_Y) / cellHeight) + scrollRow;
         int col = (int) Math.round((mx - boundsX - PAD - gutter) / cellWidth) + scrollCol;
         row = Math.max(0, Math.min(row, buffer.lineCount() - 1));
         col = Math.max(0, Math.min(col, buffer.lineLength(row)));

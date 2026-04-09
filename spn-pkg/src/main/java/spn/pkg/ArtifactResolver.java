@@ -163,6 +163,13 @@ public final class ArtifactResolver {
         if (relStr.endsWith(".spn")) {
             relStr = relStr.substring(0, relStr.length() - 4);
         }
+        // index.spn convention: numerics/index.spn → namespace "...numerics" (not "...numerics.index")
+        if (relStr.endsWith(".index")) {
+            relStr = relStr.substring(0, relStr.length() - 6);
+        } else if (relStr.equals("index")) {
+            // index.spn at module root — namespace is just group.name
+            return id.group() + "." + id.name();
+        }
         return id.group() + "." + id.name() + "." + relStr;
     }
 

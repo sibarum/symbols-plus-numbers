@@ -1,5 +1,6 @@
 package spn.node.set;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
@@ -41,7 +42,7 @@ public final class SpnSetLiteralNode extends SpnExpressionNode {
             if (needsValidation && !elementType.accepts(value)) {
                 throw new SpnException(
                         "Set element at position " + i + " expects " + elementType.describe()
-                                + ", got " + value.getClass().getSimpleName(),
+                                + ", got " + SpnTypeName.of(value),
                         this);
             }
             set.add(value);

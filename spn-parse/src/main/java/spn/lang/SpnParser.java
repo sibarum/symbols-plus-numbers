@@ -53,6 +53,17 @@ public class SpnParser {
     private final Map<String, CallTarget> functionRegistry = new LinkedHashMap<>();
     private final Map<String, spn.node.BuiltinFactory> builtinRegistry = new LinkedHashMap<>();
 
+    // Operator overload registry: operator → list of (paramTypes, callTarget) pairs
+    record OperatorOverload(FieldType[] paramTypes, FieldType returnType, CallTarget callTarget) {}
+    private final Map<String, List<OperatorOverload>> operatorRegistry = new LinkedHashMap<>();
+
+    // Promotion registry: sourceType → (targetType, conversionCallTarget)
+    record Promotion(String sourceDesc, String targetDesc, CallTarget converter) {}
+    private final List<Promotion> promotionRegistry = new ArrayList<>();
+
+    // Compile-time type tracking for expressions (used by operator dispatch)
+    private final java.util.IdentityHashMap<SpnExpressionNode, FieldType> exprTypes = new java.util.IdentityHashMap<>();
+
     // Module system
     private final SpnModuleRegistry moduleRegistry;
     private final Map<String, SpnModule> qualifiedModules = new LinkedHashMap<>();
@@ -60,16 +71,27 @@ public class SpnParser {
     // Current scope for frame slot management
     private Scope currentScope;
 
+    private final String sourceName; // file name for error messages
+
     public SpnParser(String source, SpnLanguage language, SpnSymbolTable symbolTable) {
-        this(source, language, symbolTable, null);
+        this(source, null, language, symbolTable, null);
     }
 
     public SpnParser(String source, SpnLanguage language, SpnSymbolTable symbolTable,
                      SpnModuleRegistry moduleRegistry) {
+        this(source, null, language, symbolTable, moduleRegistry);
+    }
+
+    public SpnParser(String source, String sourceName, SpnLanguage language,
+                     SpnSymbolTable symbolTable, SpnModuleRegistry moduleRegistry) {
         this.tokens = new SpnTokenizer(source);
+        this.sourceName = sourceName;
         this.language = language;
         this.symbolTable = symbolTable;
         this.moduleRegistry = moduleRegistry;
+        if (sourceName != null) {
+            this.tokens.setSourceName(sourceName);
+        }
     }
 
     public Map<String, spn.node.BuiltinFactory> getBuiltinRegistry() {
@@ -81,6 +103,7 @@ public class SpnParser {
     private static class Scope {
         final FrameDescriptor.Builder frameBuilder;
         final Map<String, Integer> locals = new LinkedHashMap<>();
+        final Map<String, FieldType> localTypes = new LinkedHashMap<>();
         final Scope parent;
 
         Scope(Scope parent) {
@@ -94,11 +117,28 @@ public class SpnParser {
             return slot;
         }
 
+        int addLocal(String name, FieldType type) {
+            int slot = addLocal(name);
+            if (type != null) localTypes.put(name, type);
+            return slot;
+        }
+
         int lookupLocal(String name) {
             Integer slot = locals.get(name);
             if (slot != null) return slot;
             if (parent != null) return parent.lookupLocal(name);
             return -1;
+        }
+
+        FieldType lookupType(String name) {
+            FieldType type = localTypes.get(name);
+            if (type != null) return type;
+            if (parent != null) return parent.lookupType(name);
+            return null;
+        }
+
+        void setType(String name, FieldType type) {
+            localTypes.put(name, type);
         }
 
         FrameDescriptor buildFrame() {
@@ -166,8 +206,9 @@ public class SpnParser {
             case "require" -> { skipRequireDecl(); yield null; }
             case "type" -> { parseTypeDecl(); yield null; }
             case "data" -> { parseDataDecl(); yield null; }
-            case "struct" -> { parseStructDecl(); yield null; }
+            case "struct" -> { parseStructAsType(); yield null; }
             case "pure" -> parsePureDecl();
+            case "promote" -> { parsePromoteDecl(); yield null; }
             case "let" -> parseLetBinding();
             case "while" -> parseWhileStatement();
             case "if" -> parseIfStatement();
@@ -340,114 +381,145 @@ public class SpnParser {
         tokens.expect("type");
         String name = tokens.expectType(TokenType.TYPE_NAME).text();
 
-        // type Name = Symbol where oneOf([...])
+        // type Name = BaseType [where validatorClosure]
         if (tokens.match("=")) {
-            tokens.expect("Symbol");
-            tokens.expect("where");
-            tokens.expect("oneOf");
-            tokens.expect("(");
-            tokens.expect("[");
-            List<SpnSymbol> symbols = new ArrayList<>();
-            while (!tokens.check("]")) {
-                symbols.add(parseSymbolValue());
-                tokens.match(",");
+            SpnTypeDescriptor.Builder builder = SpnTypeDescriptor.builder(name);
+            String baseType = tokens.advance().text();
+            builder.baseType(baseType);
+            if (tokens.match("where")) {
+                builder.validatorExpr(parseValidatorClosure());
             }
-            tokens.expect("]");
-            tokens.expect(")");
-            // Register as a constrained type
-            SpnTypeDescriptor desc = new SpnTypeDescriptor(name,
-                    new Constraint.SymbolOneOf(symbols.toArray(new SpnSymbol[0])));
-            typeRegistry.put(name, desc);
+            typeRegistry.put(name, builder.build());
             return;
         }
 
-        // type Name where constraints [with Element]
-        if (tokens.check("where")) {
-            tokens.advance(); // consume "where"
+        // type Name where validatorClosure
+        if (tokens.match("where")) {
             SpnTypeDescriptor.Builder builder = SpnTypeDescriptor.builder(name);
-            parseConstraints(builder);
-
-            // optional "with Omega"
+            builder.validatorExpr(parseValidatorClosure());
             if (tokens.match("with")) {
                 String elemName = tokens.expectType(TokenType.TYPE_NAME).text();
                 builder.element(new SpnDistinguishedElement(elemName));
             }
-
-            // optional rules
-            while (tokens.check("rule")) {
-                tokens.advance();
-                skipToEndOfRule();
-            }
-
             typeRegistry.put(name, builder.build());
             return;
         }
 
-        // type Name(components...) with optional operations
+        // type Name(components...) [where validatorClosure]
         if (tokens.check("(")) {
             tokens.advance();
             SpnTypeDescriptor.Builder builder = SpnTypeDescriptor.builder(name);
+            SpnStructDescriptor.Builder structBuilder = SpnStructDescriptor.builder(name);
+            int anonIndex = 0;
             while (!tokens.check(")")) {
-                String compName = tokens.expectType(TokenType.IDENTIFIER).text();
-                tokens.expect(":");
-                FieldType ft = parseFieldType();
-                builder.component(compName, ft);
+                SpnParseToken second = tokens.peek(1);
+                if (second != null && second.text().equals(":")) {
+                    String compName = tokens.advance().text();
+                    tokens.expect(":");
+                    FieldType ft = parseFieldType();
+                    builder.component(compName, ft);
+                    structBuilder.field(compName, ft);
+                } else {
+                    FieldType ft = parseFieldType();
+                    String compName = "_" + anonIndex++;
+                    builder.component(compName, ft);
+                    structBuilder.field(compName, ft);
+                }
                 tokens.match(",");
             }
             tokens.expect(")");
-
-            // optional constraint on component
-            if (tokens.check("where")) {
-                tokens.advance();
-                // skip inline component constraints for now
-                skipToNextDecl();
+            if (tokens.match("where")) {
+                builder.validatorExpr(parseValidatorClosure());
             }
-
-            // optional operation definitions
-            while (tokens.hasMore() && isOperator(tokens.peek())) {
-                skipToEndOfRule();
-            }
-
             typeRegistry.put(name, builder.build());
+            structRegistry.put(name, structBuilder.build());
+            return;
         }
+
+        throw tokens.error("Expected '=', 'where', or '(' after type name '" + name + "'");
     }
 
-    private void parseConstraints(SpnTypeDescriptor.Builder builder) {
-        do {
-            String prop = tokens.peek().text();
-            tokens.advance();
-            String op = tokens.advance().text();
-            SpnParseToken valTok = tokens.advance();
-            double val = Double.parseDouble(valTok.text());
+    /**
+     * Parse a validator closure: (params) { body }
+     * Creates a function body node with its own scope. The closure takes
+     * the type's value(s) as parameters and returns a truthy/falsy result.
+     */
+    private SpnExpressionNode parseValidatorClosure() {
+        tokens.expect("(");
+        List<String> paramNames = new ArrayList<>();
+        while (!tokens.check(")")) {
+            String paramName = tokens.advance().text();
+            if (!paramName.equals("_")) {
+                paramNames.add(paramName);
+            } else {
+                paramNames.add("_" + paramNames.size());
+            }
+            tokens.match(",");
+        }
+        tokens.expect(")");
 
-            Constraint c = switch (op) {
-                case ">=" -> new Constraint.GreaterThanOrEqual(val);
-                case ">" -> new Constraint.GreaterThan(val);
-                case "<=" -> new Constraint.LessThanOrEqual(val);
-                case "<" -> new Constraint.LessThan(val);
-                case "==" -> new Constraint.ModuloEquals(1, (long) val); // exact value
-                default -> throw tokens.error("Unknown constraint operator: " + op);
-            };
-            builder.constraint(c);
-        } while (tokens.match(","));
+        pushScope();
+        int[] paramSlots = new int[paramNames.size()];
+        for (int i = 0; i < paramNames.size(); i++) {
+            paramSlots[i] = currentScope.addLocal(paramNames.get(i));
+        }
+
+        tokens.expect("{");
+        SpnExpressionNode body = parseBlockBody();
+        tokens.expect("}");
+
+        FrameDescriptor frame = popScope().buildFrame();
+
+        // Wrap body in a function root node for potential future evaluation
+        SpnFunctionDescriptor.Builder descBuilder = SpnFunctionDescriptor.pure("__validator__");
+        for (String pn : paramNames) {
+            descBuilder.param(pn);
+        }
+        SpnFunctionDescriptor descriptor = descBuilder.build();
+
+        SpnFunctionRootNode fnRoot = new SpnFunctionRootNode(
+                language, frame, descriptor, paramSlots, body);
+        return new SpnFunctionRefNode(fnRoot.getCallTarget());
+    }
+
+    /**
+     * Parse: promote SourceType -> TargetType = (val) { conversion expr }
+     * Registers a promotion rule for compile-time operator dispatch.
+     */
+    private void parsePromoteDecl() {
+        tokens.expect("promote");
+        FieldType sourceType = parseFieldType();
+        tokens.expect("->");
+        FieldType targetType = parseFieldType();
+        tokens.expect("=");
+
+        // Parse the conversion closure: (param) { body }
+        SpnExpressionNode converter = parseValidatorClosure();
+
+        // The converter is a SpnFunctionRefNode wrapping a CallTarget
+        if (converter instanceof SpnFunctionRefNode ref) {
+            promotionRegistry.add(new Promotion(
+                    sourceType.describe(), targetType.describe(), ref.getCallTarget()));
+        }
     }
 
     private void parseDataDecl() {
         tokens.expect("data");
         String name = tokens.expectType(TokenType.TYPE_NAME).text();
-        tokens.expect("=");
+        tokens.match("="); // optional — data blocks can use just pipes
 
         List<SpnStructDescriptor> variants = new ArrayList<>();
         do {
             tokens.match("|"); // optional leading pipe
             String variantName = tokens.expectType(TokenType.TYPE_NAME).text();
-            tokens.expect("(");
             List<String> fields = new ArrayList<>();
-            while (!tokens.check(")")) {
-                fields.add(tokens.expectType(TokenType.IDENTIFIER).text());
-                tokens.match(",");
+            if (tokens.match("(")) {
+                while (!tokens.check(")")) {
+                    fields.add(tokens.expectType(TokenType.IDENTIFIER).text());
+                    tokens.match(",");
+                }
+                tokens.expect(")");
             }
-            tokens.expect(")");
             SpnStructDescriptor desc = new SpnStructDescriptor(variantName, fields.toArray(new String[0]));
             structRegistry.put(variantName, desc);
             variants.add(desc);
@@ -456,42 +528,59 @@ public class SpnParser {
         variantRegistry.put(name, new SpnVariantSet(name, variants.toArray(new SpnStructDescriptor[0])));
     }
 
-    private void parseStructDecl() {
+    /** Parse 'struct' as an alias for 'type' — both produce the same result. */
+    private void parseStructAsType() {
+        // Consume 'struct', then reuse type parsing logic by
+        // manually handling the product type form
         tokens.expect("struct");
         String name = tokens.expectType(TokenType.TYPE_NAME).text();
 
         // optional type params <T, U>
         List<String> typeParams = new ArrayList<>();
         if (tokens.match("<")) {
-            do {
-                typeParams.add(tokens.expectType(TokenType.TYPE_NAME).text());
-            } while (tokens.match(","));
+            do { typeParams.add(tokens.advance().text()); } while (tokens.match(","));
             tokens.expect(">");
         }
 
         tokens.expect("(");
-        SpnStructDescriptor.Builder builder = SpnStructDescriptor.builder(name);
-        for (String tp : typeParams) builder.typeParam(tp);
+        SpnTypeDescriptor.Builder typeBuilder = SpnTypeDescriptor.builder(name);
+        SpnStructDescriptor.Builder structBuilder = SpnStructDescriptor.builder(name);
+        for (String tp : typeParams) structBuilder.typeParam(tp);
 
         while (!tokens.check(")")) {
             String fieldName = tokens.expectType(TokenType.IDENTIFIER).text();
             if (tokens.match(":")) {
-                builder.field(fieldName, parseFieldType());
+                FieldType ft = parseFieldType();
+                typeBuilder.component(fieldName, ft);
+                structBuilder.field(fieldName, ft);
             } else {
-                builder.field(fieldName);
+                typeBuilder.component(fieldName, FieldType.UNTYPED);
+                structBuilder.field(fieldName);
             }
             tokens.match(",");
         }
         tokens.expect(")");
 
-        structRegistry.put(name, builder.build());
+        if (tokens.match("where")) {
+            typeBuilder.validatorExpr(parseValidatorClosure());
+        }
+
+        typeRegistry.put(name, typeBuilder.build());
+        structRegistry.put(name, structBuilder.build());
     }
 
     // ── Function declarations and definitions ──────────────────────────────
 
     private SpnStatementNode parsePureDecl() {
         tokens.expect("pure");
-        String name = tokens.expectType(TokenType.IDENTIFIER).text();
+        // Accept identifier (named function) or operator (operator overload)
+        SpnParseToken nameTok = tokens.peek();
+        String name;
+        if (nameTok.type() == TokenType.OPERATOR) {
+            name = tokens.advance().text();
+        } else {
+            name = tokens.expectType(TokenType.IDENTIFIER).text();
+        }
 
         // Parse type signature: (Type, Type) -> ReturnType
         tokens.expect("(");
@@ -507,32 +596,103 @@ public class SpnParser {
             returnType = parseFieldType();
         }
 
+        boolean isOperator = nameTok.type() == TokenType.OPERATOR;
+
         // Declaration only (no =), just register the signature
         if (!tokens.check("=")) {
-            // Interface declaration - no body
             return null;
         }
 
         // Definition: = (params) { body }
         tokens.expect("=");
-        return parseFunctionBody(name, paramTypes, returnType);
+        parseFunctionBody(name, paramTypes, returnType);
+
+        // Register operator overload for compile-time dispatch
+        if (isOperator && !paramTypes.isEmpty()) {
+            CallTarget ct = functionRegistry.get(name);
+            if (ct != null) {
+                operatorRegistry.computeIfAbsent(name, k -> new ArrayList<>())
+                        .add(new OperatorOverload(
+                                paramTypes.toArray(new FieldType[0]), returnType, ct));
+            }
+        }
+
+        return null;
+    }
+
+    /** A parameter binding: either a simple name or a positional destructure (a, b, c). */
+    private record ParamDecl(String name, List<String> destructureBindings) {
+        boolean isDestructured() { return destructureBindings != null; }
+        static ParamDecl simple(String name) { return new ParamDecl(name, null); }
+        static ParamDecl destructured(List<String> bindings) { return new ParamDecl(null, bindings); }
     }
 
     private SpnStatementNode parseFunctionBody(String name, List<FieldType> paramTypes,
                                                 FieldType returnType) {
         tokens.expect("(");
-        List<String> paramNames = new ArrayList<>();
+        List<ParamDecl> params = new ArrayList<>();
         while (!tokens.check(")")) {
-            paramNames.add(tokens.expectType(TokenType.IDENTIFIER).text());
+            if (tokens.check("(")) {
+                // Destructured param: (a, b, c) — positional, type known from signature
+                tokens.advance();
+                List<String> bindings = new ArrayList<>();
+                while (!tokens.check(")")) {
+                    bindings.add(tokens.advance().text());
+                    tokens.match(",");
+                }
+                tokens.expect(")");
+                params.add(ParamDecl.destructured(bindings));
+            } else {
+                // Simple param: name
+                params.add(ParamDecl.simple(tokens.expectType(TokenType.IDENTIFIER).text()));
+            }
             tokens.match(",");
         }
         tokens.expect(")");
 
         // Parse body in new scope
         pushScope();
-        int[] userParamSlots = new int[paramNames.size()];
-        for (int i = 0; i < paramNames.size(); i++) {
-            userParamSlots[i] = currentScope.addLocal(paramNames.get(i));
+
+        // Allocate param slots — destructured params get a hidden slot, then field bindings
+        List<String> paramNames = new ArrayList<>();
+        int[] userParamSlots = new int[params.size()];
+        List<spn.node.local.SpnDestructureNode> destructureNodes = new ArrayList<>();
+
+        for (int i = 0; i < params.size(); i++) {
+            ParamDecl p = params.get(i);
+            if (p.isDestructured()) {
+                // Hidden param slot receives the whole struct/product value
+                String hiddenName = "__param_" + i + "__";
+                userParamSlots[i] = currentScope.addLocal(hiddenName);
+                paramNames.add(hiddenName);
+
+                // Look up struct descriptor from the type signature for field type inference
+                SpnStructDescriptor desc = null;
+                if (i < paramTypes.size()) {
+                    FieldType ft = paramTypes.get(i);
+                    String typeName = ft.describe();
+                    desc = structRegistry.get(typeName);
+                }
+
+                // Allocate binding slots for each destructured field
+                int[] bindSlots = new int[p.destructureBindings().size()];
+                for (int j = 0; j < p.destructureBindings().size(); j++) {
+                    String bn = p.destructureBindings().get(j);
+                    if (bn.equals("_")) {
+                        bindSlots[j] = -1;
+                    } else {
+                        FieldType fieldType = (desc != null && j < desc.fieldCount())
+                                ? desc.fieldType(j) : null;
+                        bindSlots[j] = currentScope.addLocal(bn, fieldType);
+                    }
+                }
+                destructureNodes.add(new spn.node.local.SpnDestructureNode(
+                        SpnReadLocalVariableNodeGen.create(userParamSlots[i]), bindSlots));
+            } else {
+                FieldType ft = i < paramTypes.size() ? paramTypes.get(i) : null;
+                userParamSlots[i] = currentScope.addLocal(p.name(), ft);
+                paramNames.add(p.name());
+            }
         }
         // Yield context slot — always allocated in frame, used by yield nodes
         int yieldCtxSlot = currentScope.addLocal("__yieldCtx__");
@@ -547,6 +707,13 @@ public class SpnParser {
         tokens.expect("}");
         deferredFunctionName = null;
         boolean isProducer = containsYield;
+
+        // Prepend destructure nodes to the body if any params were destructured
+        if (!destructureNodes.isEmpty()) {
+            List<SpnStatementNode> stmts = new ArrayList<>(destructureNodes);
+            stmts.add(body);
+            body = new SpnBlockExprNode(stmts.toArray(new SpnStatementNode[0]));
+        }
 
         popScope();
 
@@ -604,18 +771,119 @@ public class SpnParser {
 
     private SpnStatementNode parseLetBinding() {
         tokens.expect("let");
+
+        // Check for destructuring: let TypeName(a, b, c) = expr
+        SpnParseToken first = tokens.peek();
+        if (first.type() == TokenType.TYPE_NAME && tokens.peek(1) != null
+                && tokens.peek(1).text().equals("(")) {
+            return parseLetDestructure();
+        }
+
         String name = tokens.expectType(TokenType.IDENTIFIER).text();
 
         // Optional type annotation
+        FieldType annotatedType = null;
         if (tokens.match(":")) {
-            parseFieldType(); // consume but ignore for now — types are in the signature
+            annotatedType = parseFieldType();
         }
 
         tokens.expect("=");
         SpnExpressionNode value = parseExpression();
 
-        int slot = currentScope.addLocal(name);
+        // Infer the type for compile-time operator dispatch
+        FieldType inferredType = annotatedType != null ? annotatedType : inferType(value);
+        int slot = currentScope.addLocal(name, inferredType);
         return SpnWriteLocalVariableNodeGen.create(value, slot);
+    }
+
+    /**
+     * Parse: let TypeName(a, b, c) = expr
+     * Destructures a struct/product value into local bindings.
+     */
+    private SpnStatementNode parseLetDestructure() {
+        String typeName = tokens.advance().text(); // consume type name
+        tokens.expect("(");
+        List<String> bindNames = new ArrayList<>();
+        while (!tokens.check(")")) {
+            String bname = tokens.advance().text();
+            bindNames.add(bname);
+            tokens.match(",");
+        }
+        tokens.expect(")");
+        tokens.expect("=");
+        SpnExpressionNode value = parseExpression();
+
+        // Allocate slots for each binding
+        int[] slots = new int[bindNames.size()];
+        // Look up the struct/type descriptor to infer field types
+        SpnStructDescriptor desc = structRegistry.get(typeName);
+        for (int i = 0; i < bindNames.size(); i++) {
+            String bn = bindNames.get(i);
+            if (bn.equals("_")) {
+                slots[i] = -1; // skip
+            } else {
+                // Infer field type from the descriptor if available
+                FieldType fieldType = null;
+                if (desc != null && i < desc.fieldCount()) {
+                    fieldType = desc.fieldType(i);
+                }
+                slots[i] = currentScope.addLocal(bn, fieldType);
+            }
+        }
+
+        return new spn.node.local.SpnDestructureNode(value, slots);
+    }
+
+    /**
+     * Infer the compile-time type of an expression for operator dispatch.
+     * Returns null if the type cannot be determined.
+     */
+    private FieldType inferType(SpnExpressionNode expr) {
+        // Check tracked type first (set by let bindings, variable reads, etc.)
+        FieldType tracked = exprTypes.get(expr);
+        if (tracked != null) return tracked;
+        // Constructor call → the type name
+        if (expr instanceof SpnStructConstructNode sc) {
+            SpnStructDescriptor desc = sc.getDescriptor();
+            if (desc != null) {
+                SpnTypeDescriptor td = typeRegistry.get(desc.getName());
+                if (td != null) return FieldType.ofConstrainedType(td);
+                return FieldType.ofStruct(desc);
+            }
+        }
+        if (expr instanceof spn.node.type.SpnProductConstructNode pc) {
+            return FieldType.ofProduct(pc.getDescriptor());
+        }
+        // Literals
+        if (expr instanceof spn.node.expr.SpnLongLiteralNode) return FieldType.LONG;
+        if (expr instanceof spn.node.expr.SpnDoubleLiteralNode) return FieldType.DOUBLE;
+        if (expr instanceof spn.node.expr.SpnStringLiteralNode) return FieldType.STRING;
+        if (expr instanceof spn.node.expr.SpnBooleanLiteralNode) return FieldType.BOOLEAN;
+        if (expr instanceof spn.node.expr.SpnSymbolLiteralNode) return FieldType.SYMBOL;
+        return null; // unknown — requires explicit coercion
+    }
+
+    /**
+     * Track the result type of a built-in arithmetic node.
+     * If both operands are the same primitive type, the result is that type.
+     */
+    private SpnExpressionNode trackArithmeticType(SpnExpressionNode result,
+                                                    SpnExpressionNode left,
+                                                    SpnExpressionNode right) {
+        FieldType lt = inferType(left);
+        FieldType rt = inferType(right);
+        if (lt != null && rt != null && lt == rt) {
+            trackType(result, lt);
+        } else if (lt == FieldType.LONG && rt == FieldType.DOUBLE
+                || lt == FieldType.DOUBLE && rt == FieldType.LONG) {
+            trackType(result, FieldType.DOUBLE); // mixed int/float → float
+        }
+        return result;
+    }
+
+    /** Tag an expression with its inferred type for later operator dispatch. */
+    private void trackType(SpnExpressionNode expr, FieldType type) {
+        if (type != null) exprTypes.put(expr, type);
     }
 
     // ── While / do ─────────────────────────────────────────────────────────
@@ -798,10 +1066,18 @@ public class SpnParser {
         SpnExpressionNode left = parseComparison();
         while (true) {
             if (tokens.match("==")) {
-                left = SpnEqualNodeGen.create(left, parseComparison());
+                SpnExpressionNode right = parseComparison();
+                SpnExpressionNode dispatched = tryOperatorDispatch("==", left, right);
+                left = dispatched != null ? dispatched : SpnEqualNodeGen.create(left, right);
             } else if (tokens.match("!=")) {
-                left = SpnNotEqualNodeGen.create(left, parseComparison());
-            } else break;
+                SpnExpressionNode right = parseComparison();
+                SpnExpressionNode dispatched = tryOperatorDispatch("!=", left, right);
+                left = dispatched != null ? dispatched : SpnNotEqualNodeGen.create(left, right);
+            } else {
+                SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseComparison, "==", "!=");
+                if (qualified != null) { left = qualified; continue; }
+                break;
+            }
         }
         return left;
     }
@@ -810,14 +1086,26 @@ public class SpnParser {
         SpnExpressionNode left = parseConcatenation();
         while (true) {
             if (tokens.match("<")) {
-                left = SpnLessThanNodeGen.create(left, parseConcatenation());
+                SpnExpressionNode right = parseConcatenation();
+                SpnExpressionNode dispatched = tryOperatorDispatch("<", left, right);
+                left = dispatched != null ? dispatched : SpnLessThanNodeGen.create(left, right);
             } else if (tokens.match(">")) {
-                left = SpnGreaterThanNodeGen.create(left, parseConcatenation());
+                SpnExpressionNode right = parseConcatenation();
+                SpnExpressionNode dispatched = tryOperatorDispatch(">", left, right);
+                left = dispatched != null ? dispatched : SpnGreaterThanNodeGen.create(left, right);
             } else if (tokens.match("<=")) {
-                left = SpnLessEqualNodeGen.create(left, parseConcatenation());
+                SpnExpressionNode right = parseConcatenation();
+                SpnExpressionNode dispatched = tryOperatorDispatch("<=", left, right);
+                left = dispatched != null ? dispatched : SpnLessEqualNodeGen.create(left, right);
             } else if (tokens.match(">=")) {
-                left = SpnGreaterEqualNodeGen.create(left, parseConcatenation());
-            } else break;
+                SpnExpressionNode right = parseConcatenation();
+                SpnExpressionNode dispatched = tryOperatorDispatch(">=", left, right);
+                left = dispatched != null ? dispatched : SpnGreaterEqualNodeGen.create(left, right);
+            } else {
+                SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseConcatenation, "<", ">", "<=", ">=");
+                if (qualified != null) { left = qualified; continue; }
+                break;
+            }
         }
         return left;
     }
@@ -834,11 +1122,19 @@ public class SpnParser {
         SpnExpressionNode left = parseMulDiv();
         while (true) {
             if (tokens.match("+")) {
-                left = SpnAddNodeGen.create(left, parseMulDiv());
+                SpnExpressionNode right = parseMulDiv();
+                SpnExpressionNode dispatched = tryOperatorDispatch("+", left, right);
+                left = dispatched != null ? dispatched : trackArithmeticType(SpnAddNodeGen.create(left, right), left, right);
             } else if (tokens.check("-") && !isUnaryMinus()) {
                 tokens.advance();
-                left = SpnSubtractNodeGen.create(left, parseMulDiv());
-            } else break;
+                SpnExpressionNode right = parseMulDiv();
+                SpnExpressionNode dispatched = tryOperatorDispatch("-", left, right);
+                left = dispatched != null ? dispatched : trackArithmeticType(SpnSubtractNodeGen.create(left, right), left, right);
+            } else {
+                SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseMulDiv, "+", "-");
+                if (qualified != null) { left = qualified; continue; }
+                break;
+            }
         }
         return left;
     }
@@ -847,14 +1143,159 @@ public class SpnParser {
         SpnExpressionNode left = parseUnary();
         while (true) {
             if (tokens.match("*")) {
-                left = SpnMultiplyNodeGen.create(left, parseUnary());
+                SpnExpressionNode right = parseUnary();
+                SpnExpressionNode dispatched = tryOperatorDispatch("*", left, right);
+                left = dispatched != null ? dispatched : trackArithmeticType(SpnMultiplyNodeGen.create(left, right), left, right);
             } else if (tokens.match("/")) {
-                left = SpnDivideNodeGen.create(left, parseUnary());
+                SpnExpressionNode right = parseUnary();
+                SpnExpressionNode dispatched = tryOperatorDispatch("/", left, right);
+                left = dispatched != null ? dispatched : trackArithmeticType(SpnDivideNodeGen.create(left, right), left, right);
             } else if (tokens.match("%")) {
-                left = SpnModuloNodeGen.create(left, parseUnary());
-            } else break;
+                SpnExpressionNode right = parseUnary();
+                SpnExpressionNode dispatched = tryOperatorDispatch("%", left, right);
+                left = dispatched != null ? dispatched : trackArithmeticType(SpnModuloNodeGen.create(left, right), left, right);
+            } else {
+                // Qualified multiplicative operators: *_dot, /_something, %_something
+                SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseUnary, "*", "/", "%");
+                if (qualified != null) { left = qualified; continue; }
+                break;
+            }
         }
         return left;
+    }
+
+    /**
+     * Check if the current token is a qualified operator (e.g., *_dot, +_cross)
+     * whose base matches one of the given prefixes. Returns the full operator
+     * name if matched, null otherwise. Does NOT consume the token.
+     */
+    private String peekQualifiedOp(String... bases) {
+        SpnParseToken tok = tokens.peek();
+        if (tok == null || tok.type() != TokenType.OPERATOR) return null;
+        String text = tok.text();
+        int underscore = text.indexOf('_');
+        if (underscore <= 0) return null; // not qualified
+        String base = text.substring(0, underscore);
+        for (String b : bases) {
+            if (base.equals(b)) return text;
+        }
+        return null;
+    }
+
+    /**
+     * Try to parse and dispatch a qualified infix operator. If the current
+     * token is a qualified operator matching any of the given bases, consume
+     * it and return a dispatch node. Returns null if no match.
+     */
+    private SpnExpressionNode tryQualifiedInfix(SpnExpressionNode left,
+                                                  java.util.function.Supplier<SpnExpressionNode> parseRight,
+                                                  String... bases) {
+        String op = peekQualifiedOp(bases);
+        if (op == null) return null;
+        tokens.advance(); // consume the qualified operator
+        SpnExpressionNode right = parseRight.get();
+        SpnExpressionNode dispatched = tryOperatorDispatch(op, left, right);
+        if (dispatched != null) return dispatched;
+        throw tokens.error("No overload found for qualified operator: " + op);
+    }
+
+    /**
+     * Try to resolve a binary operator to a registered overload at compile time.
+     * Returns a direct SpnInvokeNode if a matching overload is found, null otherwise.
+     */
+    private SpnExpressionNode tryOperatorDispatch(String op,
+                                                    SpnExpressionNode left,
+                                                    SpnExpressionNode right) {
+        List<OperatorOverload> overloads = operatorRegistry.get(op);
+        if (overloads == null || overloads.isEmpty()) return null;
+
+        FieldType leftType = inferType(left);
+        FieldType rightType = inferType(right);
+        System.err.println("[dispatch] " + op + ": left=" + (leftType != null ? leftType.describe() : "null")
+                + " right=" + (rightType != null ? rightType.describe() : "null")
+                + " overloads=" + overloads.size());
+        if (leftType == null || rightType == null) return null;
+
+        // 1. Try exact match
+        for (OperatorOverload overload : overloads) {
+            if (overload.paramTypes().length == 2
+                    && typesMatch(overload.paramTypes()[0], leftType)
+                    && typesMatch(overload.paramTypes()[1], rightType)) {
+                SpnExpressionNode result = new SpnInvokeNode(overload.callTarget(), left, right);
+                trackType(result, overload.returnType());
+                return result;
+            }
+        }
+
+        // 2. Try promoting left operand
+        for (Promotion promo : promotionRegistry) {
+            if (promo.sourceDesc().equals(leftType.describe())) {
+                String promotedLeftDesc = promo.targetDesc();
+                for (OperatorOverload overload : overloads) {
+                    if (overload.paramTypes().length == 2
+                            && overload.paramTypes()[0].describe().equals(promotedLeftDesc)
+                            && typesMatch(overload.paramTypes()[1], rightType)) {
+                        SpnExpressionNode promotedLeft =
+                                new SpnInvokeNode(promo.converter(), left);
+                        SpnExpressionNode result = new SpnInvokeNode(overload.callTarget(), promotedLeft, right);
+                        trackType(result, overload.returnType());
+                        return result;
+                    }
+                }
+            }
+        }
+
+        // 3. Try promoting right operand
+        for (Promotion promo : promotionRegistry) {
+            if (promo.sourceDesc().equals(rightType.describe())) {
+                String promotedRightDesc = promo.targetDesc();
+                for (OperatorOverload overload : overloads) {
+                    if (overload.paramTypes().length == 2
+                            && typesMatch(overload.paramTypes()[0], leftType)
+                            && overload.paramTypes()[1].describe().equals(promotedRightDesc)) {
+                        SpnExpressionNode promotedRight =
+                                new SpnInvokeNode(promo.converter(), right);
+                        SpnExpressionNode result = new SpnInvokeNode(overload.callTarget(), left, promotedRight);
+                        trackType(result, overload.returnType());
+                        return result;
+                    }
+                }
+            }
+        }
+
+        // 4. Try promoting both operands to a common type
+        for (Promotion leftPromo : promotionRegistry) {
+            if (!leftPromo.sourceDesc().equals(leftType.describe())) continue;
+            for (Promotion rightPromo : promotionRegistry) {
+                if (!rightPromo.sourceDesc().equals(rightType.describe())) continue;
+                if (!leftPromo.targetDesc().equals(rightPromo.targetDesc())) continue;
+                String commonDesc = leftPromo.targetDesc();
+                for (OperatorOverload overload : overloads) {
+                    if (overload.paramTypes().length == 2
+                            && overload.paramTypes()[0].describe().equals(commonDesc)
+                            && overload.paramTypes()[1].describe().equals(commonDesc)) {
+                        SpnExpressionNode promotedLeft =
+                                new SpnInvokeNode(leftPromo.converter(), left);
+                        SpnExpressionNode promotedRight =
+                                new SpnInvokeNode(rightPromo.converter(), right);
+                        SpnExpressionNode result = new SpnInvokeNode(overload.callTarget(), promotedLeft, promotedRight);
+                        trackType(result, overload.returnType());
+                        return result;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /** Check if a declared parameter type matches an inferred argument type. */
+    private boolean typesMatch(FieldType declared, FieldType inferred) {
+        if (declared == null || inferred == null) return false;
+        // Same object (e.g., both FieldType.LONG)
+        if (declared == inferred) return true;
+        // Both describe the same type name
+        return declared.describe().equals(inferred.describe());
     }
 
     private SpnExpressionNode parseUnary() {
@@ -1020,7 +1461,10 @@ public class SpnParser {
         // Variable read
         int slot = currentScope.lookupLocal(name);
         if (slot >= 0) {
-            return new SpnReadLocalVariableNodeWrapper(slot);
+            SpnExpressionNode readNode = new SpnReadLocalVariableNodeWrapper(slot);
+            FieldType varType = currentScope.lookupType(name);
+            if (varType != null) trackType(readNode, varType);
+            return readNode;
         }
 
         // Function reference as value (bare name, no call)
@@ -1409,8 +1853,23 @@ public class SpnParser {
 
     // ── Field type parsing ─────────────────────────────────────────────────
 
+    private static final Set<String> PRIMITIVE_TYPE_KEYWORDS =
+            Set.of("int", "float", "string", "bool");
+
     private FieldType parseFieldType() {
         SpnParseToken tok = tokens.peek();
+
+        // Primitive type keywords (int, float, string, bool)
+        if (tok.type() == TokenType.KEYWORD && PRIMITIVE_TYPE_KEYWORDS.contains(tok.text())) {
+            tokens.advance();
+            return switch (tok.text()) {
+                case "int" -> FieldType.LONG;
+                case "float" -> FieldType.DOUBLE;
+                case "string" -> FieldType.STRING;
+                case "bool" -> FieldType.BOOLEAN;
+                default -> FieldType.UNTYPED;
+            };
+        }
 
         if (tok.type() == TokenType.TYPE_NAME) {
             tokens.advance();
@@ -1429,10 +1888,10 @@ public class SpnParser {
             }
 
             return switch (name) {
-                case "Long" -> FieldType.LONG;
-                case "Double" -> FieldType.DOUBLE;
-                case "String" -> FieldType.STRING;
-                case "Boolean" -> FieldType.BOOLEAN;
+                case "int", "Long" -> FieldType.LONG;
+                case "float", "Double" -> FieldType.DOUBLE;
+                case "string", "String" -> FieldType.STRING;
+                case "bool", "Boolean" -> FieldType.BOOLEAN;
                 case "Symbol" -> FieldType.SYMBOL;
                 case "Array", "Collection" -> FieldType.ofArray(FieldType.UNTYPED);
                 case "Set" -> FieldType.ofSet(FieldType.UNTYPED);
@@ -1495,26 +1954,6 @@ public class SpnParser {
         return false; // default: treat '-' as binary subtract in addSub
     }
 
-    private boolean isOperator(SpnParseToken tok) {
-        return tok.type() == TokenType.OPERATOR;
-    }
-
-    private void skipToEndOfRule() {
-        // Skip tokens until we hit something that looks like a new declaration
-        while (tokens.hasMore()) {
-            SpnParseToken tok = tokens.peek();
-            if (tok.text().equals("rule") || tok.text().equals("type") ||
-                tok.text().equals("data") || tok.text().equals("struct") ||
-                tok.text().equals("pure") || tok.text().equals("let")) {
-                return;
-            }
-            tokens.advance();
-        }
-    }
-
-    private void skipToNextDecl() {
-        skipToEndOfRule();
-    }
 
     // ── Helper wrapper for tracking variable read slots ────────────────────
 

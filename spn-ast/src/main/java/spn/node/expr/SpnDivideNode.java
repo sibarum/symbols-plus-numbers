@@ -1,5 +1,6 @@
 package spn.node.expr;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -33,7 +34,7 @@ public abstract class SpnDivideNode extends SpnExpressionNode {
 
     @Fallback
     protected Object typeError(Object left, Object right) {
-        throw new SpnException("Cannot divide " + left.getClass().getSimpleName()
-                + " and " + right.getClass().getSimpleName(), this);
+        throw new SpnException("Cannot divide " + SpnTypeName.of(left)
+                + " and " + SpnTypeName.of(right), this);
     }
 }

@@ -306,7 +306,8 @@ public class EditorWindow {
             registerStdlibModules(moduleRegistry);
             spn.canvas.CanvasBuiltins.registerModule(moduleRegistry);
             moduleRegistry.addLoader(new spn.lang.ClasspathModuleLoader(null, symbolTable));
-            SpnParser parser = new SpnParser(source, null, symbolTable, moduleRegistry);
+            String fullPath = currentFile != null ? currentFile.toAbsolutePath().toString() : "untitled";
+            SpnParser parser = new SpnParser(source, fullPath, null, symbolTable, moduleRegistry);
             SpnRootNode root = parser.parse();
             Object result = root.getCallTarget().call();
 
@@ -328,6 +329,10 @@ public class EditorWindow {
                 String display = result == null ? "(no result)" : result.toString();
                 flash("[" + fileName + "] => " + display, false);
             }
+        } catch (spn.language.SpnException se) {
+            flash(se.formatMessage(), true);
+        } catch (spn.lang.SpnParseException pe) {
+            flash(pe.formatMessage(), true);
         } catch (Exception e) {
             String msg = e.getMessage();
             if (msg == null) msg = e.getClass().getSimpleName();

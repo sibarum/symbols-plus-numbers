@@ -1,5 +1,6 @@
 package spn.node.dict;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -28,9 +29,9 @@ public abstract class SpnDictionarySetNode extends SpnExpressionNode {
     protected Object typeError(Object dict, Object key, Object value) {
         if (!(dict instanceof SpnDictionaryValue)) {
             throw new SpnException("Expected a dictionary, got: "
-                    + dict.getClass().getSimpleName(), this);
+                    + SpnTypeName.of(dict), this);
         }
         throw new SpnException("Dictionary key must be a Symbol, got: "
-                + key.getClass().getSimpleName(), this);
+                + SpnTypeName.of(key), this);
     }
 }

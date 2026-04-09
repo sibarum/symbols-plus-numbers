@@ -89,7 +89,7 @@ public final class SpnModuleLoader {
         }
 
         // Parse with a fresh parser that shares the module registry and symbol table
-        SpnParser parser = new SpnParser(source, language, symbolTable, registry);
+        SpnParser parser = new SpnParser(source, path.toString(), language, symbolTable, registry);
         parser.parse();
 
         // Extract the parsed module's exports

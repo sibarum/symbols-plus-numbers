@@ -68,6 +68,11 @@ public class EditorMode implements Mode {
             textArea.switchUndoBranch(1);
             return true;
         }
+        // Import
+        if (ctrl && key == GLFW_KEY_I && action == GLFW_PRESS) {
+            window.pushLegacyMode(new ImportMode(window));
+            return true;
+        }
         // Logs
         if (ctrl && key == GLFW_KEY_G && action == GLFW_PRESS) {
             window.pushLegacyMode(new LogViewMode(window));

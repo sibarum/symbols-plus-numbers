@@ -1,5 +1,6 @@
 package spn.node.type;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.NodeField;
@@ -59,6 +60,6 @@ public abstract class SpnComponentAccessNode extends SpnExpressionNode {
     @Fallback
     protected Object notProduct(Object value) {
         throw new SpnException("Expected a product value, got: "
-                + value.getClass().getSimpleName(), this);
+                + SpnTypeName.of(value), this);
     }
 }

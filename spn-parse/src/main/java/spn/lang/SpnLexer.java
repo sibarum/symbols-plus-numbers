@@ -11,9 +11,10 @@ import java.util.Set;
 public class SpnLexer {
 
     private static final Set<String> KEYWORDS = Set.of(
-            "type", "where", "with", "rule", "data", "struct",
+            "type", "where", "with", "data", "struct",
             "pure", "let", "while", "do", "match", "yield",
-            "if", "else", "import", "module", "version", "require", "return"
+            "if", "else", "import", "module", "version", "require", "return",
+            "int", "float", "string", "bool", "promote"
     );
 
     private static final Set<String> PATTERN_KEYWORDS = Set.of(
@@ -109,20 +110,28 @@ public class SpnLexer {
                 continue;
             }
 
-            // multi-char operators (check before single-char)
+            // multi-char operators, with optional _qualifier suffix (check before single-char)
             if (pos + 1 < len) {
                 String two = line.substring(pos, pos + 2);
                 if (isDoubleOperator(two)) {
                     pos += 2;
+                    if (pos < len && line.charAt(pos) == '_') {
+                        pos++; // consume _
+                        while (pos < len && isIdentPart(line.charAt(pos))) pos++;
+                    }
                     tokens.add(new Token(start, pos, TokenType.OPERATOR));
                     prevNonWs = TokenType.OPERATOR;
                     continue;
                 }
             }
 
-            // single-char operators
+            // single-char operators, with optional _qualifier suffix (e.g., *_dot, +_cross)
             if (isOperatorChar(ch)) {
                 pos++;
+                if (pos < len && line.charAt(pos) == '_') {
+                    pos++; // consume _
+                    while (pos < len && isIdentPart(line.charAt(pos))) pos++;
+                }
                 tokens.add(new Token(start, pos, TokenType.OPERATOR));
                 prevNonWs = TokenType.OPERATOR;
                 continue;

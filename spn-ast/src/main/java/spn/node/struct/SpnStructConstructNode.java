@@ -34,6 +34,8 @@ public final class SpnStructConstructNode extends SpnExpressionNode {
     @CompilationFinal
     private final boolean needsValidation;
 
+    public SpnStructDescriptor getDescriptor() { return descriptor; }
+
     public SpnStructConstructNode(SpnStructDescriptor descriptor,
                                   SpnExpressionNode... fieldNodes) {
         this.descriptor = descriptor;

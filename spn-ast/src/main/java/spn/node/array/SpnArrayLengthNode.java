@@ -1,5 +1,6 @@
 package spn.node.array;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -23,6 +24,6 @@ public abstract class SpnArrayLengthNode extends SpnExpressionNode {
     @Fallback
     protected Object typeError(Object value) {
         throw new SpnException("Expected an array, got: "
-                + value.getClass().getSimpleName(), this);
+                + SpnTypeName.of(value), this);
     }
 }

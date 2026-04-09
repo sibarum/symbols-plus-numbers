@@ -1,5 +1,6 @@
 package spn.node.func;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -141,7 +142,7 @@ public final class SpnFunctionRootNode extends RootNode {
         if (!returnType.accepts(result)) {
             throw new SpnException("Function '" + descriptor.getName()
                     + "' return type is " + returnType.describe()
-                    + ", but body produced " + result.getClass().getSimpleName(),
+                    + ", but body produced " + SpnTypeName.of(result),
                     this);
         }
     }

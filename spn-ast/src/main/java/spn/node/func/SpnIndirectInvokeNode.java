@@ -1,5 +1,6 @@
 package spn.node.func;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.VirtualFrame;
@@ -33,7 +34,7 @@ public final class SpnIndirectInvokeNode extends SpnExpressionNode {
         Object fn = functionExpr.executeGeneric(frame);
         if (!(fn instanceof CallTarget target)) {
             throw new SpnException("Cannot call non-function value: "
-                    + fn.getClass().getSimpleName(), this);
+                    + SpnTypeName.of(fn), this);
         }
         Object[] args = new Object[argNodes.length];
         for (int i = 0; i < argNodes.length; i++) {

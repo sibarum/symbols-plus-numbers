@@ -1,5 +1,6 @@
 package spn.node.dict;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
@@ -58,7 +59,7 @@ public final class SpnDictionaryLiteralNode extends SpnExpressionNode {
                 throw new SpnException(
                         "Dictionary value for key :" + keys[i].name()
                                 + " expects " + valueType.describe()
-                                + ", got " + value.getClass().getSimpleName(),
+                                + ", got " + SpnTypeName.of(value),
                         this);
             }
             map.put(keys[i], value);

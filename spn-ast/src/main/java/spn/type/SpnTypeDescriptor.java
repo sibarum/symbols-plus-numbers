@@ -303,6 +303,8 @@ public final class SpnTypeDescriptor {
     public static final class Builder {
         private final String name;
         private String valueParam;
+        private String baseType;
+        private Object validatorExpr; // SpnExpressionNode (stored as Object to avoid circular dep)
         private final List<Constraint> constraints = new ArrayList<>();
         private final List<SpnDistinguishedElement> elements = new ArrayList<>();
         private final List<AlgebraicRule> rules = new ArrayList<>();
@@ -311,6 +313,16 @@ public final class SpnTypeDescriptor {
 
         private Builder(String name) {
             this.name = name;
+        }
+
+        public Builder baseType(String baseType) {
+            this.baseType = baseType;
+            return this;
+        }
+
+        public Builder validatorExpr(Object expr) {
+            this.validatorExpr = expr;
+            return this;
         }
 
         /**

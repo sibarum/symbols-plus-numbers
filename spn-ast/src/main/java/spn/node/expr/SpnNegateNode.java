@@ -1,5 +1,6 @@
 package spn.node.expr;
 
+import spn.language.SpnTypeName;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.NodeChild;
 import com.oracle.truffle.api.dsl.Specialization;
@@ -29,6 +30,6 @@ public abstract class SpnNegateNode extends SpnExpressionNode {
 
     @Fallback
     protected Object typeError(Object value) {
-        throw new SpnException("Cannot negate " + value.getClass().getSimpleName(), this);
+        throw new SpnException("Cannot negate " + SpnTypeName.of(value), this);
     }
 }

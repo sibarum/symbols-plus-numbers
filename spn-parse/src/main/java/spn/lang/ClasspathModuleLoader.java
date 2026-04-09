@@ -34,9 +34,12 @@ public final class ClasspathModuleLoader implements ModuleLoader {
 
     @Override
     public Optional<SpnModule> load(String namespace, SpnModuleRegistry registry) {
-        // Map namespace to resource path
-        String resourcePath = "/" + namespace.replace('.', '/') + ".spn";
-        InputStream stream = getClass().getResourceAsStream(resourcePath);
+        // Map namespace to resource path, with index.spn fallback
+        String basePath = "/" + namespace.replace('.', '/');
+        InputStream stream = getClass().getResourceAsStream(basePath + ".spn");
+        if (stream == null) {
+            stream = getClass().getResourceAsStream(basePath + "/index.spn");
+        }
         if (stream == null) return Optional.empty();
 
         // Cycle detection
@@ -49,7 +52,7 @@ public final class ClasspathModuleLoader implements ModuleLoader {
             String source = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
 
             // Parse with a fresh parser sharing the same module registry
-            SpnParser parser = new SpnParser(source, language, symbolTable, registry);
+            SpnParser parser = new SpnParser(source, namespace, language, symbolTable, registry);
             parser.parse();
 
             // Extract all exports into a module
@@ -63,7 +66,7 @@ public final class ClasspathModuleLoader implements ModuleLoader {
 
             return Optional.of(module);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to read module resource: " + resourcePath, e);
+            throw new RuntimeException("Failed to read module resource: " + basePath, e);
         } finally {
             registry.finishLoading(namespace);
         }
