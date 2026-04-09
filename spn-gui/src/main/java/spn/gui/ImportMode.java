@@ -133,8 +133,8 @@ class ImportMode implements Mode {
         float paletteX = (width - paletteWidth) / 2f;
         float y = PAD + 40f;
 
-        // Title
-        font.drawText("> Import", paletteX, y, SMALL_SCALE, PROMPT_R, PROMPT_G, PROMPT_B);
+        // Title (offset up by half an em so it clears the search input background)
+        font.drawText("> Import", paletteX, y - smallHeight * 0.5f, SMALL_SCALE, PROMPT_R, PROMPT_G, PROMPT_B);
         y += smallHeight + 8f;
 
         // Search input

@@ -62,12 +62,15 @@ public class TextArea {
     private boolean mouseDragging;
     private boolean mouseInBounds;
 
-    // Double-click / word-drag state
-    private static final double DOUBLE_CLICK_TIME = 0.4;
+    // Multi-click state: 1=single, 2=double (word), 3=triple (line)
+    private static final double MULTI_CLICK_TIME = 0.4;
     private double lastClickTime;
     private int lastClickRow, lastClickCol;
+    private int clickCount;
     private boolean wordDragging;
     private int wordDragRow, wordDragStartCol, wordDragEndCol;
+    private boolean lineDragging;
+    private int lineDragRow;
 
     // When true, render() will scroll the viewport to keep the cursor visible.
     // Set on keyboard input; cleared after applying.
@@ -588,13 +591,24 @@ public class TextArea {
         if (action == GLFW_PRESS) {
             int[] pos = screenToDocPos(mx, my);
             double now = glfwGetTime();
-            boolean dblClick = (now - lastClickTime < DOUBLE_CLICK_TIME)
+            boolean sameSpot = (now - lastClickTime < MULTI_CLICK_TIME)
                     && pos[0] == lastClickRow && pos[1] == lastClickCol;
             lastClickTime = now;
             lastClickRow = pos[0];
             lastClickCol = pos[1];
+            clickCount = sameSpot ? clickCount + 1 : 1;
 
-            if (dblClick) {
+            if (clickCount == 3) {
+                // Triple-click: select entire line
+                selAnchorRow = pos[0];
+                selAnchorCol = 0;
+                cursorRow = pos[0];
+                cursorCol = buffer.lineLength(pos[0]);
+                lineDragging = true;
+                lineDragRow = pos[0];
+                wordDragging = false;
+            } else if (clickCount == 2) {
+                // Double-click: select word
                 int[] wb = wordBoundsAt(pos[0], pos[1]);
                 selAnchorRow = pos[0];
                 selAnchorCol = wb[0];
@@ -604,8 +618,11 @@ public class TextArea {
                 wordDragRow = pos[0];
                 wordDragStartCol = wb[0];
                 wordDragEndCol = wb[1];
+                lineDragging = false;
             } else {
+                // Single click
                 wordDragging = false;
+                lineDragging = false;
                 if ((mods & GLFW_MOD_SHIFT) != 0) {
                     startSelection();
                 } else {
@@ -621,6 +638,7 @@ public class TextArea {
         } else if (action == GLFW_RELEASE) {
             mouseDragging = false;
             wordDragging = false;
+            lineDragging = false;
             if (selAnchorRow == cursorRow && selAnchorCol == cursorCol) {
                 clearSelection();
             }
@@ -632,7 +650,20 @@ public class TextArea {
         phantomRow = pos[0];
         phantomCol = pos[1];
         if (mouseDragging) {
-            if (wordDragging) {
+            if (lineDragging) {
+                // Extend selection by whole lines from the triple-click origin
+                if (pos[0] >= lineDragRow) {
+                    selAnchorRow = lineDragRow;
+                    selAnchorCol = 0;
+                    cursorRow = pos[0];
+                    cursorCol = buffer.lineLength(pos[0]);
+                } else {
+                    selAnchorRow = lineDragRow;
+                    selAnchorCol = buffer.lineLength(lineDragRow);
+                    cursorRow = pos[0];
+                    cursorCol = 0;
+                }
+            } else if (wordDragging) {
                 int[] wb = wordBoundsAt(pos[0], pos[1]);
                 if (pos[0] > wordDragRow
                         || (pos[0] == wordDragRow && wb[0] >= wordDragEndCol)) {
