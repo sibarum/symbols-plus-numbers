@@ -12,6 +12,10 @@ pure +(Rational, Rational) -> Rational = ((n1, d1), (n2, d2)) {
   Rational(n1*d2 + d1*n2, d1*d2)
 }
 
+pure -(Rational, Rational) -> Rational = ((n1, d1), (n2, d2)) {
+  Rational(n1*d2 - d1*n2, d1*d2)
+}
+
 promote Rational -> ComplexPolar = (r) { ComplexPolar(r, Rational(0,1)) }
 
 pure *_dot(ComplexPolar, ComplexPolar) -> Rational = ((r1, i1),(r2, i2)) {

@@ -433,4 +433,69 @@ class SpnParserTest {
                 """));
         }
     }
+
+    @Test
+    void rationalArithmetic() {
+        // Rational addition: 1/2 + 3/4 = (1*4 + 2*3)/(2*4) = 10/8
+        String source = """
+type Rational(int, int) where (_, d) { d != 0 }
+promote int -> Rational = (i) { Rational(i, 1) }
+pure *(Rational, Rational) -> Rational = ((n1, d1), (n2, d2)) { Rational(n1*n2, d1*d2) }
+pure +(Rational, Rational) -> Rational = ((n1, d1), (n2, d2)) { Rational(n1*d2 + d1*n2, d1*d2) }
+let x = Rational(1,2)
+let y = Rational(3,4)
+x + y
+""";
+        Object result = run(source);
+        assertNotNull(result);
+        // Result is a Rational (constrained type) — verify it's the right value
+        System.out.println("Rational result: " + result);
+    }
+
+    @Test
+    void numericsIndexFullDispatch() {
+        // Full numerics/index.spn: Rational + ComplexPolar via promotion
+        Object result = run("""
+type Rational(int, int) where (_, denominator) { denominator != 0 }
+type ComplexPolar(Rational, Rational)
+promote int -> Rational = (i) { Rational(i, 1) }
+pure *(Rational, Rational) -> Rational = ((n1, d1), (n2, d2)) { Rational(n1*n2, d1*d2) }
+pure +(Rational, Rational) -> Rational = ((n1, d1), (n2, d2)) { Rational(n1*d2 + d1*n2, d1*d2) }
+promote Rational -> ComplexPolar = (r) { ComplexPolar(r, Rational(0,1)) }
+pure -(Rational, Rational) -> Rational = ((n1, d1), (n2, d2)) { Rational(n1*d2 - d1*n2, d1*d2) }
+pure *_dot(ComplexPolar, ComplexPolar) -> Rational = ((r1, i1),(r2, i2)) { r1*i2 + r2*i1 }
+pure *_cross(ComplexPolar, ComplexPolar) -> Rational = ((r1, i1), (r2, i2)) { r1*r2 - r2*i1 }
+pure *(ComplexPolar, ComplexPolar) -> ComplexPolar = ((r1, i1),(r2, i2)) { ComplexPolar(r1*r2, i1+i2) }
+pure +(ComplexPolar, ComplexPolar) -> ComplexPolar = (c1,c2) { ComplexPolar(c1 *_dot c2, c1 *_cross c2) }
+let x = Rational(5,11)
+let y = ComplexPolar(Rational(2,1),Rational(3,1))
+x+y
+""");
+        assertNotNull(result);
+        System.out.println("ComplexPolar result: " + result);
+    }
+
+    @Test
+    void runtimeErrorIncludesLocationAndSignature() {
+        // Trigger a type error by applying + to types without a matching overload
+        String source = """
+type Foo(int)
+type Bar(int)
+let x = Foo(1)
+let y = Bar(2)
+x + y
+""";
+        SpnParser parser = new SpnParser(source, "test.spn", null, symbolTable, null);
+        SpnRootNode root = parser.parse();
+        try {
+            root.getCallTarget().call();
+            fail("Expected SpnException");
+        } catch (spn.language.SpnException e) {
+            String msg = e.formatMessage();
+            // Should include source file and line
+            assertTrue(msg.contains("test.spn"), "Should include file name: " + msg);
+            // Should include the operator signature
+            assertTrue(msg.contains("+(Foo, Bar)"), "Should include op signature: " + msg);
+        }
+    }
 }

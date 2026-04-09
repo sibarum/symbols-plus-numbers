@@ -22,4 +22,21 @@ import spn.type.SpnTypes;
 @TypeSystemReference(SpnTypes.class)
 @NodeInfo(language = "SPN", description = "The abstract base node for all SPN nodes")
 public abstract class SpnNode extends Node {
+
+    // ── Source location (set by parser, read by SpnException) ───────────────
+
+    private String sourceFile;
+    private int sourceLine = -1;
+    private int sourceCol = -1;
+
+    public void setSourcePosition(String file, int line, int col) {
+        this.sourceFile = file;
+        this.sourceLine = line;
+        this.sourceCol = col;
+    }
+
+    public String getSourceFile() { return sourceFile; }
+    public int getSourceLine() { return sourceLine; }
+    public int getSourceCol() { return sourceCol; }
+    public boolean hasSourcePosition() { return sourceLine >= 0; }
 }

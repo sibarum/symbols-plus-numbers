@@ -2,6 +2,7 @@ package spn.language;
 
 import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.nodes.Node;
+import spn.node.SpnNode;
 
 /**
  * Base exception for SPN runtime errors.
@@ -24,9 +25,15 @@ public final class SpnException extends AbstractTruffleException {
 
     public SpnException(String message, Node location) {
         super(message, location);
-        this.sourceName = null;
-        this.line = -1;
-        this.col = -1;
+        if (location instanceof SpnNode spn && spn.hasSourcePosition()) {
+            this.sourceName = spn.getSourceFile();
+            this.line = spn.getSourceLine();
+            this.col = spn.getSourceCol();
+        } else {
+            this.sourceName = null;
+            this.line = -1;
+            this.col = -1;
+        }
     }
 
     public SpnException(String message, String sourceName, int line, int col) {

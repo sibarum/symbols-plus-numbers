@@ -23,7 +23,7 @@ public abstract class SpnStringConcatNode extends SpnExpressionNode {
 
     @Fallback
     protected Object typeError(Object left, Object right) {
-        throw new SpnException("Cannot concatenate " + SpnTypeName.of(left)
-                + " and " + SpnTypeName.of(right), this);
+        throw new SpnException("Type error: ++(" + SpnTypeName.of(left)
+                + ", " + SpnTypeName.of(right) + ") is not defined", this);
     }
 }

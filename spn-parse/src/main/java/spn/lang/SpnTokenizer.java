@@ -14,6 +14,7 @@ public class SpnTokenizer {
     private final List<SpnParseToken> tokens;
     private int pos;
     private String sourceName; // optional file name for error messages
+    private SpnParseToken lastConsumed; // most recently consumed token (for source positions)
 
     public SpnTokenizer(String source) {
         this.tokens = tokenize(source);
@@ -58,17 +59,24 @@ public class SpnTokenizer {
 
     /** Consume and return the current token. */
     public SpnParseToken advance() {
-        return tokens.get(pos++);
+        lastConsumed = tokens.get(pos++);
+        return lastConsumed;
     }
 
     /** Consume the current token if it matches the given text. Returns true if consumed. */
     public boolean match(String text) {
         SpnParseToken tok = peek();
         if (tok != null && tok.text().equals(text)) {
+            lastConsumed = tok;
             pos++;
             return true;
         }
         return false;
+    }
+
+    /** The most recently consumed token (via advance or match). */
+    public SpnParseToken lastConsumed() {
+        return lastConsumed;
     }
 
     /** Consume and return the current token, or throw if it doesn't match. */

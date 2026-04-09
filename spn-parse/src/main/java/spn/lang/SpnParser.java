@@ -886,6 +886,23 @@ public class SpnParser {
         if (type != null) exprTypes.put(expr, type);
     }
 
+    /** Attach source position from the last consumed token to a node. */
+    private <T extends SpnExpressionNode> T at(T node) {
+        SpnParseToken tok = tokens.lastConsumed();
+        if (tok != null) {
+            node.setSourcePosition(sourceName, tok.line(), tok.col());
+        }
+        return node;
+    }
+
+    /** Attach source position from a specific token to a node. */
+    private <T extends SpnExpressionNode> T at(T node, SpnParseToken tok) {
+        if (tok != null) {
+            node.setSourcePosition(sourceName, tok.line(), tok.col());
+        }
+        return node;
+    }
+
     // ── While / do ─────────────────────────────────────────────────────────
 
     private SpnStatementNode parseWhileStatement() {
@@ -1066,13 +1083,15 @@ public class SpnParser {
         SpnExpressionNode left = parseComparison();
         while (true) {
             if (tokens.match("==")) {
+                SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseComparison();
                 SpnExpressionNode dispatched = tryOperatorDispatch("==", left, right);
-                left = dispatched != null ? dispatched : SpnEqualNodeGen.create(left, right);
+                left = dispatched != null ? dispatched : at(SpnEqualNodeGen.create(left, right), opTok);
             } else if (tokens.match("!=")) {
+                SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseComparison();
                 SpnExpressionNode dispatched = tryOperatorDispatch("!=", left, right);
-                left = dispatched != null ? dispatched : SpnNotEqualNodeGen.create(left, right);
+                left = dispatched != null ? dispatched : at(SpnNotEqualNodeGen.create(left, right), opTok);
             } else {
                 SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseComparison, "==", "!=");
                 if (qualified != null) { left = qualified; continue; }
@@ -1086,21 +1105,25 @@ public class SpnParser {
         SpnExpressionNode left = parseConcatenation();
         while (true) {
             if (tokens.match("<")) {
+                SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseConcatenation();
                 SpnExpressionNode dispatched = tryOperatorDispatch("<", left, right);
-                left = dispatched != null ? dispatched : SpnLessThanNodeGen.create(left, right);
+                left = dispatched != null ? dispatched : at(SpnLessThanNodeGen.create(left, right), opTok);
             } else if (tokens.match(">")) {
+                SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseConcatenation();
                 SpnExpressionNode dispatched = tryOperatorDispatch(">", left, right);
-                left = dispatched != null ? dispatched : SpnGreaterThanNodeGen.create(left, right);
+                left = dispatched != null ? dispatched : at(SpnGreaterThanNodeGen.create(left, right), opTok);
             } else if (tokens.match("<=")) {
+                SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseConcatenation();
                 SpnExpressionNode dispatched = tryOperatorDispatch("<=", left, right);
-                left = dispatched != null ? dispatched : SpnLessEqualNodeGen.create(left, right);
+                left = dispatched != null ? dispatched : at(SpnLessEqualNodeGen.create(left, right), opTok);
             } else if (tokens.match(">=")) {
+                SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseConcatenation();
                 SpnExpressionNode dispatched = tryOperatorDispatch(">=", left, right);
-                left = dispatched != null ? dispatched : SpnGreaterEqualNodeGen.create(left, right);
+                left = dispatched != null ? dispatched : at(SpnGreaterEqualNodeGen.create(left, right), opTok);
             } else {
                 SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseConcatenation, "<", ">", "<=", ">=");
                 if (qualified != null) { left = qualified; continue; }
@@ -1113,7 +1136,8 @@ public class SpnParser {
     private SpnExpressionNode parseConcatenation() {
         SpnExpressionNode left = parseAddSub();
         while (tokens.match("++")) {
-            left = SpnStringConcatNodeGen.create(left, parseAddSub());
+            SpnParseToken opTok = tokens.lastConsumed();
+            left = at(SpnStringConcatNodeGen.create(left, parseAddSub()), opTok);
         }
         return left;
     }
@@ -1122,14 +1146,16 @@ public class SpnParser {
         SpnExpressionNode left = parseMulDiv();
         while (true) {
             if (tokens.match("+")) {
+                SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseMulDiv();
                 SpnExpressionNode dispatched = tryOperatorDispatch("+", left, right);
-                left = dispatched != null ? dispatched : trackArithmeticType(SpnAddNodeGen.create(left, right), left, right);
+                left = dispatched != null ? dispatched : trackArithmeticType(at(SpnAddNodeGen.create(left, right), opTok), left, right);
             } else if (tokens.check("-") && !isUnaryMinus()) {
                 tokens.advance();
+                SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseMulDiv();
                 SpnExpressionNode dispatched = tryOperatorDispatch("-", left, right);
-                left = dispatched != null ? dispatched : trackArithmeticType(SpnSubtractNodeGen.create(left, right), left, right);
+                left = dispatched != null ? dispatched : trackArithmeticType(at(SpnSubtractNodeGen.create(left, right), opTok), left, right);
             } else {
                 SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseMulDiv, "+", "-");
                 if (qualified != null) { left = qualified; continue; }
@@ -1143,17 +1169,20 @@ public class SpnParser {
         SpnExpressionNode left = parseUnary();
         while (true) {
             if (tokens.match("*")) {
+                SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseUnary();
                 SpnExpressionNode dispatched = tryOperatorDispatch("*", left, right);
-                left = dispatched != null ? dispatched : trackArithmeticType(SpnMultiplyNodeGen.create(left, right), left, right);
+                left = dispatched != null ? dispatched : trackArithmeticType(at(SpnMultiplyNodeGen.create(left, right), opTok), left, right);
             } else if (tokens.match("/")) {
+                SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseUnary();
                 SpnExpressionNode dispatched = tryOperatorDispatch("/", left, right);
-                left = dispatched != null ? dispatched : trackArithmeticType(SpnDivideNodeGen.create(left, right), left, right);
+                left = dispatched != null ? dispatched : trackArithmeticType(at(SpnDivideNodeGen.create(left, right), opTok), left, right);
             } else if (tokens.match("%")) {
+                SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseUnary();
                 SpnExpressionNode dispatched = tryOperatorDispatch("%", left, right);
-                left = dispatched != null ? dispatched : trackArithmeticType(SpnModuloNodeGen.create(left, right), left, right);
+                left = dispatched != null ? dispatched : trackArithmeticType(at(SpnModuloNodeGen.create(left, right), opTok), left, right);
             } else {
                 // Qualified multiplicative operators: *_dot, /_something, %_something
                 SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseUnary, "*", "/", "%");
@@ -1192,16 +1221,23 @@ public class SpnParser {
                                                   String... bases) {
         String op = peekQualifiedOp(bases);
         if (op == null) return null;
-        tokens.advance(); // consume the qualified operator
+        SpnParseToken opTok = tokens.advance(); // consume the qualified operator
         SpnExpressionNode right = parseRight.get();
         SpnExpressionNode dispatched = tryOperatorDispatch(op, left, right);
-        if (dispatched != null) return dispatched;
+        if (dispatched != null) return at(dispatched, opTok);
         throw tokens.error("No overload found for qualified operator: " + op);
     }
 
     /**
      * Try to resolve a binary operator to a registered overload at compile time.
      * Returns a direct SpnInvokeNode if a matching overload is found, null otherwise.
+     *
+     * Dispatch strategy (Julia-inspired, one-way promotions):
+     *   1. Exact match on the immediate types — use it.
+     *   2. If both types are primitives with built-in operations, stop — let the
+     *      parser fall back to the built-in node.
+     *   3. Walk the promotion tree on each argument independently, find the
+     *      overload reachable with the fewest total promotions.
      */
     private SpnExpressionNode tryOperatorDispatch(String op,
                                                     SpnExpressionNode left,
@@ -1211,12 +1247,9 @@ public class SpnParser {
 
         FieldType leftType = inferType(left);
         FieldType rightType = inferType(right);
-        System.err.println("[dispatch] " + op + ": left=" + (leftType != null ? leftType.describe() : "null")
-                + " right=" + (rightType != null ? rightType.describe() : "null")
-                + " overloads=" + overloads.size());
         if (leftType == null || rightType == null) return null;
 
-        // 1. Try exact match
+        // 1. Exact match (cost 0)
         for (OperatorOverload overload : overloads) {
             if (overload.paramTypes().length == 2
                     && typesMatch(overload.paramTypes()[0], leftType)
@@ -1227,66 +1260,86 @@ public class SpnParser {
             }
         }
 
-        // 2. Try promoting left operand
-        for (Promotion promo : promotionRegistry) {
-            if (promo.sourceDesc().equals(leftType.describe())) {
-                String promotedLeftDesc = promo.targetDesc();
+        // 2. Both primitives → built-in handles it, don't promote
+        if (isPrimitive(leftType) && isPrimitive(rightType)) return null;
+
+        // 3. Walk promotion trees, find minimum-cost match
+        List<PromotionStep> leftSteps = buildPromotionChain(leftType);
+        List<PromotionStep> rightSteps = buildPromotionChain(rightType);
+
+        int bestCost = Integer.MAX_VALUE;
+        PromotionStep bestLeft = null, bestRight = null;
+        OperatorOverload bestOverload = null;
+
+        for (PromotionStep ls : leftSteps) {
+            if (ls.depth() >= bestCost) continue;
+            for (PromotionStep rs : rightSteps) {
+                int cost = ls.depth() + rs.depth();
+                if (cost == 0 || cost >= bestCost) continue;
                 for (OperatorOverload overload : overloads) {
                     if (overload.paramTypes().length == 2
-                            && overload.paramTypes()[0].describe().equals(promotedLeftDesc)
-                            && typesMatch(overload.paramTypes()[1], rightType)) {
-                        SpnExpressionNode promotedLeft =
-                                new SpnInvokeNode(promo.converter(), left);
-                        SpnExpressionNode result = new SpnInvokeNode(overload.callTarget(), promotedLeft, right);
-                        trackType(result, overload.returnType());
-                        return result;
+                            && overload.paramTypes()[0].describe().equals(ls.typeDesc())
+                            && overload.paramTypes()[1].describe().equals(rs.typeDesc())) {
+                        bestCost = cost;
+                        bestLeft = ls;
+                        bestRight = rs;
+                        bestOverload = overload;
+                        break;
                     }
                 }
             }
         }
 
-        // 3. Try promoting right operand
-        for (Promotion promo : promotionRegistry) {
-            if (promo.sourceDesc().equals(rightType.describe())) {
-                String promotedRightDesc = promo.targetDesc();
-                for (OperatorOverload overload : overloads) {
-                    if (overload.paramTypes().length == 2
-                            && typesMatch(overload.paramTypes()[0], leftType)
-                            && overload.paramTypes()[1].describe().equals(promotedRightDesc)) {
-                        SpnExpressionNode promotedRight =
-                                new SpnInvokeNode(promo.converter(), right);
-                        SpnExpressionNode result = new SpnInvokeNode(overload.callTarget(), left, promotedRight);
-                        trackType(result, overload.returnType());
-                        return result;
-                    }
+        if (bestOverload == null) return null;
+
+        SpnExpressionNode promotedLeft = applyPromotionChain(left, bestLeft);
+        SpnExpressionNode promotedRight = applyPromotionChain(right, bestRight);
+        SpnExpressionNode result = new SpnInvokeNode(bestOverload.callTarget(), promotedLeft, promotedRight);
+        trackType(result, bestOverload.returnType());
+        return result;
+    }
+
+    /** A point in the promotion graph: the type reached, how many hops, and the converters to apply. */
+    private record PromotionStep(String typeDesc, int depth, List<CallTarget> converters) {}
+
+    /** BFS the promotion graph from a starting type, returning all reachable types with cost. */
+    private List<PromotionStep> buildPromotionChain(FieldType startType) {
+        List<PromotionStep> steps = new ArrayList<>();
+        steps.add(new PromotionStep(startType.describe(), 0, List.of()));
+
+        Set<String> visited = new HashSet<>();
+        visited.add(startType.describe());
+        java.util.Deque<PromotionStep> queue = new java.util.ArrayDeque<>();
+        queue.add(steps.get(0));
+
+        while (!queue.isEmpty()) {
+            PromotionStep current = queue.poll();
+            for (Promotion promo : promotionRegistry) {
+                if (promo.sourceDesc().equals(current.typeDesc()) && visited.add(promo.targetDesc())) {
+                    List<CallTarget> newConverters = new ArrayList<>(current.converters());
+                    newConverters.add(promo.converter());
+                    PromotionStep next = new PromotionStep(
+                            promo.targetDesc(), current.depth() + 1, List.copyOf(newConverters));
+                    steps.add(next);
+                    queue.add(next);
                 }
             }
         }
+        return steps;
+    }
 
-        // 4. Try promoting both operands to a common type
-        for (Promotion leftPromo : promotionRegistry) {
-            if (!leftPromo.sourceDesc().equals(leftType.describe())) continue;
-            for (Promotion rightPromo : promotionRegistry) {
-                if (!rightPromo.sourceDesc().equals(rightType.describe())) continue;
-                if (!leftPromo.targetDesc().equals(rightPromo.targetDesc())) continue;
-                String commonDesc = leftPromo.targetDesc();
-                for (OperatorOverload overload : overloads) {
-                    if (overload.paramTypes().length == 2
-                            && overload.paramTypes()[0].describe().equals(commonDesc)
-                            && overload.paramTypes()[1].describe().equals(commonDesc)) {
-                        SpnExpressionNode promotedLeft =
-                                new SpnInvokeNode(leftPromo.converter(), left);
-                        SpnExpressionNode promotedRight =
-                                new SpnInvokeNode(rightPromo.converter(), right);
-                        SpnExpressionNode result = new SpnInvokeNode(overload.callTarget(), promotedLeft, promotedRight);
-                        trackType(result, overload.returnType());
-                        return result;
-                    }
-                }
-            }
+    /** Wrap an expression in a chain of promotion calls. */
+    private SpnExpressionNode applyPromotionChain(SpnExpressionNode expr, PromotionStep step) {
+        SpnExpressionNode current = expr;
+        for (CallTarget converter : step.converters()) {
+            current = new SpnInvokeNode(converter, current);
         }
+        return current;
+    }
 
-        return null;
+    private boolean isPrimitive(FieldType type) {
+        return type == FieldType.LONG || type == FieldType.DOUBLE
+                || type == FieldType.BOOLEAN || type == FieldType.STRING;
     }
 
     /** Check if a declared parameter type matches an inferred argument type. */
@@ -1300,7 +1353,7 @@ public class SpnParser {
 
     private SpnExpressionNode parseUnary() {
         if (tokens.match("-")) {
-            return SpnNegateNodeGen.create(parseUnary());
+            return at(SpnNegateNodeGen.create(parseUnary()));
         }
         return parsePostfix();
     }

@@ -30,6 +30,7 @@ public abstract class SpnNegateNode extends SpnExpressionNode {
 
     @Fallback
     protected Object typeError(Object value) {
-        throw new SpnException("Cannot negate " + SpnTypeName.of(value), this);
+        throw new SpnException("Type error: -(" + SpnTypeName.of(value)
+                + ") is not defined", this);
     }
 }
