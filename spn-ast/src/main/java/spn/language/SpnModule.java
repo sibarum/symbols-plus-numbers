@@ -29,19 +29,21 @@ import java.util.*;
 public final class SpnModule {
 
     private final String namespace;
+    private final boolean impure;
     private final Map<String, CallTarget> functions;
     private final Map<String, BuiltinFactory> builtinFactories;
     private final Map<String, SpnTypeDescriptor> types;
     private final Map<String, SpnStructDescriptor> structs;
     private final Map<String, SpnVariantSet> variants;
 
-    private SpnModule(String namespace,
+    private SpnModule(String namespace, boolean impure,
                       Map<String, CallTarget> functions,
                       Map<String, BuiltinFactory> builtinFactories,
                       Map<String, SpnTypeDescriptor> types,
                       Map<String, SpnStructDescriptor> structs,
                       Map<String, SpnVariantSet> variants) {
         this.namespace = namespace;
+        this.impure = impure;
         this.functions = Map.copyOf(functions);
         this.builtinFactories = Map.copyOf(builtinFactories);
         this.types = Map.copyOf(types);
@@ -50,6 +52,7 @@ public final class SpnModule {
     }
 
     public String getNamespace() { return namespace; }
+    public boolean isImpure() { return impure; }
 
     // ── Lookups ────────────────────────────────────────────────────────────
 
@@ -89,6 +92,7 @@ public final class SpnModule {
 
     public static final class Builder {
         private final String namespace;
+        private boolean impure;
         private final Map<String, CallTarget> functions = new LinkedHashMap<>();
         private final Map<String, BuiltinFactory> builtinFactories = new LinkedHashMap<>();
         private final Map<String, SpnTypeDescriptor> types = new LinkedHashMap<>();
@@ -97,6 +101,12 @@ public final class SpnModule {
 
         private Builder(String namespace) {
             this.namespace = namespace;
+        }
+
+        /** Mark this module as containing impure (action) functions. */
+        public Builder impure() {
+            this.impure = true;
+            return this;
         }
 
         public Builder function(String name, CallTarget target) {
@@ -150,7 +160,7 @@ public final class SpnModule {
         }
 
         public SpnModule build() {
-            return new SpnModule(namespace, functions, builtinFactories,
+            return new SpnModule(namespace, impure, functions, builtinFactories,
                     types, structs, variants);
         }
     }

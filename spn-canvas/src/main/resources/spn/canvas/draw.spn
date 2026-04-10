@@ -1,0 +1,44 @@
+-- spn.canvas.draw — Command-based canvas drawing
+--
+-- Pure functions build arrays of DrawCmd values.
+-- The single action 'render' dispatches them to the imperative Canvas API.
+--
+-- This separation means all scene computation is pure, composable,
+-- and amenable to memoization, parallelization, or GPU transpilation.
+
+import Canvas
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- DRAW COMMANDS
+-- ═══════════════════════════════════════════════════════════════════════
+
+data DrawCmd
+  | CmdClear(r, g, b)
+  | CmdFill(r, g, b)
+  | CmdStroke(r, g, b)
+  | CmdStrokeWeight(w)
+  | CmdRect(x, y, w, h)
+  | CmdCircle(x, y, r)
+  | CmdLine(x1, y1, x2, y2)
+  | CmdText(x, y, content, size)
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- RENDER — the single action boundary
+-- ═══════════════════════════════════════════════════════════════════════
+
+action render(Array) = (cmds) {
+    let i = 0
+    while {i < length(cmds)} do {
+        let cmd = cmds[i]
+        match cmd
+          | CmdClear(r, g, b)        -> clear(r, g, b)
+          | CmdFill(r, g, b)         -> fill(r, g, b)
+          | CmdStroke(r, g, b)       -> stroke(r, g, b)
+          | CmdStrokeWeight(w)       -> strokeWeight(w)
+          | CmdRect(x, y, w, h)     -> rect(x, y, w, h)
+          | CmdCircle(x, y, r)      -> circle(x, y, r)
+          | CmdLine(x1, y1, x2, y2) -> line(x1, y1, x2, y2)
+          | CmdText(x, y, c, s)     -> text(x, y, c, s)
+        i = i + 1
+    }
+}

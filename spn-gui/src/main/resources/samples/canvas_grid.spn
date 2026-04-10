@@ -1,11 +1,15 @@
 -- Function Plot — plot sin(x) with automatic axes
+import Array (concat)
 import Canvas
 import Math
+import spn.canvas.draw
 import spn.canvas.plot
 
-pure sinFn(_) = (x) { sin(x) }
+pure sinFn(float) -> float = (x) { sin(x) }
 
 canvas(800, 600)
-clear(0.08, 0.08, 0.1)
-plotFnAuto(sinFn, 800.0, 600.0, -6.3, 6.3, "sin(x)")
+render(concat(
+    [CmdClear(0.08, 0.08, 0.1)],
+    plotFnAuto(sinFn, 800.0, 600.0, -6.3, 6.3, "sin(x)")
+))
 show()

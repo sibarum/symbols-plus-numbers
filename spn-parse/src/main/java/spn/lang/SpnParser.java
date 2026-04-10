@@ -51,7 +51,9 @@ public class SpnParser {
     private final Map<String, SpnStructDescriptor> structRegistry = new LinkedHashMap<>();
     private final Map<String, SpnVariantSet> variantRegistry = new LinkedHashMap<>();
     private final Map<String, CallTarget> functionRegistry = new LinkedHashMap<>();
+    private final Map<String, SpnFunctionDescriptor> functionDescriptorRegistry = new LinkedHashMap<>();
     private final Map<String, spn.node.BuiltinFactory> builtinRegistry = new LinkedHashMap<>();
+    private final Set<String> impureBuiltins = new HashSet<>();
 
     // Operator overload registry: operator → list of (paramTypes, callTarget) pairs
     record OperatorOverload(FieldType[] paramTypes, FieldType returnType, CallTarget callTarget) {}
@@ -207,7 +209,8 @@ public class SpnParser {
             case "type" -> { parseTypeDecl(); yield null; }
             case "data" -> { parseDataDecl(); yield null; }
             case "struct" -> { parseStructAsType(); yield null; }
-            case "pure" -> parsePureDecl();
+            case "pure" -> parseFuncDecl(true);
+            case "action" -> parseFuncDecl(false);
             case "promote" -> { parsePromoteDecl(); yield null; }
             case "let" -> parseLetBinding();
             case "while" -> parseWhileStatement();
@@ -348,6 +351,10 @@ public class SpnParser {
         typeRegistry.putAll(module.getTypes());
         structRegistry.putAll(module.getStructs());
         variantRegistry.putAll(module.getVariants());
+        if (module.isImpure()) {
+            impureBuiltins.addAll(module.getBuiltinFactories().keySet());
+            impureBuiltins.addAll(module.getFunctions().keySet());
+        }
     }
 
     private void applySelectiveImport(SpnModule module, ImportDirective directive) {
@@ -356,10 +363,18 @@ public class SpnParser {
             String dst = imp.localName();
 
             CallTarget fn = module.getFunction(src);
-            if (fn != null) { functionRegistry.put(dst, fn); continue; }
+            if (fn != null) {
+                functionRegistry.put(dst, fn);
+                if (module.isImpure()) impureBuiltins.add(dst);
+                continue;
+            }
 
             spn.node.BuiltinFactory bf = module.getBuiltinFactory(src);
-            if (bf != null) { builtinRegistry.put(dst, bf); continue; }
+            if (bf != null) {
+                builtinRegistry.put(dst, bf);
+                if (module.isImpure()) impureBuiltins.add(dst);
+                continue;
+            }
 
             SpnTypeDescriptor td = module.getType(src);
             if (td != null) { typeRegistry.put(dst, td); continue; }
@@ -571,8 +586,8 @@ public class SpnParser {
 
     // ── Function declarations and definitions ──────────────────────────────
 
-    private SpnStatementNode parsePureDecl() {
-        tokens.expect("pure");
+    private SpnStatementNode parseFuncDecl(boolean isPure) {
+        tokens.advance(); // consume 'pure' or 'action'
         // Accept identifier (named function) or operator (operator overload)
         SpnParseToken nameTok = tokens.peek();
         String name;
@@ -605,7 +620,7 @@ public class SpnParser {
 
         // Definition: = (params) { body }
         tokens.expect("=");
-        parseFunctionBody(name, paramTypes, returnType);
+        parseFunctionBody(name, paramTypes, returnType, isPure);
 
         // Register operator overload for compile-time dispatch
         if (isOperator && !paramTypes.isEmpty()) {
@@ -628,7 +643,7 @@ public class SpnParser {
     }
 
     private SpnStatementNode parseFunctionBody(String name, List<FieldType> paramTypes,
-                                                FieldType returnType) {
+                                                FieldType returnType, boolean isPure) {
         tokens.expect("(");
         List<ParamDecl> params = new ArrayList<>();
         while (!tokens.check(")")) {
@@ -702,10 +717,13 @@ public class SpnParser {
         // Parse body — function name is visible for recursion via deferred lookup
         deferredFunctionName = name;
         containsYield = false;
+        boolean outerPurity = currentFunctionIsPure;
+        currentFunctionIsPure = isPure;
         tokens.expect("{");
         SpnExpressionNode body = parseBlockBody();
         tokens.expect("}");
         deferredFunctionName = null;
+        currentFunctionIsPure = outerPurity;
         boolean isProducer = containsYield;
 
         // Prepend destructure nodes to the body if any params were destructured
@@ -718,7 +736,9 @@ public class SpnParser {
         popScope();
 
         // Build the function descriptor — include yield ctx param only for producers
-        SpnFunctionDescriptor.Builder descBuilder = SpnFunctionDescriptor.pure(name);
+        SpnFunctionDescriptor.Builder descBuilder = isPure
+                ? SpnFunctionDescriptor.pure(name)
+                : SpnFunctionDescriptor.impure(name);
         for (int i = 0; i < paramNames.size(); i++) {
             FieldType ft = i < paramTypes.size() ? paramTypes.get(i) : FieldType.UNTYPED;
             descBuilder.param(paramNames.get(i), ft);
@@ -743,6 +763,7 @@ public class SpnParser {
                 language, fnScope.buildFrame(), descriptor, paramSlots, body);
         CallTarget callTarget = fnRoot.getCallTarget();
         functionRegistry.put(name, callTarget);
+        functionDescriptorRegistry.put(name, descriptor);
 
         // Patch any deferred self-calls
         patchDeferredCalls(name, callTarget);
@@ -751,9 +772,10 @@ public class SpnParser {
         return null;
     }
 
-    // Support for recursive function references and yield detection
+    // Support for recursive function references, yield detection, and purity tracking
     private String deferredFunctionName;
     private boolean containsYield;
+    private boolean currentFunctionIsPure;
     private final List<SpnDeferredInvokeNode> deferredCalls = new ArrayList<>();
 
     private void patchDeferredCalls(String name, CallTarget target) {
@@ -872,6 +894,9 @@ public class SpnParser {
                                                     SpnExpressionNode right) {
         FieldType lt = inferType(left);
         FieldType rt = inferType(right);
+        if (lt instanceof FieldType.Untyped || rt instanceof FieldType.Untyped) {
+            throw tokens.error("Untyped (_) value cannot be used in arithmetic");
+        }
         if (lt != null && rt != null && lt == rt) {
             trackType(result, lt);
         } else if (lt == FieldType.LONG && rt == FieldType.DOUBLE
@@ -884,6 +909,69 @@ public class SpnParser {
     /** Tag an expression with its inferred type for later operator dispatch. */
     private void trackType(SpnExpressionNode expr, FieldType type) {
         if (type != null) exprTypes.put(expr, type);
+    }
+
+    /**
+     * Ensure an expression does not have untyped (_) type.
+     * Untyped values can only be passed to other _ parameters or narrowed via match;
+     * they cannot be used in arithmetic, comparisons, indexing, or invocation.
+     */
+    private void requireTyped(SpnExpressionNode expr, String operation) {
+        FieldType type = inferType(expr);
+        if (type instanceof FieldType.Untyped) {
+            throw tokens.error("Untyped (_) value cannot be used in " + operation);
+        }
+    }
+
+    /**
+     * Check that no untyped (_) arguments are passed to typed parameters.
+     * Untyped arguments may only flow into untyped (_) parameters.
+     */
+    private void checkUntypedArgs(List<SpnExpressionNode> args, String funcName, SpnParseToken callTok) {
+        SpnFunctionDescriptor desc = functionDescriptorRegistry.get(funcName);
+        if (desc == null) return; // no descriptor available (e.g., imported) — skip
+        FieldDescriptor[] params = desc.getParams();
+        for (int i = 0; i < args.size() && i < params.length; i++) {
+            FieldType argType = inferType(args.get(i));
+            if (argType instanceof FieldType.Untyped && !(params[i].type() instanceof FieldType.Untyped)) {
+                throw tokens.error("Cannot pass untyped (_) value to typed parameter '"
+                        + params[i].name() + "' (expected " + params[i].type().describe() + ")", callTok);
+            }
+        }
+    }
+
+    /**
+     * Check that a pure function does not call an action function.
+     * Looks up the callee in the descriptor registry (user functions) and
+     * impure builtin set (canvas, I/O, etc.).
+     */
+    private void checkPurityViolation(String calleeName, SpnParseToken callTok) {
+        if (!currentFunctionIsPure) return; // action functions can call anything
+        // Check user-defined functions
+        SpnFunctionDescriptor desc = functionDescriptorRegistry.get(calleeName);
+        if (desc != null && !desc.isPure()) {
+            throw tokens.error("Pure function cannot call action function '" + calleeName + "'", callTok);
+        }
+        // Check builtins known to be impure
+        if (impureBuiltins.contains(calleeName)) {
+            throw tokens.error("Pure function cannot call action builtin '" + calleeName + "'", callTok);
+        }
+    }
+
+    /**
+     * Check that no untyped (_) arguments are passed to typed parameters of an
+     * indirect call whose callee has a known function type.
+     */
+    private void checkIndirectCallArgs(List<SpnExpressionNode> args, FieldType.OfFunction fnType,
+                                        String calleeName, SpnParseToken callTok) {
+        FieldType[] paramTypes = fnType.paramTypes();
+        for (int i = 0; i < args.size() && i < paramTypes.length; i++) {
+            FieldType argType = inferType(args.get(i));
+            if (argType instanceof FieldType.Untyped && !(paramTypes[i] instanceof FieldType.Untyped)) {
+                throw tokens.error("Cannot pass untyped (_) value to parameter " + (i + 1)
+                        + " of '" + calleeName + "' (expected " + paramTypes[i].describe() + ")", callTok);
+            }
+        }
     }
 
     /** Attach source position from the last consumed token to a node. */
@@ -1108,22 +1196,26 @@ public class SpnParser {
                 SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseConcatenation();
                 SpnExpressionNode dispatched = tryOperatorDispatch("<", left, right);
-                left = dispatched != null ? dispatched : at(SpnLessThanNodeGen.create(left, right), opTok);
+                if (dispatched != null) { left = dispatched; }
+                else { requireTyped(left, "ordering comparison '<'"); requireTyped(right, "ordering comparison '<'"); left = at(SpnLessThanNodeGen.create(left, right), opTok); }
             } else if (tokens.match(">")) {
                 SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseConcatenation();
                 SpnExpressionNode dispatched = tryOperatorDispatch(">", left, right);
-                left = dispatched != null ? dispatched : at(SpnGreaterThanNodeGen.create(left, right), opTok);
+                if (dispatched != null) { left = dispatched; }
+                else { requireTyped(left, "ordering comparison '>'"); requireTyped(right, "ordering comparison '>'"); left = at(SpnGreaterThanNodeGen.create(left, right), opTok); }
             } else if (tokens.match("<=")) {
                 SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseConcatenation();
                 SpnExpressionNode dispatched = tryOperatorDispatch("<=", left, right);
-                left = dispatched != null ? dispatched : at(SpnLessEqualNodeGen.create(left, right), opTok);
+                if (dispatched != null) { left = dispatched; }
+                else { requireTyped(left, "ordering comparison '<='"); requireTyped(right, "ordering comparison '<='"); left = at(SpnLessEqualNodeGen.create(left, right), opTok); }
             } else if (tokens.match(">=")) {
                 SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseConcatenation();
                 SpnExpressionNode dispatched = tryOperatorDispatch(">=", left, right);
-                left = dispatched != null ? dispatched : at(SpnGreaterEqualNodeGen.create(left, right), opTok);
+                if (dispatched != null) { left = dispatched; }
+                else { requireTyped(left, "ordering comparison '>='"); requireTyped(right, "ordering comparison '>='"); left = at(SpnGreaterEqualNodeGen.create(left, right), opTok); }
             } else {
                 SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseConcatenation, "<", ">", "<=", ">=");
                 if (qualified != null) { left = qualified; continue; }
@@ -1137,7 +1229,10 @@ public class SpnParser {
         SpnExpressionNode left = parseAddSub();
         while (tokens.match("++")) {
             SpnParseToken opTok = tokens.lastConsumed();
-            left = at(SpnStringConcatNodeGen.create(left, parseAddSub()), opTok);
+            SpnExpressionNode right = parseAddSub();
+            requireTyped(left, "string concatenation '++'");
+            requireTyped(right, "string concatenation '++'");
+            left = at(SpnStringConcatNodeGen.create(left, right), opTok);
         }
         return left;
     }
@@ -1353,7 +1448,9 @@ public class SpnParser {
 
     private SpnExpressionNode parseUnary() {
         if (tokens.match("-")) {
-            return at(SpnNegateNodeGen.create(parseUnary()));
+            SpnExpressionNode operand = parseUnary();
+            requireTyped(operand, "negation");
+            return at(SpnNegateNodeGen.create(operand));
         }
         return parsePostfix();
     }
@@ -1363,6 +1460,7 @@ public class SpnParser {
 
         // Handle indexing: expr[index] and expr[:key]
         while (tokens.check("[")) {
+            requireTyped(expr, "indexing");
             tokens.advance();
             SpnExpressionNode index = parseExpression();
             tokens.expect("]");
@@ -1483,12 +1581,15 @@ public class SpnParser {
             // Look up the function
             CallTarget target = functionRegistry.get(name);
             if (target != null) {
+                checkPurityViolation(name, tok);
+                checkUntypedArgs(args, name, tok);
                 return new SpnInvokeNode(target, args.toArray(new SpnExpressionNode[0]));
             }
 
             // Builtin function (stdlib, canvas, etc.)
             spn.node.BuiltinFactory builtin = builtinRegistry.get(name);
             if (builtin != null) {
+                checkPurityViolation(name, tok);
                 return builtin.create(args.toArray(new SpnExpressionNode[0]));
             }
 
@@ -1503,9 +1604,19 @@ public class SpnParser {
             // Indirect call — variable might hold a function value
             int callSlot = currentScope.lookupLocal(name);
             if (callSlot >= 0) {
-                return new SpnIndirectInvokeNode(
+                FieldType calleeType = currentScope.lookupType(name);
+                if (calleeType instanceof FieldType.Untyped) {
+                    throw tokens.error("Untyped (_) value '" + name + "' cannot be called as a function; declare a function type", tok);
+                }
+                SpnExpressionNode callNode = new SpnIndirectInvokeNode(
                         new SpnReadLocalVariableNodeWrapper(callSlot),
                         args.toArray(new SpnExpressionNode[0]));
+                // If the variable has a function type, track the return type and check args
+                if (calleeType instanceof FieldType.OfFunction fnType) {
+                    trackType(callNode, fnType.returnType());
+                    checkIndirectCallArgs(args, fnType, name, tok);
+                }
+                return callNode;
             }
 
             throw tokens.error("Unknown function: " + name, tok);
@@ -1523,7 +1634,15 @@ public class SpnParser {
         // Function reference as value (bare name, no call)
         CallTarget refTarget = functionRegistry.get(name);
         if (refTarget != null) {
-            return new SpnFunctionRefNode(refTarget);
+            SpnExpressionNode refNode = new SpnFunctionRefNode(refTarget);
+            SpnFunctionDescriptor refDesc = functionDescriptorRegistry.get(name);
+            if (refDesc != null) {
+                FieldDescriptor[] refParams = refDesc.getParams();
+                FieldType[] refParamTypes = new FieldType[refParams.length];
+                for (int i = 0; i < refParams.length; i++) refParamTypes[i] = refParams[i].type();
+                trackType(refNode, FieldType.ofFunction(refParamTypes, refDesc.getReturnType()));
+            }
+            return refNode;
         }
 
         throw tokens.error("Undefined variable: " + name, tok);
@@ -1965,6 +2084,21 @@ public class SpnParser {
         if (tok.text().equals("_")) {
             tokens.advance();
             return FieldType.UNTYPED;
+        }
+
+        // Function name as type: uses the named function's signature structurally.
+        // e.g., pure apply(myFunc, int) = ... where myFunc was declared as (int, int) -> int
+        if (tok.type() == TokenType.IDENTIFIER) {
+            SpnFunctionDescriptor fnDesc = functionDescriptorRegistry.get(tok.text());
+            if (fnDesc != null) {
+                tokens.advance();
+                FieldDescriptor[] params = fnDesc.getParams();
+                FieldType[] paramTypes = new FieldType[params.length];
+                for (int i = 0; i < params.length; i++) {
+                    paramTypes[i] = params[i].type();
+                }
+                return FieldType.ofFunction(paramTypes, fnDesc.getReturnType());
+            }
         }
 
         throw tokens.error("Expected type name, got: " + tok.text(), tok);

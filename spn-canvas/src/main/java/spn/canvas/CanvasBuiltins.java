@@ -30,7 +30,7 @@ public final class CanvasBuiltins {
      * Registers the Canvas module into the module system.
      */
     public static void registerModule(SpnModuleRegistry registry) {
-        SpnModule.Builder builder = SpnModule.builder("Canvas");
+        SpnModule.Builder builder = SpnModule.builder("Canvas").impure();
         Map<String, BuiltinFactory> factories = new java.util.LinkedHashMap<>();
         addDrawing(factories);
         addUtilities(factories);

@@ -1,23 +1,35 @@
--- spn.canvas.plot — 2D plotting abstractions built on Canvas
-import Canvas
+-- spn.canvas.plot — Pure 2D plotting abstractions
+--
+-- All functions are pure: they compute arrays of DrawCmd values.
+-- Use render() from spn.canvas.draw to execute them.
+
+import Array (concat, append)
 import Math
 import String (formatNum)
+import spn.canvas.draw
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- TYPE SIGNATURES
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- Callback shape for plottable functions: float -> float
+pure plotCallback(float) -> float = (x) { x }
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- HELPERS
 -- ═══════════════════════════════════════════════════════════════════════
 
 -- Map a data-space value to pixel-space
-pure mapX(_, _, _, _) = (x, xMin, xMax, pxW) {
+pure mapX(float, float, float, float) -> float = (x, xMin, xMax, pxW) {
     (x - xMin) / (xMax - xMin) * pxW
 }
 
-pure mapY(_, _, _, _) = (y, yMin, yMax, pxH) {
+pure mapY(float, float, float, float) -> float = (y, yMin, yMax, pxH) {
     pxH - (y - yMin) / (yMax - yMin) * pxH
 }
 
 -- Compute a nice tick step for a given data range
-pure niceStep(_) = (range) {
+pure niceStep(float) -> float = (range) {
     let rough = range / 5.0
     let p = 1.0
     -- scale down
@@ -40,44 +52,45 @@ pure niceStep(_) = (range) {
 -- AXES
 -- ═══════════════════════════════════════════════════════════════════════
 
--- Draw 2D axes with tick marks and numeric labels.
---   left, top, w, h — pixel viewport
---   xMin..xMax, yMin..yMax — data range
---   xLabel, yLabel — axis title strings
-pure drawAxes2D(_, _, _, _, _, _, _, _, _, _) = (left, top, w, h, xMin, xMax, yMin, yMax, xLabel, yLabel) {
+-- Build draw commands for 2D axes with tick marks and numeric labels.
+pure drawAxes2D(float, float, float, float, float, float, float, float, string, string) = (left, top, w, h, xMin, xMax, yMin, yMax, xLabel, yLabel) {
     let tickLen = 5.0
+    let cmds = []
 
     -- Find where zero-lines cross in pixel space
     let zeroX = left + mapX(0.0, xMin, xMax, w)
     let zeroY = top + mapY(0.0, yMin, yMax, h)
 
-    -- Draw axis lines (clamp to viewport)
-    stroke(0.5, 0.5, 0.5)
-    strokeWeight(1.0)
-    -- X axis (horizontal line at y=0, or bottom if 0 not in range)
+    -- Clamp axis positions to viewport
     let axisY = zeroY
     if axisY < top { axisY = top }
     else if axisY > top + h { axisY = top + h }
     else { 0 }
-    line(left, axisY, left + w, axisY)
-    -- Y axis (vertical line at x=0, or left if 0 not in range)
     let axisX = zeroX
     if axisX < left { axisX = left }
     else if axisX > left + w { axisX = left + w }
     else { 0 }
-    line(axisX, top, axisX, top + h)
+
+    -- Axis lines
+    cmds = concat(cmds, [
+        CmdStroke(0.5, 0.5, 0.5),
+        CmdStrokeWeight(1.0),
+        CmdLine(left, axisY, left + w, axisY),
+        CmdLine(axisX, top, axisX, top + h)
+    ])
 
     -- X ticks
     let xStep = niceStep(xMax - xMin)
     let xTick = ceil(xMin / xStep) * xStep
-    fill(0.55, 0.55, 0.55)
     while {xTick <= xMax} do {
         let px = left + mapX(xTick, xMin, xMax, w)
-        stroke(0.35, 0.35, 0.35)
-        strokeWeight(1.0)
-        line(px, axisY - tickLen, px, axisY + tickLen)
-        fill(0.55, 0.55, 0.55)
-        text(px - 8.0, axisY + tickLen + 14.0, formatNum(xTick), 0.22)
+        cmds = concat(cmds, [
+            CmdStroke(0.35, 0.35, 0.35),
+            CmdStrokeWeight(1.0),
+            CmdLine(px, axisY - tickLen, px, axisY + tickLen),
+            CmdFill(0.55, 0.55, 0.55),
+            CmdText(px - 8.0, axisY + tickLen + 14.0, formatNum(xTick), 0.22)
+        ])
         xTick = xTick + xStep
     }
 
@@ -86,47 +99,52 @@ pure drawAxes2D(_, _, _, _, _, _, _, _, _, _) = (left, top, w, h, xMin, xMax, yM
     let yTick = ceil(yMin / yStep) * yStep
     while {yTick <= yMax} do {
         let py = top + mapY(yTick, yMin, yMax, h)
-        stroke(0.35, 0.35, 0.35)
-        strokeWeight(1.0)
-        line(axisX - tickLen, py, axisX + tickLen, py)
-        fill(0.55, 0.55, 0.55)
-        text(axisX - 35.0, py + 4.0, formatNum(yTick), 0.22)
+        cmds = concat(cmds, [
+            CmdStroke(0.35, 0.35, 0.35),
+            CmdStrokeWeight(1.0),
+            CmdLine(axisX - tickLen, py, axisX + tickLen, py),
+            CmdFill(0.55, 0.55, 0.55),
+            CmdText(axisX - 35.0, py + 4.0, formatNum(yTick), 0.22)
+        ])
         yTick = yTick + yStep
     }
 
     -- Axis labels
-    fill(0.7, 0.7, 0.7)
-    text(left + w - 30.0, axisY + 28.0, xLabel, 0.28)
-    text(axisX + 8.0, top + 16.0, yLabel, 0.28)
+    cmds = concat(cmds, [
+        CmdFill(0.7, 0.7, 0.7),
+        CmdText(left + w - 30.0, axisY + 28.0, xLabel, 0.28),
+        CmdText(axisX + 8.0, top + 16.0, yLabel, 0.28)
+    ])
+
+    cmds
 }
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- FUNCTION PLOTTING
 -- ═══════════════════════════════════════════════════════════════════════
 
--- Plot f(x) as connected line segments.
-pure plotFunction(_, _, _, _, _, _, _, _, _, _, _, _, _) = (f, left, top, w, h, xMin, xMax, yMin, yMax, samples, r, g, b) {
-    stroke(r, g, b)
-    strokeWeight(2.0)
+-- Build draw commands for f(x) as connected line segments.
+pure plotFunction(plotCallback, float, float, float, float, float, float, float, float, float, float, float, float) = (f, left, top, w, h, xMin, xMax, yMin, yMax, samples, r, g, b) {
+    let cmds = [CmdStroke(r, g, b), CmdStrokeWeight(2.0)]
     let dx = (xMax - xMin) / samples
-    let i = 0
     let prevPx = left + mapX(xMin, xMin, xMax, w)
     let prevPy = top + mapY(f(xMin), yMin, yMax, h)
-    i = 1
+    let i = 1
     while {i <= samples} do {
         let x = xMin + i * dx
         let y = f(x)
         let px = left + mapX(x, xMin, xMax, w)
         let py = top + mapY(y, yMin, yMax, h)
-        line(prevPx, prevPy, px, py)
+        cmds = append(cmds, CmdLine(prevPx, prevPy, px, py))
         prevPx = px
         prevPy = py
         i = i + 1
     }
+    cmds
 }
 
--- Plot f(x) with automatic y-range, axes, and title.
-pure plotFnAuto(_, _, _, _, _, _) = (f, w, h, xMin, xMax, title) {
+-- Build draw commands for f(x) with automatic y-range, axes, and title.
+pure plotFnAuto(plotCallback, float, float, float, float, string) = (f, w, h, xMin, xMax, title) {
     let margin = 60.0
     let plotW = w - margin * 2.0
     let plotH = h - margin * 2.0
@@ -149,64 +167,61 @@ pure plotFnAuto(_, _, _, _, _, _) = (f, w, h, xMin, xMax, title) {
     yMin = yMin - yPad
     yMax = yMax + yPad
 
-    -- Title
-    fill(0.9, 0.9, 0.9)
-    text(w / 2.0 - 40.0, margin / 2.0, title, 0.35)
-
-    -- Axes
-    drawAxes2D(margin, margin, plotW, plotH, xMin, xMax, yMin, yMax, "x", "y")
-
-    -- Plot the function
-    plotFunction(f, margin, margin, plotW, plotH, xMin, xMax, yMin, yMax, samples, 0.3, 0.7, 1.0)
+    -- Compose: title + axes + curve
+    concat(concat(
+        [CmdFill(0.9, 0.9, 0.9), CmdText(w / 2.0 - 40.0, margin / 2.0, title, 0.35)],
+        drawAxes2D(margin, margin, plotW, plotH, xMin, xMax, yMin, yMax, "x", "y")
+    ), plotFunction(f, margin, margin, plotW, plotH, xMin, xMax, yMin, yMax, samples, 0.3, 0.7, 1.0))
 }
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- DATA PLOTTING (ARRAYS)
 -- ═══════════════════════════════════════════════════════════════════════
 
--- Plot connected line segments from parallel x/y arrays.
-pure plotLines(_, _, _, _, _, _, _, _, _, _, _, _, _) = (xs, ys, left, top, w, h, xMin, xMax, yMin, yMax, r, g, b) {
-    stroke(r, g, b)
-    strokeWeight(2.0)
+-- Build draw commands for connected line segments from parallel x/y arrays.
+pure plotLines(Array<float>, Array<float>, float, float, float, float, float, float, float, float, float, float, float) = (xs, ys, left, top, w, h, xMin, xMax, yMin, yMax, r, g, b) {
+    let cmds = [CmdStroke(r, g, b), CmdStrokeWeight(2.0)]
     let i = 0
     while {i < length(xs) - 1} do {
         let px0 = left + mapX(xs[i], xMin, xMax, w)
         let py0 = top + mapY(ys[i], yMin, yMax, h)
         let px1 = left + mapX(xs[i + 1], xMin, xMax, w)
         let py1 = top + mapY(ys[i + 1], yMin, yMax, h)
-        line(px0, py0, px1, py1)
+        cmds = append(cmds, CmdLine(px0, py0, px1, py1))
         i = i + 1
     }
+    cmds
 }
 
--- Plot individual markers from parallel x/y arrays.
-pure plotMarkers(_, _, _, _, _, _, _, _, _, _, _, _, _, _) = (xs, ys, left, top, w, h, xMin, xMax, yMin, yMax, radius, r, g, b) {
-    fill(r, g, b)
+-- Build draw commands for individual markers from parallel x/y arrays.
+pure plotMarkers(Array<float>, Array<float>, float, float, float, float, float, float, float, float, float, float, float, float) = (xs, ys, left, top, w, h, xMin, xMax, yMin, yMax, radius, r, g, b) {
+    let cmds = [CmdFill(r, g, b)]
     let i = 0
     while {i < length(xs)} do {
         let px = left + mapX(xs[i], xMin, xMax, w)
         let py = top + mapY(ys[i], yMin, yMax, h)
-        circle(px, py, radius)
+        cmds = append(cmds, CmdCircle(px, py, radius))
         i = i + 1
     }
+    cmds
 }
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- GRID LAYOUT
 -- ═══════════════════════════════════════════════════════════════════════
 
-pure gridX(_, _, _, _) = (col, cols, w, margin) {
+pure gridX(float, float, float, float) -> float = (col, cols, w, margin) {
     margin + col * (w - margin * 2.0) / cols
 }
 
-pure gridY(_, _, _, _) = (row, rows, h, margin) {
+pure gridY(float, float, float, float) -> float = (row, rows, h, margin) {
     margin + row * (h - margin * 2.0) / rows
 }
 
-pure gridW(_, _, _) = (cols, w, margin) {
+pure gridW(float, float, float) -> float = (cols, w, margin) {
     (w - margin * 2.0) / cols
 }
 
-pure gridH(_, _, _) = (rows, h, margin) {
+pure gridH(float, float, float) -> float = (rows, h, margin) {
     (h - margin * 2.0) / rows
 }

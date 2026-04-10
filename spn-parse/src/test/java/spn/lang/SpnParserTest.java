@@ -159,9 +159,94 @@ class SpnParserTest {
 
         @Test
         void untypedFunction() {
+            // Untyped params can be passed through but not operated on directly
             assertEquals(7L, run("""
-                pure add(_,_) = (a, b) { a + b }
+                pure add(int, int) = (a, b) { a + b }
                 add(3, 4)
+                """));
+        }
+
+        @Test
+        void untypedPassthrough() {
+            // Untyped values can be passed to other _ parameters
+            assertEquals(42L, run("""
+                pure identity(_) = (x) { x }
+                identity(42)
+                """));
+        }
+
+        @Test
+        void untypedArithmeticRejected() {
+            assertThrows(SpnParseException.class, () -> run("""
+                pure add(_, _) = (a, b) { a + b }
+                add(3, 4)
+                """));
+        }
+
+        @Test
+        void untypedComparisonRejected() {
+            assertThrows(SpnParseException.class, () -> run("""
+                pure bigger(_, _) = (a, b) { a > b }
+                bigger(3, 4)
+                """));
+        }
+
+        @Test
+        void functionTypeParam() {
+            // Function name as type: structural matching on signature
+            assertEquals(10L, run("""
+                pure doubler(int) -> int = (x) { x + x }
+                pure apply(doubler, int) -> int = (f, x) { f(x) }
+                apply(doubler, 5)
+                """));
+        }
+
+        @Test
+        void functionTypeStructuralMatch() {
+            // A different function with the same signature should be accepted
+            assertEquals(25L, run("""
+                pure doubler(int) -> int = (x) { x + x }
+                pure squarer(int) -> int = (x) { x * x }
+                pure apply(doubler, int) -> int = (f, x) { f(x) }
+                apply(squarer, 5)
+                """));
+        }
+
+        @Test
+        void untypedCallRejected() {
+            // Calling an untyped parameter as a function is rejected
+            assertThrows(SpnParseException.class, () -> run("""
+                pure apply(_, int) = (f, x) { f(x) }
+                apply(42, 5)
+                """));
+        }
+
+        @Test
+        void actionFunction() {
+            // Action functions can be declared and called
+            assertEquals(42L, run("""
+                action doSomething(int) -> int = (x) { x }
+                doSomething(42)
+                """));
+        }
+
+        @Test
+        void actionCanCallPure() {
+            // Action functions can freely call pure functions
+            assertEquals(10L, run("""
+                pure double_(int) -> int = (x) { x + x }
+                action doWork(int) -> int = (x) { double_(x) }
+                doWork(5)
+                """));
+        }
+
+        @Test
+        void pureCannotCallAction() {
+            // Pure functions cannot call action functions
+            assertThrows(SpnParseException.class, () -> run("""
+                action impureWork(int) -> int = (x) { x }
+                pure tryPure(int) -> int = (x) { impureWork(x) }
+                tryPure(5)
                 """));
         }
     }
