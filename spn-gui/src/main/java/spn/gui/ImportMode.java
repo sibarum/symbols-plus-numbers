@@ -231,6 +231,43 @@ class ImportMode implements Mode {
             }
         }
 
+        // Discover .spn script modules on the classpath
+        try {
+            var symbolTable = new spn.type.SpnSymbolTable();
+            var loader = new spn.lang.ClasspathModuleLoader(null, symbolTable);
+            var registry = new spn.language.SpnModuleRegistry();
+            spn.stdlib.gen.StdlibModuleLoader.registerAll(registry);
+            spn.canvas.CanvasBuiltins.registerModule(registry);
+            registry.addLoader(loader);
+
+            for (String namespace : loader.discoverModules()) {
+                // Skip native modules already shown above
+                if (byModule.containsKey(namespace)) continue;
+                try {
+                    registry.resolve(namespace).ifPresent(mod -> {
+                        var exports = mod.allExportedNames();
+                        // Whole module import
+                        items.add(new ImportItem(namespace, null,
+                                "import " + namespace,
+                                "import " + namespace));
+                        // Individual export imports
+                        for (String exp : exports) {
+                            items.add(new ImportItem(namespace, exp,
+                                    "import " + namespace + " (" + exp + ")",
+                                    "import " + namespace + " (" + exp + ")"));
+                        }
+                    });
+                } catch (Exception e) {
+                    // Skip modules that fail to parse — still show the module-level import
+                    items.add(new ImportItem(namespace, null,
+                            "import " + namespace,
+                            "import " + namespace));
+                }
+            }
+        } catch (Exception e) {
+            // Best-effort: continue with what we have
+        }
+
         // Add module context files as importable namespaces
         ModuleContext ctx = window.getModuleContext();
         if (ctx != null) {
