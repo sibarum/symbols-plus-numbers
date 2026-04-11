@@ -3,7 +3,7 @@
 -- All functions are pure: they compute arrays of DrawCmd values.
 -- Use render() from spn.canvas.draw to execute them.
 
-import Array (concat, append)
+import Array (concat, append, length)
 import Math
 import String (formatNum)
 import spn.canvas.draw

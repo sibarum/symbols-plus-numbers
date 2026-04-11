@@ -5,7 +5,7 @@ package spn.gui;
  * controls what is rendered in the window area (above the HUD).
  *
  * <p>EditorWindow maintains a mode stack; the topmost mode is active.
- * {@link EditorMode} is always at the bottom of the stack.
+ * {@link TabViewMode} is always at the bottom of the stack.
  */
 public interface Mode {
 

@@ -4,7 +4,6 @@ import spn.canvas.node.*;
 import spn.language.SpnModule;
 import spn.language.SpnModuleRegistry;
 import spn.node.BuiltinFactory;
-import spn.node.array.SpnArrayLengthNodeGen;
 import spn.stdlib.string.SpnShowNodeGen;
 
 import java.util.Map;
@@ -53,8 +52,6 @@ public final class CanvasBuiltins {
     }
 
     private static void addUtilities(Map<String, BuiltinFactory> r) {
-        // Array (not yet in stdlib generator)
-        r.put("length",    args -> SpnArrayLengthNodeGen.create(args[0]));
         // String conversion alias
         r.put("str",       args -> SpnShowNodeGen.create(args[0]));
     }

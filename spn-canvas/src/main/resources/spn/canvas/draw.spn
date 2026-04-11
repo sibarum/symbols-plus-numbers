@@ -6,6 +6,7 @@
 -- This separation means all scene computation is pure, composable,
 -- and amenable to memoization, parallelization, or GPU transpilation.
 
+import Array (length)
 import Canvas
 
 -- ═══════════════════════════════════════════════════════════════════════

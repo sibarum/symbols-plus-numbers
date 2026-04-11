@@ -294,6 +294,99 @@ class SpnParserTest {
         }
     }
 
+    // ── Field access and methods ──────────────────────────────────────────
+
+    @Nested
+    class FieldsAndMethods {
+        @Test
+        void fieldAccess() {
+            assertEquals(3.0, run("""
+                struct Point(x: Double, y: Double)
+                let p = Point(3.0, 4.0)
+                p.x
+                """));
+        }
+
+        @Test
+        void fieldAccessSecond() {
+            assertEquals(4.0, run("""
+                struct Point(x: Double, y: Double)
+                let p = Point(3.0, 4.0)
+                p.y
+                """));
+        }
+
+        @Test
+        void methodDeclaration() {
+            assertEquals(25.0, run("""
+                struct Point(x: Double, y: Double)
+                pure Point.squaredLength() -> float = () {
+                    this.x * this.x + this.y * this.y
+                }
+                let p = Point(3.0, 4.0)
+                p.squaredLength()
+                """));
+        }
+
+        @Test
+        void methodWithArgs() {
+            assertEquals(2.0, run("""
+                struct Point(x: Double, y: Double)
+                pure Point.add(Point) -> Point = (other) {
+                    Point(this.x + other.x, this.y + other.y)
+                }
+                let a = Point(1.0, 0.5)
+                let b = Point(1.0, 1.5)
+                let c = a.add(b)
+                c.x
+                """));
+        }
+
+        @Test
+        void chainedFieldAccess() {
+            assertEquals(7.0, run("""
+                struct Point(x: Double, y: Double)
+                struct Line(start: Point, end: Point)
+                let l = Line(Point(3.0, 4.0), Point(7.0, 8.0))
+                l.end.x
+                """));
+        }
+
+        @Test
+        void positionalAccessOnTuple() {
+            assertEquals(10L, run("""
+                let t = (10, 20, 30)
+                t.0
+                """));
+        }
+
+        @Test
+        void positionalAccessSecond() {
+            assertEquals(20L, run("""
+                let t = (10, 20, 30)
+                t.1
+                """));
+        }
+
+        @Test
+        void positionalAccessOnType() {
+            assertEquals(3L, run("""
+                type Rational(int, int)
+                let r = Rational(3, 7)
+                r.0
+                """));
+        }
+
+        @Test
+        void positionalAndNamedCoexist() {
+            assertEquals(4.0, run("""
+                struct Point(x: Double, y: Double)
+                let p = Point(3.0, 4.0)
+                p.1
+                """));
+        }
+    }
+
     // ── Pattern matching ───────────────────────────────────────────────────
 
     @Nested

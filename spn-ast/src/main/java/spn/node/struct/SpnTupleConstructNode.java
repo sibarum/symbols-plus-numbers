@@ -37,6 +37,10 @@ public final class SpnTupleConstructNode extends SpnExpressionNode {
     @CompilationFinal
     private final boolean needsValidation;
 
+    public SpnTupleDescriptor getDescriptor() {
+        return descriptor;
+    }
+
     public SpnTupleConstructNode(SpnTupleDescriptor descriptor,
                                  SpnExpressionNode... elementNodes) {
         this.descriptor = descriptor;

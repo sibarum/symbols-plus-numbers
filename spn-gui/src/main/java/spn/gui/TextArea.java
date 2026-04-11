@@ -313,8 +313,17 @@ public class TextArea {
                 List<Token> tokens = highlightCache.getTokens(row, line);
                 ColorSpan[] spans = tokens.stream()
                         .filter(t -> t.type() != TokenType.WHITESPACE)
-                        .map(t -> new ColorSpan(t.startCol(), t.endCol(),
-                                t.type().r, t.type().g, t.type().b))
+                        .map(t -> {
+                            float cr = t.type().r, cg = t.type().g, cb = t.type().b;
+                            // Special identifiers get keyword coloring
+                            if (t.type() == TokenType.IDENTIFIER) {
+                                String text = line.substring(t.startCol(), Math.min(t.endCol(), line.length()));
+                                if (text.equals("this") || text.equals("true") || text.equals("false")) {
+                                    cr = TokenType.KEYWORD.r; cg = TokenType.KEYWORD.g; cb = TokenType.KEYWORD.b;
+                                }
+                            }
+                            return new ColorSpan(t.startCol(), t.endCol(), cr, cg, cb);
+                        })
                         .toArray(ColorSpan[]::new);
                 font.drawColoredLine(line, spans, textX, y, fontScale, startCol, endCol);
             }
@@ -494,12 +503,12 @@ public class TextArea {
                 int rB = cursorRow, cB = cursorCol;
                 String selRem = removeSelection();
                 int eRow = cursorRow, eCol = cursorCol;
-                for (int i = 0; i < 4; i++) {
+                for (int i = 0; i < 2; i++) {
                     buffer.insertChar(cursorRow, cursorCol, ' ');
                     cursorCol++;
                 }
                 if (!undoRedoInProgress)
-                    undo.record(eRow, eCol, selRem, "    ", rB, cB, cursorRow, cursorCol);
+                    undo.record(eRow, eCol, selRem, "  ", rB, cB, cursorRow, cursorCol);
             }
 
             case GLFW_KEY_A -> {

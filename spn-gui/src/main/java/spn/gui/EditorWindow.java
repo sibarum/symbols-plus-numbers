@@ -31,16 +31,14 @@ public class EditorWindow {
 
     private final long handle;
     private SdfFontRenderer font;
-    private TextArea textArea;   // legacy TextArea (used by EditorMode/templates)
 
     // spn-stdui window frame — owns ModeManager and new Hud
     private WindowFrame frame;
 
-    private final ActionRegistry actionRegistry = new ActionRegistry();
+    // Tab system — replaces single TextArea/file state
+    private TabView tabView;
 
-    private Path currentFile;
-    private String savedContent = "";  // snapshot of content at last save/load
-    private ModuleContext moduleContext; // cached module info (nullable)
+    private final ActionRegistry actionRegistry = new ActionRegistry();
     private final LogBuffer logBuffer = new LogBuffer();
     private boolean initialized;
 
@@ -92,33 +90,21 @@ public class EditorWindow {
             return false;
         });
 
-        // Legacy components (still used by EditorMode and template system)
-        ScrollbarTheme sbTheme = ScrollbarTheme.dark();
+        // Tab system — first tab is an empty editor
+        tabView = new TabView(font);
+        tabView.addTab(new EditorTab(this));
 
-        textArea = new TextArea(font);
-        textArea.setClipboard(new TextArea.ClipboardHandler() {
-            @Override public void set(String text) { glfwSetClipboardString(handle, text); }
-            @Override public String get() { return glfwGetClipboardString(handle); }
-        });
-
-        Scrollbar vScroll = new Scrollbar(font, Scrollbar.Orientation.VERTICAL);
-        vScroll.setTheme(sbTheme);
-        vScroll.setOnChange(v -> textArea.setScrollRow(v));
-
-        Scrollbar hScroll = new Scrollbar(font, Scrollbar.Orientation.HORIZONTAL);
-        hScroll.setTheme(sbTheme);
-        hScroll.setOnChange(v -> textArea.setScrollCol(v));
-
-
-        // EditorMode (legacy) is always at the bottom — suppress SUBMIT/CANCEL
-        // so Ctrl+Space and Ctrl+Backspace reach it as normal keystrokes
-        EditorMode editorMode = new EditorMode(this, textArea, vScroll, hScroll);
+        // TabViewMode sits at the bottom of the mode stack — suppress SUBMIT/CANCEL
+        TabViewMode tabViewMode = new TabViewMode(this, tabView);
         frame.getModeManager().push(new LegacyModeAdapter(
-                editorMode, this::getSize,
+                tabViewMode, this::getSize,
                 java.util.Set.of(ControlSignal.SUBMIT, ControlSignal.CANCEL)));
 
         registerActions();
         setupCallbacks();
+
+        // Show splash screen when starting with no file
+        pushLegacyMode(new SplashMode(this));
     }
 
     // ---- Mode stack (bridged to spn-stdui ModeManager) ------------------
@@ -128,7 +114,7 @@ public class EditorWindow {
         frame.getModeManager().push(new LegacyModeAdapter(mode, this::getSize));
     }
 
-    /** Pop the active mode. Never pops the bottom (EditorMode). */
+    /** Pop the active mode. Never pops the bottom (TabViewMode). */
     public void popMode() {
         frame.getModeManager().pop();
     }
@@ -142,25 +128,27 @@ public class EditorWindow {
     // ---- Action registration --------------------------------------------
 
     private void registerActions() {
-        actionRegistry.register("New",           "File", "Ctrl+N",       () -> pushLegacyMode(new NewMenuMode(this)));
-        actionRegistry.register("Open File",     "File", "Ctrl+O",       this::openFile);
-        actionRegistry.register("Save File",     "File", "Ctrl+S",       () -> saveFile(false));
-        actionRegistry.register("Save As",       "File", "Ctrl+Shift+S", () -> saveFile(true));
-        actionRegistry.register("Run",           "Run",  "F5",           this::runCurrentFile);
-        actionRegistry.register("Undo",          "Edit", "Ctrl+Z",       () -> textArea.performUndo());
-        actionRegistry.register("Redo",          "Edit", "Ctrl+Y",       () -> textArea.performRedo());
-        actionRegistry.register("Zoom In",       "View", "Ctrl+=",       () -> textArea.zoomIn());
-        actionRegistry.register("Zoom Out",      "View", "Ctrl+-",       () -> textArea.zoomOut());
-        actionRegistry.register("Zoom Reset",    "View", "Ctrl+0",       () -> textArea.zoomReset());
-        actionRegistry.register("Shapes Sample", "Sample", "F1",         () -> openSample(SAMPLES[0]));
-        actionRegistry.register("Plot Sample",   "Sample", "F2",         () -> openSample(SAMPLES[1]));
-        actionRegistry.register("Action Menu",   "View",   "Ctrl+P",
-                () -> pushLegacyMode(new ActionMenuMode(this, actionRegistry)));
-        actionRegistry.register("Module Browser", "File",   "Ctrl+M",
-                () -> {
-                    if (moduleContext != null) pushLegacyMode(new ModuleMode(this, moduleContext));
-                    else flash("No module loaded \u2014 cannot find module.spn", true);
-                });
+        actionRegistry.register("New",           "File",   "Ctrl+N",       "Open a new empty editor tab.",                          this::openNewTab);
+        actionRegistry.register("Open File",     "File",   "Ctrl+O",       "Open a file from disk in a new tab. Switches to it if already open.", this::openFile);
+        actionRegistry.register("Save File",     "File",   "Ctrl+S",       "Save the active editor tab to disk.",                   () -> saveFile(false));
+        actionRegistry.register("Save As",       "File",   "Ctrl+Shift+S", "Save the active editor tab to a new file path.",        () -> saveFile(true));
+        actionRegistry.register("Run",           "Run",    "F5",           "Parse and execute the active tab's SPN source. Canvas output opens a separate window.", this::runCurrentFile);
+        actionRegistry.register("Undo",          "Edit",   "Ctrl+Z",       "Undo the last edit in the active editor.",              () -> { TextArea ta = getTextArea(); if (ta != null) ta.performUndo(); });
+        actionRegistry.register("Redo",          "Edit",   "Ctrl+Y",       "Redo a previously undone edit.",                        () -> { TextArea ta = getTextArea(); if (ta != null) ta.performRedo(); });
+        actionRegistry.register("Zoom In",       "View",   "Ctrl+=",       "Increase editor font size.",                            () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomIn(); });
+        actionRegistry.register("Zoom Out",      "View",   "Ctrl+-",       "Decrease editor font size.",                            () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomOut(); });
+        actionRegistry.register("Zoom Reset",    "View",   "Ctrl+0",       "Reset editor font size to default.",                    () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomReset(); });
+        actionRegistry.register("Shapes Sample", "Sample", "F1",           "Load the canvas shapes demo into a tab.",               () -> openSample(SAMPLES[0]));
+        actionRegistry.register("Plot Sample",   "Sample", "F2",           "Load the function plot demo into a tab.",                () -> openSample(SAMPLES[1]));
+        actionRegistry.register("Logs",          "View",   "Ctrl+G",       "Open the execution log viewer in a tab. Shows run results, errors, and messages.", this::openLogTab);
+        actionRegistry.register("Action Menu",   "View",   "Ctrl+P",       "Open the command palette for quick action search.",     () -> pushLegacyMode(new ActionMenuMode(this, actionRegistry)));
+        actionRegistry.register("Import Browser","File",   "Ctrl+I",       "Search and insert import statements for modules and their exports.", () -> pushLegacyMode(new ImportMode(this)));
+        actionRegistry.register("Module Browser","File",   "Ctrl+M",       "Browse files within the current module. Requires a module.spn in a parent directory.", () -> {
+            ModuleContext ctx = getModuleContext();
+            if (ctx != null) pushLegacyMode(new ModuleMode(this, ctx));
+            else flash("No module loaded \u2014 cannot find module.spn", true);
+        });
+        actionRegistry.register("Help",          "Help",   "Ctrl+/",       "Open the help search. Search commands, shortcuts, and API reference.", () -> pushLegacyMode(new HelpMode(this, actionRegistry)));
     }
 
     // ---- Accessors -------------------------------------------------------
@@ -174,13 +162,24 @@ public class EditorWindow {
 
     public ActionRegistry getActionRegistry() { return actionRegistry; }
 
-    public TextArea getTextArea() { return textArea; }
+    /** Returns the active editor tab's TextArea, or null if no editor tab is active. */
+    public TextArea getTextArea() {
+        Tab active = tabView.getActiveTab();
+        if (active instanceof EditorTab et) return et.getTextArea();
+        return null;
+    }
 
     public SdfFontRenderer getFont() { return font; }
 
-    public ModuleContext getModuleContext() { return moduleContext; }
+    public ModuleContext getModuleContext() {
+        Tab active = tabView.getActiveTab();
+        if (active instanceof EditorTab et) return et.getModuleContext();
+        return null;
+    }
 
     public LogBuffer getLogBuffer() { return logBuffer; }
+
+    public TabView getTabView() { return tabView; }
 
     /** Flash a message in the HUD and append it to the log. */
     public void flash(String message, boolean isError) {
@@ -190,19 +189,84 @@ public class EditorWindow {
 
     WindowFrame getFrame() { return frame; }
 
-    String getSavedContent() { return savedContent; }
+    String getSavedContent() {
+        Tab active = tabView.getActiveTab();
+        if (active instanceof EditorTab et) return et.getSavedContent();
+        return "";
+    }
 
-    /** Reset the editor to a blank, untitled state. */
+    /** Get the active editor tab, or null. */
+    EditorTab getActiveEditorTab() {
+        Tab active = tabView.getActiveTab();
+        return active instanceof EditorTab et ? et : null;
+    }
+
+    /** Open a new empty editor tab. */
+    void openNewTab() {
+        EditorTab tab = new EditorTab(this);
+        tabView.addTab(tab);
+        updateTitle();
+    }
+
+    /** Open a new editor tab with initial content. */
+    void openNewTab(String content) {
+        EditorTab tab = new EditorTab(this);
+        tab.loadContent(content);
+        tabView.addTab(tab);
+        updateTitle();
+    }
+
+    /** Open the log tab, or switch to it if already open. */
+    void openLogTab() {
+        Tab existing = tabView.findTab(t -> t instanceof LogTab);
+        if (existing != null) {
+            tabView.switchTo(existing);
+        } else {
+            tabView.addTab(new LogTab(this));
+        }
+    }
+
+    /** Handle Escape on the tab view: close active tab (with dirty prompt if needed). */
+    void handleTabClose() {
+        Tab active = tabView.getActiveTab();
+        if (active == null) return;
+
+        // Log tab: close without prompt
+        if (active instanceof LogTab) {
+            tabView.closeActiveTab();
+            if (tabView.tabCount() == 0) {
+                // No tabs left — open a fresh editor tab
+                openNewTab();
+            }
+            return;
+        }
+
+        // Editor tab: check dirty
+        if (active instanceof EditorTab et) {
+            if (et.isDirty()) {
+                pushLegacyMode(new ConfirmExitMode(this));
+            } else {
+                tabView.closeActiveTab();
+                if (tabView.tabCount() == 0) {
+                    openNewTab();
+                }
+                updateTitle();
+            }
+        }
+    }
+
+    /** Reset the active editor tab to a blank state. */
     void clearForNewFile() {
         clearForNewFile("");
     }
 
-    /** Reset the editor with the given initial content (treated as clean). */
     void clearForNewFile(String content) {
-        textArea.setText(content);
-        currentFile = null;
-        savedContent = content;
-        moduleContext = null;
+        EditorTab et = getActiveEditorTab();
+        if (et != null) {
+            et.loadContent(content);
+            et.setFilePath(null);
+            et.setModuleContext(null);
+        }
         glfwSetWindowTitle(handle, "untitled - Symbols+Numbers");
     }
 
@@ -226,15 +290,16 @@ public class EditorWindow {
      * - Otherwise push a ConfirmExitMode.
      */
     private void handleCloseRequest() {
-        // If there are modes above the base editor, pop one instead of closing
+        // If there are modes above the base tab view, pop one instead of closing
         if (frame.getModeManager().depth() > 1) {
             frame.getModeManager().pop();
             return;
         }
 
-        // Base editor is the only mode — check if content is dirty
-        boolean dirty = !textArea.getText().equals(savedContent);
-        if (!dirty) {
+        // Check if any editor tab has unsaved changes
+        boolean anyDirty = tabView.getTabs().stream()
+                .anyMatch(t -> t instanceof EditorTab et && et.isDirty());
+        if (!anyDirty) {
             requestClose();
             return;
         }
@@ -272,15 +337,17 @@ public class EditorWindow {
             }
             String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
 
-            if (currentFile == null && textArea.getText().isBlank()) {
-                textArea.setText(content);
-                savedContent = content;
-                currentFile = null;
+            EditorTab et = getActiveEditorTab();
+            if (et != null && et.getFilePath() == null && et.getTextArea().getText().isBlank()) {
+                // Load into current empty tab
+                et.loadContent(content);
                 glfwSetWindowTitle(handle, sample.label() + " - Symbols+Numbers");
             } else {
-                EditorWindow ew = Main.instance.spawnWindow();
-                ew.textArea.setText(content);
-                glfwSetWindowTitle(ew.handle, sample.label() + " - Symbols+Numbers");
+                // Open in a new tab
+                EditorTab newTab = new EditorTab(this);
+                newTab.loadContent(content);
+                tabView.addTab(newTab);
+                glfwSetWindowTitle(handle, sample.label() + " - Symbols+Numbers");
             }
         } catch (IOException e) {
             flash("Error loading sample: " + e.getMessage(), true);
@@ -290,7 +357,10 @@ public class EditorWindow {
     // ---- Build & Run ----------------------------------------------------
 
     void runCurrentFile() {
-        String source = textArea.getText();
+        EditorTab et = getActiveEditorTab();
+        if (et == null) { flash("No editor tab active", true); return; }
+        String source = et.getTextArea().getText();
+        Path currentFile = et.getFilePath();
         String fileName = currentFile != null ? currentFile.getFileName().toString() : "untitled";
         if (source.isBlank()) {
             flash("[" + fileName + "] Nothing to run", true);
@@ -343,19 +413,27 @@ public class EditorWindow {
 
     // ---- Module detection ------------------------------------------------
 
-    private void detectModule(Path filePath) {
-        // Skip if the file is already inside the cached module
-        if (moduleContext != null && moduleContext.contains(filePath)) return;
-        // Scan up for module.spn
-        moduleContext = ModuleContext.detect(filePath);
-        if (moduleContext != null) {
-            flash("Module: " + moduleContext.getNamespace(), false);
+    private void detectModule(EditorTab tab, Path filePath) {
+        if (tab.getModuleContext() != null && tab.getModuleContext().contains(filePath)) return;
+        ModuleContext ctx = ModuleContext.detect(filePath);
+        tab.setModuleContext(ctx);
+        if (ctx != null) {
+            flash("Module: " + ctx.getNamespace(), false);
         }
     }
 
     // ---- File operations ------------------------------------------------
 
     void loadFile(Path path) throws IOException {
+        // Check if this file is already open in a tab
+        Tab existing = tabView.findTab(t ->
+                t instanceof EditorTab et && path.equals(et.getFilePath()));
+        if (existing != null) {
+            tabView.switchTo(existing);
+            updateTitle();
+            return;
+        }
+
         String content = Files.readString(path);
 
         // .spnt files get a dialog: instantiate or edit
@@ -367,21 +445,32 @@ public class EditorWindow {
         loadFileDirectly(path, content);
     }
 
-    /** Load file content into the editor without any .spnt interception. */
+    /** Load file content into the editor — opens in current tab if empty, new tab otherwise. */
     public void loadFileDirectly(Path path, String content) {
-        textArea.setText(content);
-        currentFile = path;
-        savedContent = content;
-        detectModule(path);
+        EditorTab et = getActiveEditorTab();
+        if (et != null && et.getFilePath() == null && et.getTextArea().getText().isBlank()) {
+            // Reuse current empty tab
+            et.loadContent(content);
+            et.setFilePath(path);
+            detectModule(et, path);
+        } else {
+            // Open in new tab
+            et = new EditorTab(this);
+            et.loadContent(content);
+            et.setFilePath(path);
+            tabView.addTab(et);
+            detectModule(et, path);
+        }
         updateTitle();
     }
 
     /** Parse a .spnt template and enter instantiation mode. */
     public void loadTemplateForInstantiation(Path path, String content) {
-        // Set the file context (so title shows the template name)
-        currentFile = path;
+        EditorTab et = getActiveEditorTab();
+        if (et != null) {
+            et.setFilePath(path);
+        }
         updateTitle();
-        // Push instantiation mode — it loads editable text into textArea
         pushLegacyMode(new spn.gui.template.TemplateInstantiationMode(this, content));
     }
 
@@ -395,7 +484,9 @@ public class EditorWindow {
     }
 
     void openFile() {
-        String defaultPath = currentFile != null ? currentFile.toString() : "";
+        EditorTab activeTab = getActiveEditorTab();
+        Path activePath = activeTab != null ? activeTab.getFilePath() : null;
+        String defaultPath = activePath != null ? activePath.toString() : "";
         String path = org.lwjgl.util.tinyfd.TinyFileDialogs.tinyfd_openFileDialog(
                 "Open File", defaultPath, Main.SPN_FILTER, "SPN / Text files", false);
         if (path == null) return;
@@ -408,7 +499,9 @@ public class EditorWindow {
     }
 
     public void saveFile(boolean saveAs) {
-        Path target = currentFile;
+        EditorTab et = getActiveEditorTab();
+        if (et == null) return;
+        Path target = et.getFilePath();
         if (target == null || saveAs) {
             String defaultPath = target != null ? target.toString() : "";
             String path = org.lwjgl.util.tinyfd.TinyFileDialogs.tinyfd_saveFileDialog(
@@ -417,10 +510,10 @@ public class EditorWindow {
             target = Path.of(path);
         }
         try {
-            String content = textArea.getText();
+            String content = et.getTextArea().getText();
             Files.writeString(target, content);
-            currentFile = target;
-            savedContent = content;
+            et.setFilePath(target);
+            et.setSavedContent(content);
             updateTitle();
         } catch (IOException e) {
             org.lwjgl.util.tinyfd.TinyFileDialogs.tinyfd_messageBox(
@@ -429,7 +522,11 @@ public class EditorWindow {
     }
 
     private void updateTitle() {
-        String name = currentFile != null ? currentFile.getFileName().toString() : "untitled";
+        EditorTab et = getActiveEditorTab();
+        String name = "untitled";
+        if (et != null && et.getFilePath() != null) {
+            name = et.getFilePath().getFileName().toString();
+        }
         glfwSetWindowTitle(handle, name + " - Symbols+Numbers");
     }
 

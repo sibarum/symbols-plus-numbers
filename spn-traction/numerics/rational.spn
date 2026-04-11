@@ -1,0 +1,39 @@
+import Math (abs, sign, gcd)
+
+type Rational (int, int)
+
+pure Rational.inv() -> Rational = () {
+  Rational(sign(this.0)*this.1, abs(this.0))
+}
+
+pure Rational.neg() -> Rational = () {
+  Rational(-this.0, this.1)
+}
+
+pure Rational.canonical() -> Rational = () {
+  let g = gcd(abs(this.0), abs(this.1))
+  let n = this.0 / g
+  let d = this.1 / g
+  if d < 0 {
+    Rational(-n, -d)
+  } else {
+    Rational(n, d)
+  }
+}
+
+pure +(Rational, Rational) -> Rational = ((q1n, q1d), (q2n, q2d)) {
+  Rational(q1n*q2d + q2n*q1d, q1d*q2d)
+}
+
+pure -(Rational, Rational) -> Rational = (q1, q2) {
+  q1 + q2.neg()
+}
+
+pure *(Rational, Rational) -> Rational = ((q1n, q1d), (q2n, q2d)) {
+  Rational(q1n*q2n, q1d*q2d)
+}
+
+pure /(Rational, Rational) -> Rational = (q1, q2) {
+  q1 * q2.inv()
+}
+

@@ -30,7 +30,7 @@ public final class SpnSymbol {
     private final String name;
     private final long id;
 
-    SpnSymbol(String name, long id) {
+    public SpnSymbol(String name, long id) {
         this.name = name;
         this.id = id;
     }

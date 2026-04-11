@@ -542,7 +542,9 @@ public final class StdlibRegistryGenerator {
             List<BuiltinInfo> fns = entry.getValue();
             String varName = module.toLowerCase() + "Builder";
 
-            out.println("        var " + varName + " = SpnModule.builder(\"" + module + "\");");
+            boolean hasImpure = fns.stream().anyMatch(b -> !b.pure());
+            out.println("        var " + varName + " = SpnModule.builder(\"" + module + "\")"
+                    + (hasImpure ? ".impure()" : "") + ";");
 
             for (BuiltinInfo b : fns) {
                 if (!b.hasCallTargetCtor()) {

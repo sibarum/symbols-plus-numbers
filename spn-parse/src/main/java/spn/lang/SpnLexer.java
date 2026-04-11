@@ -59,7 +59,9 @@ public class SpnLexer {
             }
 
             // regex literal — only if not preceded by value-producing token
-            if (ch == '/' && !isValueToken(prevNonWs)) {
+            // and not followed by '(' (which indicates operator overload: pure /(Type, Type))
+            if (ch == '/' && !isValueToken(prevNonWs)
+                    && !(pos + 1 < len && line.charAt(pos + 1) == '(')) {
                 pos++;
                 while (pos < len) {
                     char c = line.charAt(pos);
