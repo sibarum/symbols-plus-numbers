@@ -441,11 +441,11 @@ public final class StdlibRegistryGenerator {
         return null;
     }
 
-    /** Picks the wider of two SPN types (e.g., Long + Double → Double). */
+    /** Picks the wider of two SPN types. Mixed numeric types → untyped (polymorphic). */
     private static String widenType(String existing, String candidate) {
         if (existing.equals(candidate)) return existing;
-        // Long + Double → Double (numeric widening)
-        if (Set.of("Long", "Double").containsAll(Set.of(existing, candidate))) return "Double";
+        // Long + Double → untyped (function is polymorphic, return type depends on input)
+        if (Set.of("Long", "Double").containsAll(Set.of(existing, candidate))) return "_";
         // Object or mismatched types → untyped
         return "_";
     }

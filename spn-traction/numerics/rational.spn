@@ -2,23 +2,23 @@ import Math (abs, sign, gcd)
 
 type Rational (int, int)
 
+pure Rational(int, int) -> Rational = (n, d) {
+  let g = gcd(abs(n), abs(d))
+  match d
+  | 0 -> { this(-n / g, -d / g) }
+  | _ -> { this(n / g, d / g) }
+}
+
+pure Rational(int) -> Rational = (n) {
+  this(n, 1)
+}
+
 pure Rational.inv() -> Rational = () {
   Rational(sign(this.0)*this.1, abs(this.0))
 }
 
 pure Rational.neg() -> Rational = () {
   Rational(-this.0, this.1)
-}
-
-pure Rational.canonical() -> Rational = () {
-  let g = gcd(abs(this.0), abs(this.1))
-  let n = this.0 / g
-  let d = this.1 / g
-  if d < 0 {
-    Rational(-n, -d)
-  } else {
-    Rational(n, d)
-  }
 }
 
 pure +(Rational, Rational) -> Rational = ((q1n, q1d), (q2n, q2d)) {
@@ -36,4 +36,6 @@ pure *(Rational, Rational) -> Rational = ((q1n, q1d), (q2n, q2d)) {
 pure /(Rational, Rational) -> Rational = (q1, q2) {
   q1 * q2.inv()
 }
+
+let x = Rational(3,6) + Rational(5,15)
 

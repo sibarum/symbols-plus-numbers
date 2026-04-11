@@ -135,7 +135,11 @@ public class SpnTokenizer {
         if (tok != null) {
             return new SpnParseException(message, sourceName, tok.line(), tok.col());
         }
-        return new SpnParseException(message, sourceName, -1, -1);
+        // At end of input — use last consumed token's position if available
+        if (lastConsumed != null) {
+            return new SpnParseException(message, sourceName, lastConsumed.line(), lastConsumed.col());
+        }
+        return new SpnParseException(message, sourceName, 1, 1);
     }
 
     public SpnParseException error(String message, SpnParseToken tok) {

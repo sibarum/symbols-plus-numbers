@@ -91,6 +91,18 @@ public class TextArea {
     private final UndoManager undo = new UndoManager();
     private boolean undoRedoInProgress;
 
+    // Diagnostic overlay (optional — set by EditorTab for error highlighting)
+    private spn.gui.diagnostic.DiagnosticOverlay diagnosticOverlay;
+    private Runnable onEditCallback; // notified on any edit for debounce
+
+    public void setDiagnosticOverlay(spn.gui.diagnostic.DiagnosticOverlay overlay) {
+        this.diagnosticOverlay = overlay;
+    }
+
+    public void setOnEditCallback(Runnable callback) {
+        this.onEditCallback = callback;
+    }
+
     // ------------------------------------------------------------------
     // Public API
     // ------------------------------------------------------------------
@@ -110,11 +122,15 @@ public class TextArea {
         this.buffer = new TextBuffer();
         buffer.setChangeListener((type, row) -> {
             switch (type) {
-                case TextBuffer.ChangeListener.LINE_CHANGED  -> highlightCache.invalidateLine(row);
+                case TextBuffer.ChangeListener.LINE_CHANGED  -> {
+                    highlightCache.invalidateLine(row);
+                    if (diagnosticOverlay != null) diagnosticOverlay.markLineStale(row);
+                }
                 case TextBuffer.ChangeListener.LINE_INSERTED -> highlightCache.insertLine(row);
                 case TextBuffer.ChangeListener.LINE_REMOVED  -> highlightCache.removeLine(row);
                 case TextBuffer.ChangeListener.BULK_CHANGE   -> highlightCache.invalidateAll();
             }
+            if (onEditCallback != null) onEditCallback.run();
         });
         recomputeMetrics();
     }
@@ -298,6 +314,13 @@ public class TextArea {
                 float rw = (drawEnd - drawStart) * cellWidth;
                 font.drawRect(rx, ry, rw, cellHeight, 0.2f, 0.35f, 0.55f);
             }
+        }
+
+        // Diagnostic overlays (error underlines, stale hazes)
+        if (diagnosticOverlay != null && !diagnosticOverlay.isEmpty()) {
+            diagnosticOverlay.render(font, textX, textY, cellWidth, cellHeight,
+                    HIGHLIGHT_OFFSET_Y, scrollRow, scrollCol, visibleRows, visibleCols,
+                    r -> r < buffer.lineCount() ? buffer.lineLength(r) : 0);
         }
 
         // Text (syntax-highlighted)

@@ -74,6 +74,18 @@ public final class SpnFunctionRootNode extends RootNode {
     @CompilationFinal
     private final boolean needsReturnValidation;
 
+    // Source location for error messages
+    @CompilationFinal private String sourceFile;
+    @CompilationFinal private int sourceLine = -1;
+    @CompilationFinal private int sourceCol = -1;
+
+    /** Set source position for error reporting. */
+    public void setSourcePosition(String file, int line, int col) {
+        this.sourceFile = file;
+        this.sourceLine = line;
+        this.sourceCol = col;
+    }
+
     public SpnFunctionRootNode(SpnLanguage language, FrameDescriptor frameDescriptor,
                                SpnFunctionDescriptor descriptor, int[] paramSlots,
                                spn.node.SpnExpressionNode body) {
@@ -140,10 +152,13 @@ public final class SpnFunctionRootNode extends RootNode {
 
     private void validateReturn(Object result) {
         if (!returnType.accepts(result)) {
-            throw new SpnException("Function '" + descriptor.getName()
+            String msg = "Function '" + descriptor.getName()
                     + "' return type is " + returnType.describe()
-                    + ", but body produced " + SpnTypeName.of(result),
-                    this);
+                    + ", but body produced " + SpnTypeName.of(result);
+            if (sourceLine >= 0) {
+                throw new SpnException(msg, sourceFile, sourceLine, sourceCol);
+            }
+            throw new SpnException(msg, this);
         }
     }
 

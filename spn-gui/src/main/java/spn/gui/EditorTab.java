@@ -1,5 +1,8 @@
 package spn.gui;
 
+import spn.gui.diagnostic.DiagnosticEngine;
+import spn.gui.diagnostic.DiagnosticMark;
+import spn.gui.diagnostic.DiagnosticOverlay;
 import spn.stdui.buffer.UndoManager;
 import spn.stdui.widget.ScrollbarTheme;
 
@@ -26,6 +29,10 @@ public class EditorTab implements Tab {
     private String savedContent = "";
     private ModuleContext moduleContext;
 
+    // Real-time diagnostics
+    private final DiagnosticOverlay diagnosticOverlay = new DiagnosticOverlay();
+    private final DiagnosticEngine diagnosticEngine = new DiagnosticEngine(diagnosticOverlay);
+
     EditorTab(EditorWindow window) {
         this.window = window;
         this.textArea = new TextArea(window.getFont());
@@ -37,6 +44,11 @@ public class EditorTab implements Tab {
                 return org.lwjgl.glfw.GLFW.glfwGetClipboardString(window.getHandle());
             }
         });
+
+        // Connect diagnostic overlay to TextArea
+        textArea.setDiagnosticOverlay(diagnosticOverlay);
+        textArea.setOnEditCallback(() ->
+                diagnosticEngine.notifyEdit(org.lwjgl.glfw.GLFW.glfwGetTime()));
 
         ScrollbarTheme sbTheme = ScrollbarTheme.dark();
         vScroll = new Scrollbar(window.getFont(), Scrollbar.Orientation.VERTICAL);
@@ -85,6 +97,11 @@ public class EditorTab implements Tab {
 
     @Override
     public void render(float x, float y, float width, float height) {
+        // Tick the diagnostic engine (debounced re-parse)
+        double now = org.lwjgl.glfw.GLFW.glfwGetTime();
+        String fileName = filePath != null ? filePath.getFileName().toString() : "untitled";
+        diagnosticEngine.update(now, textArea.getText(), fileName);
+
         float hudH = window.getHudHeight();
         float bottomBar = hudH + SCROLLBAR_SIZE;
 
@@ -213,6 +230,12 @@ public class EditorTab implements Tab {
 
     @Override
     public String hudText() {
+        // If cursor is on a line with a diagnostic, show the error message
+        DiagnosticMark mark = diagnosticOverlay.findOnRow(textArea.getCursorRow());
+        if (mark != null && mark.isActive()) {
+            return "Error: " + mark.diagnostic().message();
+        }
+
         StringBuilder sb = new StringBuilder();
 
         if (textArea.getText().isBlank()) {

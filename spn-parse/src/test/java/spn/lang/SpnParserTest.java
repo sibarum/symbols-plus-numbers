@@ -292,6 +292,63 @@ class SpnParserTest {
             assertInstanceOf(SpnStructValue.class, result);
             assertEquals("Circle", ((SpnStructValue) result).getDescriptor().getName());
         }
+        @Test
+        void factoryIntercepts() {
+            // Factory doubles both components
+            assertEquals(6L, run("""
+                type Pair(int, int)
+                pure Pair(int, int) -> Pair = (a, b) {
+                    this(a * 2, b * 2)
+                }
+                let p = Pair(3, 4)
+                p.0
+                """));
+        }
+
+        @Test
+        void factoryChaining() {
+            // Single-arg factory chains to 2-arg factory which doubles
+            // Wrapper(1) → Wrapper(1,1) → this(2,2)
+            assertEquals(2L, run("""
+                type Wrapper(int, int)
+                pure Wrapper(int, int) -> Wrapper = (a, b) {
+                    this(a * 2, b * 2)
+                }
+                pure Wrapper(int) -> Wrapper = (a) {
+                    Wrapper(a, a)
+                }
+                let w = Wrapper(1)
+                w.0
+                """));
+        }
+
+        @Test
+        void rawConstructionWithoutFactory() {
+            // No factory defined — raw construction works as before
+            assertEquals(4L, run("""
+                type Pair(int, int)
+                let p = Pair(4, 5)
+                p.0
+                """));
+        }
+        @Test
+        void associatedConstant() {
+            assertEquals(42L, run("""
+                type Wrapper(int)
+                let Wrapper.default = Wrapper(42)
+                Wrapper.default.0
+                """));
+        }
+
+        @Test
+        void associatedConstantUsedInExpression() {
+            assertEquals(10L, run("""
+                type Pair(int, int)
+                let Pair.origin = Pair(0, 0)
+                let p = Pair.origin
+                p.0 + 10
+                """));
+        }
     }
 
     // ── Field access and methods ──────────────────────────────────────────
