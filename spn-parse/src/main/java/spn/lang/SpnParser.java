@@ -7,7 +7,6 @@ import spn.language.ImportDirective;
 import spn.language.SpnLanguage;
 import spn.language.SpnModule;
 import spn.language.SpnModuleRegistry;
-import spn.node.SpnBlockNode;
 import spn.node.SpnExpressionNode;
 import spn.node.SpnRootNode;
 import spn.node.SpnStatementNode;
@@ -600,97 +599,91 @@ public class SpnParser {
 
     private SpnStatementNode parseFuncDecl(boolean isPure) {
         tokens.advance(); // consume 'pure' or 'action'
-
-        // Check for method declaration: TypeName.method(...)
-        // or factory declaration: TypeName(args) -> ReturnType
         SpnParseToken nameTok = tokens.peek();
-        boolean isMethod = false;
-        boolean isFactory = false;
-        String typeName = null;
-        String name;
 
-        if (nameTok.type() == TokenType.TYPE_NAME && tokens.peek(1) != null && tokens.peek(1).text().equals(".")) {
-            // Method declaration: TypeName.method
-            isMethod = true;
-            typeName = tokens.advance().text(); // consume TypeName
-            tokens.advance(); // consume '.'
-            name = tokens.expectType(TokenType.IDENTIFIER).text();
-        } else if (nameTok.type() == TokenType.TYPE_NAME && tokens.peek(1) != null && tokens.peek(1).text().equals("(")) {
-            // Factory declaration: TypeName(args) -> ReturnType
-            isFactory = true;
-            typeName = nameTok.text();
-            name = tokens.advance().text(); // consume TypeName — the name IS the type name
-        } else if (nameTok.type() == TokenType.OPERATOR) {
-            name = tokens.advance().text();
-        } else {
-            name = tokens.expectType(TokenType.IDENTIFIER).text();
+        // Dispatch by declaration form
+        if (nameTok.type() == TokenType.TYPE_NAME && tokens.peek(1) != null) {
+            String next = tokens.peek(1).text();
+            if (next.equals(".")) return parseMethodDecl(isPure, nameTok);
+            if (next.equals("(")) return parseFactoryDecl(isPure, nameTok);
         }
+        if (nameTok.type() == TokenType.OPERATOR) return parseOperatorOrFuncDecl(isPure, true);
+        return parseOperatorOrFuncDecl(isPure, false);
+    }
 
-        // Parse type signature: (Type, Type) -> ReturnType
-        tokens.expect("(");
-        List<FieldType> paramTypes = new ArrayList<>();
-        while (!tokens.check(")")) {
-            paramTypes.add(parseFieldType());
-            tokens.match(",");
-        }
-        tokens.expect(")");
+    /** Parse: pure TypeName.method(args) -> ReturnType = (params) { body } */
+    private SpnStatementNode parseMethodDecl(boolean isPure, SpnParseToken nameTok) {
+        String typeName = tokens.advance().text(); // consume TypeName
+        tokens.advance(); // consume '.'
+        String methodName = tokens.expectType(TokenType.IDENTIFIER).text();
 
-        FieldType returnType = FieldType.UNTYPED;
-        if (tokens.match("->")) {
-            returnType = parseFieldType();
-        }
+        List<FieldType> paramTypes = parseParamTypeList();
+        FieldType returnType = parseOptionalReturnType();
 
-        boolean isOperator = nameTok.type() == TokenType.OPERATOR;
+        // Prepend receiver type
+        FieldType receiverType = resolveTypeByName(typeName);
+        if (receiverType == null) throw tokens.error("Unknown type for method: " + typeName, nameTok);
+        paramTypes.add(0, receiverType);
 
-        // For methods, prepend the receiver type as the first parameter type
-        if (isMethod) {
-            FieldType receiverType = resolveTypeByName(typeName);
-            if (receiverType == null) {
-                throw tokens.error("Unknown type for method: " + typeName, nameTok);
-            }
-            paramTypes.add(0, receiverType);
-        }
+        String methodKey = typeName + "." + methodName;
 
         // Declaration only (no =), just register the signature
         if (!tokens.check("=")) {
-            // For methods, still register the descriptor for type checking
-            if (isMethod) {
-                String methodKey = typeName + "." + name;
-                SpnFunctionDescriptor.Builder descBuilder = isPure
-                        ? SpnFunctionDescriptor.pure(methodKey) : SpnFunctionDescriptor.impure(methodKey);
-                descBuilder.param("this", paramTypes.get(0));
-                for (int i = 1; i < paramTypes.size(); i++) {
-                    descBuilder.param("_" + (i - 1), paramTypes.get(i));
-                }
-                descBuilder.returns(returnType);
-                functionDescriptorRegistry.put(methodKey, descBuilder.build());
-            }
+            SpnFunctionDescriptor.Builder db = isPure
+                    ? SpnFunctionDescriptor.pure(methodKey) : SpnFunctionDescriptor.impure(methodKey);
+            db.param("this", paramTypes.get(0));
+            for (int i = 1; i < paramTypes.size(); i++) db.param("_" + (i - 1), paramTypes.get(i));
+            db.returns(returnType);
+            functionDescriptorRegistry.put(methodKey, db.build());
             return null;
         }
 
-        // Definition: = (params) { body }
         tokens.expect("=");
-        String registryName = isMethod ? typeName + "." + name : name;
+        parseFunctionBody(methodKey, paramTypes, returnType, isPure, true);
+        return null;
+    }
 
-        // For factories, set context so this(args) resolves to raw construction
+    /** Parse: pure TypeName(args) -> ReturnType = (params) { body } */
+    private SpnStatementNode parseFactoryDecl(boolean isPure, SpnParseToken nameTok) {
+        String typeName = tokens.advance().text(); // consume TypeName
+
+        List<FieldType> paramTypes = parseParamTypeList();
+        FieldType returnType = parseOptionalReturnType();
+
+        if (!tokens.check("=")) return null; // declaration only
+        tokens.expect("=");
+
+        // Set factory context so this(args) resolves to raw construction
         String outerFactory = currentFactoryTypeName;
-        if (isFactory) currentFactoryTypeName = typeName;
+        currentFactoryTypeName = typeName;
 
-        parseFunctionBody(registryName, paramTypes, returnType, isPure, isMethod);
+        parseFunctionBody(typeName, paramTypes, returnType, isPure, false);
 
-        if (isFactory) currentFactoryTypeName = outerFactory;
+        currentFactoryTypeName = outerFactory;
 
-        // Register factory in factoryRegistry
-        if (isFactory) {
-            CallTarget ct = functionRegistry.get(registryName);
-            SpnFunctionDescriptor desc = functionDescriptorRegistry.get(registryName);
-            if (ct != null && desc != null) {
-                factoryRegistry.computeIfAbsent(typeName, k -> new ArrayList<>())
-                        .add(new FactoryEntry(ct, paramTypes.size(), desc));
-                // Remove from functionRegistry — factories are not callable by name
-                functionRegistry.remove(registryName);
-            }
+        // Move from functionRegistry to factoryRegistry
+        CallTarget ct = functionRegistry.get(typeName);
+        SpnFunctionDescriptor desc = functionDescriptorRegistry.get(typeName);
+        if (ct != null && desc != null) {
+            factoryRegistry.computeIfAbsent(typeName, k -> new ArrayList<>())
+                    .add(new FactoryEntry(ct, paramTypes.size(), desc));
+            functionRegistry.remove(typeName);
         }
+        return null;
+    }
+
+    /** Parse a regular function or operator overload declaration. */
+    private SpnStatementNode parseOperatorOrFuncDecl(boolean isPure, boolean isOperator) {
+        String name = isOperator ? tokens.advance().text()
+                : tokens.expectType(TokenType.IDENTIFIER).text();
+
+        List<FieldType> paramTypes = parseParamTypeList();
+        FieldType returnType = parseOptionalReturnType();
+
+        if (!tokens.check("=")) return null; // declaration only
+        tokens.expect("=");
+
+        parseFunctionBody(name, paramTypes, returnType, isPure, false);
 
         // Register operator overload for compile-time dispatch
         if (isOperator && !paramTypes.isEmpty()) {
@@ -701,8 +694,25 @@ public class SpnParser {
                                 paramTypes.toArray(new FieldType[0]), returnType, ct));
             }
         }
-
         return null;
+    }
+
+    /** Shared: parse (Type, Type, ...) parameter type list. */
+    private List<FieldType> parseParamTypeList() {
+        tokens.expect("(");
+        List<FieldType> paramTypes = new ArrayList<>();
+        while (!tokens.check(")")) {
+            paramTypes.add(parseFieldType());
+            tokens.match(",");
+        }
+        tokens.expect(")");
+        return paramTypes;
+    }
+
+    /** Shared: parse optional -> ReturnType. */
+    private FieldType parseOptionalReturnType() {
+        if (tokens.match("->")) return parseFieldType();
+        return FieldType.UNTYPED;
     }
 
     /** A parameter binding: either a simple name or a positional destructure (a, b, c). */
@@ -1638,6 +1648,29 @@ public class SpnParser {
         return expr;
     }
 
+    // ── Type dispatch helpers ─────────────────────────────────────────────
+
+    /**
+     * Resolve any FieldType to its underlying SpnStructDescriptor, if it has one.
+     * Works for OfStruct, OfConstrainedType (product), and OfProduct.
+     */
+    private SpnStructDescriptor resolveStructDescriptor(FieldType type) {
+        if (type instanceof FieldType.OfStruct os) return os.descriptor();
+        if (type instanceof FieldType.OfConstrainedType oct && oct.descriptor().isProduct())
+            return structRegistry.get(oct.descriptor().getName());
+        if (type instanceof FieldType.OfProduct op)
+            return structRegistry.get(op.descriptor().getName());
+        return null;
+    }
+
+    /** Get the type name from a FieldType, for registry lookups. */
+    private String resolveTypeName(FieldType type) {
+        if (type instanceof FieldType.OfStruct os) return os.descriptor().getName();
+        if (type instanceof FieldType.OfConstrainedType oct) return oct.descriptor().getName();
+        if (type instanceof FieldType.OfProduct op) return op.descriptor().getName();
+        return null;
+    }
+
     /**
      * Create a positional access node for expr.0, expr.1, etc.
      * Uses TupleElementAccessNode for tuples, FieldAccessNode for structs/types.
@@ -1647,7 +1680,6 @@ public class SpnParser {
         // Tuple value
         if (receiverType instanceof FieldType.OfTuple ot) {
             SpnExpressionNode node = spn.node.struct.SpnTupleElementAccessNodeGen.create(expr, index);
-            // Track element type if the tuple descriptor has it
             var desc = ot.descriptor();
             if (index < desc.arity()) {
                 FieldType elemType = desc.elementType(index);
@@ -1656,40 +1688,15 @@ public class SpnParser {
             return node;
         }
         // Struct/type value — positional access maps to field index
-        if (receiverType instanceof FieldType.OfStruct os) {
-            if (index >= os.descriptor().fieldCount()) {
+        SpnStructDescriptor sd = resolveStructDescriptor(receiverType);
+        if (sd != null) {
+            if (index >= sd.fieldCount()) {
                 throw tokens.error("Positional index " + index + " out of bounds for "
-                        + os.descriptor().getName() + " (has " + os.descriptor().fieldCount() + " fields)", tok);
+                        + sd.getName() + " (has " + sd.fieldCount() + " fields)", tok);
             }
             SpnExpressionNode node = spn.node.struct.SpnFieldAccessNodeGen.create(expr, index);
-            FieldType ft = os.descriptor().fieldType(index);
+            FieldType ft = sd.fieldType(index);
             if (ft != null) trackType(node, ft);
-            return node;
-        }
-        if (receiverType instanceof FieldType.OfConstrainedType oct && oct.descriptor().isProduct()) {
-            if (index >= oct.descriptor().componentCount()) {
-                throw tokens.error("Positional index " + index + " out of bounds for "
-                        + oct.descriptor().getName() + " (has " + oct.descriptor().componentCount() + " components)", tok);
-            }
-            SpnExpressionNode node = spn.node.struct.SpnFieldAccessNodeGen.create(expr, index);
-            SpnStructDescriptor sd = structRegistry.get(oct.descriptor().getName());
-            if (sd != null && index < sd.fieldCount()) {
-                FieldType ft = sd.fieldType(index);
-                if (ft != null) trackType(node, ft);
-            }
-            return node;
-        }
-        if (receiverType instanceof FieldType.OfProduct op) {
-            if (index >= op.descriptor().componentCount()) {
-                throw tokens.error("Positional index " + index + " out of bounds for "
-                        + op.descriptor().getName() + " (has " + op.descriptor().componentCount() + " components)", tok);
-            }
-            SpnExpressionNode node = spn.node.struct.SpnFieldAccessNodeGen.create(expr, index);
-            SpnStructDescriptor sd = structRegistry.get(op.descriptor().getName());
-            if (sd != null && index < sd.fieldCount()) {
-                FieldType ft = sd.fieldType(index);
-                if (ft != null) trackType(node, ft);
-            }
             return node;
         }
         throw tokens.error("Cannot use positional access on " +
@@ -1699,16 +1706,9 @@ public class SpnParser {
     /** Resolve a field index from the inferred type. */
     private int resolveFieldIndex(SpnExpressionNode expr, String fieldName) {
         FieldType type = inferType(expr);
-        if (type instanceof FieldType.OfStruct os) {
-            int idx = os.descriptor().fieldIndex(fieldName);
-            if (idx >= 0) return idx;
-        }
-        if (type instanceof FieldType.OfConstrainedType oct && oct.descriptor().isProduct()) {
-            int idx = oct.descriptor().componentIndex(fieldName);
-            if (idx >= 0) return idx;
-        }
-        if (type instanceof FieldType.OfProduct op) {
-            int idx = op.descriptor().componentIndex(fieldName);
+        SpnStructDescriptor sd = resolveStructDescriptor(type);
+        if (sd != null) {
+            int idx = sd.fieldIndex(fieldName);
             if (idx >= 0) return idx;
         }
         throw tokens.error("Cannot resolve field '" + fieldName + "'"
@@ -1717,30 +1717,12 @@ public class SpnParser {
 
     /** Track the type of a field access if the struct descriptor has type info. */
     private void trackFieldType(SpnExpressionNode accessNode, String fieldName, FieldType receiverType) {
-        if (receiverType instanceof FieldType.OfStruct os) {
-            int idx = os.descriptor().fieldIndex(fieldName);
+        SpnStructDescriptor sd = resolveStructDescriptor(receiverType);
+        if (sd != null) {
+            int idx = sd.fieldIndex(fieldName);
             if (idx >= 0) {
-                FieldType ft = os.descriptor().fieldType(idx);
+                FieldType ft = sd.fieldType(idx);
                 if (ft != null) trackType(accessNode, ft);
-            }
-        } else if (receiverType instanceof FieldType.OfConstrainedType oct && oct.descriptor().isProduct()) {
-            // Product types also have named components — look up the struct descriptor
-            SpnStructDescriptor sd = structRegistry.get(oct.descriptor().getName());
-            if (sd != null) {
-                int idx = sd.fieldIndex(fieldName);
-                if (idx >= 0) {
-                    FieldType ft = sd.fieldType(idx);
-                    if (ft != null) trackType(accessNode, ft);
-                }
-            }
-        } else if (receiverType instanceof FieldType.OfProduct op) {
-            SpnStructDescriptor sd = structRegistry.get(op.descriptor().getName());
-            if (sd != null) {
-                int idx = sd.fieldIndex(fieldName);
-                if (idx >= 0) {
-                    FieldType ft = sd.fieldType(idx);
-                    if (ft != null) trackType(accessNode, ft);
-                }
             }
         }
     }
@@ -1748,21 +1730,14 @@ public class SpnParser {
     /** Look up a method by receiver type and name. */
     private MethodEntry resolveMethod(FieldType receiverType, String methodName) {
         if (receiverType == null) return null;
-        // Try exact type match
+        // Try exact type description match
         String key = receiverType.describe() + "." + methodName;
         MethodEntry entry = methodRegistry.get(key);
         if (entry != null) return entry;
-        // For struct types, also try the struct name directly
-        if (receiverType instanceof FieldType.OfStruct os) {
-            entry = methodRegistry.get(os.descriptor().getName() + "." + methodName);
-            if (entry != null) return entry;
-        }
-        if (receiverType instanceof FieldType.OfConstrainedType oct) {
-            entry = methodRegistry.get(oct.descriptor().getName() + "." + methodName);
-            if (entry != null) return entry;
-        }
-        if (receiverType instanceof FieldType.OfProduct op) {
-            entry = methodRegistry.get(op.descriptor().getName() + "." + methodName);
+        // Try the type's simple name
+        String typeName = resolveTypeName(receiverType);
+        if (typeName != null) {
+            entry = methodRegistry.get(typeName + "." + methodName);
             if (entry != null) return entry;
         }
         return null;

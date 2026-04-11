@@ -1,7 +1,5 @@
 package spn.gui;
 
-import spn.gui.lang.HighlightCache;
-import spn.stdui.buffer.UndoManager;
 import spn.stdui.widget.ScrollbarTheme;
 
 import java.io.IOException;
@@ -46,11 +44,11 @@ class FileViewMode implements Mode {
         ScrollbarTheme theme = ScrollbarTheme.dark();
         this.vScroll = new Scrollbar(window.getFont(), Scrollbar.Orientation.VERTICAL);
         vScroll.setTheme(theme);
-        vScroll.setOnChange(v -> textArea.setScrollRow(v));
+        vScroll.setOnChange(textArea::setScrollRow);
 
         this.hScroll = new Scrollbar(window.getFont(), Scrollbar.Orientation.HORIZONTAL);
         hScroll.setTheme(theme);
-        hScroll.setOnChange(v -> textArea.setScrollCol(v));
+        hScroll.setOnChange(textArea::setScrollCol);
     }
 
     @Override
@@ -94,7 +92,7 @@ class FileViewMode implements Mode {
         }
         // Logs
         if (ctrl && key == GLFW_KEY_G && action == GLFW_PRESS) {
-            window.pushLegacyMode(new LogViewMode(window));
+            window.openLogTab();
             return true;
         }
 

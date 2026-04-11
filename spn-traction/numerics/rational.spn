@@ -37,5 +37,7 @@ pure /(Rational, Rational) -> Rational = (q1, q2) {
   q1 * q2.inv()
 }
 
-let x = Rational(3,6) + Rational(5,15)
+promote int -> Rational = (i) {
+  
+}
 

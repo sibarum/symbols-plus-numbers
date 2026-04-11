@@ -63,7 +63,7 @@ struct Point(x: float, y: float)
 
 struct Pair(first, second)
 
-struct Pixel(color: int, x: int, y: int)
+struct Pixel(color: int, x: int, y: int
 
 
 -- ─── TUPLES ─────────────────────────────────────────────────────────────
