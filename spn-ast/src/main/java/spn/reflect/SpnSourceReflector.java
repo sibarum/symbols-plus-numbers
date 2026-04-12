@@ -187,6 +187,7 @@ public final class SpnSourceReflector {
             case MatchPattern.StringRegex sr -> "/" + sr.regex() + "/";
             case MatchPattern.OfType ot -> ot.fieldType().describe();
             case MatchPattern.Literal lit -> literalToString(lit.expected());
+            case MatchPattern.TupleElements te -> te.describe();
             case MatchPattern.Wildcard _ -> "_";
         };
     }

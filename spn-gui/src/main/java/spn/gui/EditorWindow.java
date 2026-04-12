@@ -133,6 +133,7 @@ public class EditorWindow {
         actionRegistry.register("Save File",     "File",   "Ctrl+S",       "Save the active editor tab to disk.",                   () -> saveFile(false));
         actionRegistry.register("Save As",       "File",   "Ctrl+Shift+S", "Save the active editor tab to a new file path.",        () -> saveFile(true));
         actionRegistry.register("Run",           "Run",    "F5",           "Parse and execute the active tab's SPN source. Canvas output opens a separate window.", this::runCurrentFile);
+        actionRegistry.register("Run with Trace","Run",    "Shift+F5",     "Execute with full tracing. Records all function calls, then opens an interactive trace viewer.", this::runWithTrace);
         actionRegistry.register("Undo",          "Edit",   "Ctrl+Z",       "Undo the last edit in the active editor.",              () -> { TextArea ta = getTextArea(); if (ta != null) ta.performUndo(); });
         actionRegistry.register("Redo",          "Edit",   "Ctrl+Y",       "Redo a previously undone edit.",                        () -> { TextArea ta = getTextArea(); if (ta != null) ta.performRedo(); });
         actionRegistry.register("Zoom In",       "View",   "Ctrl+=",       "Increase editor font size.",                            () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomIn(); });
@@ -416,6 +417,79 @@ public class EditorWindow {
             if (msg == null) msg = e.getClass().getSimpleName();
             flash("[" + fileName + "] Error: " + msg, true);
         } finally {
+            spn.canvas.CanvasState.clear();
+        }
+    }
+
+    /** Run with execution tracing — records all function calls, then opens a TraceTab. */
+    void runWithTrace() {
+        EditorTab et = getActiveEditorTab();
+        if (et == null) { flash("No editor tab active", true); return; }
+        String source = et.getTextArea().getText();
+        Path currentFile = et.getFilePath();
+        String fileName = currentFile != null ? currentFile.getFileName().toString() : "untitled";
+        if (source.isBlank()) {
+            flash("[" + fileName + "] Nothing to trace", true);
+            return;
+        }
+
+        spn.canvas.CanvasState canvasState = new spn.canvas.CanvasState();
+        spn.canvas.CanvasState.set(canvasState);
+        spn.trace.TraceRecorder recorder = spn.trace.TraceRecorder.begin();
+        try {
+            SpnSymbolTable symbolTable = new SpnSymbolTable();
+            spn.language.SpnModuleRegistry moduleRegistry = new spn.language.SpnModuleRegistry();
+            registerStdlibModules(moduleRegistry);
+            spn.canvas.CanvasBuiltins.registerModule(moduleRegistry);
+            moduleRegistry.addLoader(new spn.lang.ClasspathModuleLoader(null, symbolTable));
+
+            ModuleContext moduleCtx = et.getModuleContext();
+            if (moduleCtx != null) {
+                moduleRegistry.addLoader(new spn.lang.FilesystemModuleLoader(
+                        moduleCtx.getRoot(), moduleCtx.getNamespace(), null, symbolTable));
+            }
+
+            String fullPath = currentFile != null ? currentFile.toAbsolutePath().toString() : "untitled";
+            SpnParser parser = new SpnParser(source, fullPath, null, symbolTable, moduleRegistry);
+            SpnRootNode root = parser.parse();
+            Object result = root.getCallTarget().call();
+
+            if (canvasState.isCanvasRequested()) {
+                spn.canvas.CanvasWindow cw = new spn.canvas.CanvasWindow();
+                cw.open(canvasState.getWidth(), canvasState.getHeight(), handle, font);
+                try {
+                    if (canvasState.getAnimateCallback() != null) {
+                        cw.showAnimated(canvasState.getAnimateFps(),
+                                        canvasState.getAnimateCallback());
+                    } else {
+                        cw.showStatic(canvasState.getCommands());
+                    }
+                } finally {
+                    cw.close();
+                    makeCurrent();
+                }
+            }
+
+            // Open trace results — source overlay as primary, raw tree as secondary
+            flash("[" + fileName + "] Traced: " + recorder.size() + " events", false);
+            tabView.addTab(new TraceSourceTab(this, source, recorder.getEvents(), fileName));
+
+        } catch (spn.language.SpnException se) {
+            flash(se.formatMessage(), true);
+            if (recorder.size() > 0) {
+                tabView.addTab(new TraceSourceTab(this, source, recorder.getEvents(), fileName + " (error)"));
+            }
+        } catch (spn.lang.SpnParseException pe) {
+            flash(pe.formatMessage(), true);
+        } catch (Exception e) {
+            String msg = e.getMessage();
+            if (msg == null) msg = e.getClass().getSimpleName();
+            flash("[" + fileName + "] Error: " + msg, true);
+            if (recorder.size() > 0) {
+                tabView.addTab(new TraceSourceTab(this, source, recorder.getEvents(), fileName + " (error)"));
+            }
+        } finally {
+            spn.trace.TraceRecorder.end();
             spn.canvas.CanvasState.clear();
         }
     }

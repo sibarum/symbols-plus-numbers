@@ -103,6 +103,48 @@ public sealed interface MatchPattern {
     }
 
     /**
+     * Matches a tuple/array where each position either matches a literal value
+     * or is a wildcard (null in the expected array).
+     *
+     * <pre>
+     *   // match (n, d) | (0, _) -> ...
+     *   new TupleElements(new Object[]{0L, null}, 2)
+     * </pre>
+     *
+     * Binding slots correspond to wildcard positions for variable capture.
+     */
+    record TupleElements(Object[] expected, int arity) implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            if (value instanceof SpnTupleValue tv) {
+                if (tv.arity() != arity) return false;
+                for (int i = 0; i < arity; i++) {
+                    if (expected[i] != null && !expected[i].equals(tv.get(i))) return false;
+                }
+                return true;
+            }
+            if (value instanceof spn.type.SpnArrayValue arr) {
+                if (arr.length() != arity) return false;
+                for (int i = 0; i < arity; i++) {
+                    if (expected[i] != null && !expected[i].equals(arr.getElements()[i])) return false;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        @Override
+        public String describe() {
+            var sb = new StringBuilder("(");
+            for (int i = 0; i < arity; i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(expected[i] != null ? expected[i] : "_");
+            }
+            return sb.append(")").toString();
+        }
+    }
+
+    /**
      * Matches any value accepted by the given FieldType.
      *
      * This is the general-purpose type pattern that covers primitives, constrained

@@ -791,24 +791,27 @@ public class SpnParser {
         if (!tokens.check("=")) return null; // declaration only
         tokens.expect("=");
 
+        // Use arity-qualified name to prevent collisions between overloaded factories
+        String qualifiedName = typeName + "/" + paramTypes.size();
+
         // Set factory context so this(args) resolves to raw construction
         String outerFactory = currentFactoryTypeName;
         int outerArity = currentFactoryArity;
         currentFactoryTypeName = typeName;
         currentFactoryArity = paramTypes.size();
 
-        parseFunctionBody(typeName, paramTypes, returnType, isPure, false);
+        parseFunctionBody(qualifiedName, paramTypes, returnType, isPure, false);
 
         currentFactoryTypeName = outerFactory;
         currentFactoryArity = outerArity;
 
         // Move from functionRegistry to factoryRegistry
-        CallTarget ct = functionRegistry.get(typeName);
-        SpnFunctionDescriptor desc = functionDescriptorRegistry.get(typeName);
+        CallTarget ct = functionRegistry.get(qualifiedName);
+        SpnFunctionDescriptor desc = functionDescriptorRegistry.get(qualifiedName);
         if (ct != null && desc != null) {
             factoryRegistry.computeIfAbsent(typeName, k -> new ArrayList<>())
                     .add(new FactoryEntry(ct, paramTypes.size(), desc));
-            functionRegistry.remove(typeName);
+            functionRegistry.remove(qualifiedName);
         }
         return null;
     }
@@ -1074,7 +1077,9 @@ public class SpnParser {
         // Infer the type for compile-time operator dispatch
         FieldType inferredType = annotatedType != null ? annotatedType : inferType(value);
         int slot = currentScope.addLocal(name, inferredType);
-        return SpnWriteLocalVariableNodeGen.create(value, slot);
+        var writeNode = SpnWriteLocalVariableNodeGen.create(value, slot);
+        writeNode.setVariableName(name);
+        return writeNode;
     }
 
     /**
@@ -2360,6 +2365,47 @@ public class SpnParser {
         if (tok.text().equals("_")) {
             tokens.advance();
             return new ParsedPattern(new MatchPattern.Wildcard(), new int[0]);
+        }
+
+        // Tuple pattern: (literal_or_wildcard, ...)
+        if (tok.text().equals("(")) {
+            tokens.advance(); // consume '('
+            List<Object> expected = new ArrayList<>();
+            List<Integer> slots = new ArrayList<>();
+            while (!tokens.check(")")) {
+                SpnParseToken elem = tokens.peek();
+                if (elem == null) throw tokens.error("Expected tuple pattern element");
+                if (elem.text().equals("_")) {
+                    // Wildcard position — will be bound
+                    tokens.advance();
+                    expected.add(null);
+                    // No binding for bare _ in tuple patterns
+                    // (we'd need a variable name to bind to)
+                } else if (elem.type() == TokenType.NUMBER) {
+                    tokens.advance();
+                    expected.add(elem.text().contains(".")
+                            ? (Object) Double.parseDouble(elem.text())
+                            : (Object) Long.parseLong(elem.text()));
+                } else if (elem.type() == TokenType.STRING) {
+                    tokens.advance();
+                    expected.add(unescapeString(elem.text()));
+                } else if (elem.type() == TokenType.SYMBOL) {
+                    tokens.advance();
+                    expected.add(symbolTable.intern(elem.text().substring(1)));
+                } else if (elem.type() == TokenType.IDENTIFIER) {
+                    // Variable binding at this position
+                    tokens.advance();
+                    expected.add(null); // wildcard for matching
+                    slots.add(currentScope.addLocal(elem.text()));
+                } else {
+                    throw tokens.error("Unexpected token in tuple pattern: " + elem.text(), elem);
+                }
+                tokens.match(",");
+            }
+            tokens.expect(")");
+            return new ParsedPattern(
+                    new MatchPattern.TupleElements(expected.toArray(), expected.size()),
+                    slots.stream().mapToInt(Integer::intValue).toArray());
         }
 
         // Empty collection: []

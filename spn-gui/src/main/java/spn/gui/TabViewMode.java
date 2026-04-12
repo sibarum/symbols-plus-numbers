@@ -23,11 +23,16 @@ class TabViewMode implements Mode {
 
     @Override
     public boolean onKey(int key, int scancode, int action, int mods) {
+        // Let the active tab handle Escape first (e.g., to unpin a trace view)
+        // Only close the tab if the tab didn't consume it
+        if (tabView.onKey(key, scancode, action, mods)) {
+            return true;
+        }
         if (action == GLFW_PRESS && key == GLFW_KEY_ESCAPE) {
             window.handleTabClose();
             return true;
         }
-        return tabView.onKey(key, scancode, action, mods);
+        return false;
     }
 
     @Override

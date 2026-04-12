@@ -95,6 +95,18 @@ public class TextArea {
     private spn.gui.diagnostic.DiagnosticOverlay diagnosticOverlay;
     private spn.gui.diagnostic.ChangeOverlay changeOverlay;
     private Runnable onEditCallback; // notified on any edit for debounce
+    private PreTextRenderer preTextRenderer; // drawn after background, before text
+
+    /** Callback for rendering overlays between background and text. */
+    public interface PreTextRenderer {
+        void render(SdfFontRenderer font, float textX, float textY,
+                    float cellWidth, float cellHeight, float highlightY,
+                    int scrollRow, int visibleRows, float boundsX, float totalWidth);
+    }
+
+    public void setPreTextRenderer(PreTextRenderer renderer) {
+        this.preTextRenderer = renderer;
+    }
 
     public void setDiagnosticOverlay(spn.gui.diagnostic.DiagnosticOverlay overlay) {
         this.diagnosticOverlay = overlay;
@@ -319,6 +331,12 @@ public class TextArea {
                 float rw = (drawEnd - drawStart) * cellWidth;
                 font.drawRect(rx, ry, rw, cellHeight, 0.2f, 0.35f, 0.55f);
             }
+        }
+
+        // Pre-text overlays (e.g., trace block highlights)
+        if (preTextRenderer != null) {
+            preTextRenderer.render(font, textX, textY, cellWidth, cellHeight,
+                    HIGHLIGHT_OFFSET_Y, scrollRow, visibleRows, boundsX, boundsW);
         }
 
         // Change indicators (faint gutter bar for modified lines)
@@ -976,8 +994,15 @@ public class TextArea {
         return digits * cellWidth + GUTTER_PAD;
     }
 
+    private int extraScrollPadding; // extra rows of scroll beyond end of file
+
+    /** Set extra scroll padding (in rows) to allow scrolling past end of file. */
+    public void setExtraScrollPadding(int rows) {
+        this.extraScrollPadding = rows;
+    }
+
     private int clampScrollRow(int row) {
-        int max = Math.max(0, buffer.lineCount() - getVisibleRows());
+        int max = Math.max(0, buffer.lineCount() - getVisibleRows() + extraScrollPadding);
         return Math.max(0, Math.min(row, max));
     }
 

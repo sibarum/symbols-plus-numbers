@@ -52,6 +52,7 @@ public class LogTab extends ScrollableTab {
             textArea.onKey(key, mods);
             return true;
         }
+        if (key == GLFW_KEY_ESCAPE) return false; // let TabViewMode close
         return true; // swallow editing keys
     }
 

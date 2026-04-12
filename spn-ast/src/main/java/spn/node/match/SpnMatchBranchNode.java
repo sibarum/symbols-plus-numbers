@@ -142,6 +142,22 @@ public final class SpnMatchBranchNode extends Node {
                 }
             }
             case MatchPattern.ArrayExactLength _ -> bindIndexed(frame, ((SpnArrayValue) value).getElements());
+            case MatchPattern.TupleElements te -> {
+                // Bind only wildcard positions (where expected[i] is null)
+                Object[] elems;
+                if (value instanceof SpnTupleValue tv) elems = tv.getElements();
+                else if (value instanceof SpnArrayValue arr) elems = arr.getElements();
+                else break;
+                int slotIdx = 0;
+                for (int i = 0; i < te.arity() && slotIdx < bindingSlots.length; i++) {
+                    if (te.expected()[i] == null) {
+                        if (bindingSlots[slotIdx] >= 0) {
+                            frame.setObject(bindingSlots[slotIdx], elems[i]);
+                        }
+                        slotIdx++;
+                    }
+                }
+            }
             case MatchPattern.StringPrefix sp -> {
                 // Slot 0 gets the remainder after the prefix
                 if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {

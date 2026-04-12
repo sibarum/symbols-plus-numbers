@@ -119,15 +119,37 @@ public final class SpnFunctionRootNode extends RootNode {
             validateArgs(args);
         }
 
-        bindArgs(frame, args);
-
-        Object result = body.executeGeneric(frame);
-
-        if (needsReturnValidation) {
-            validateReturn(result);
+        // Trace recording (zero-cost when inactive: single null check)
+        spn.trace.TraceRecorder recorder = spn.trace.TraceRecorder.current();
+        long callSeq = -1;
+        long startTime = 0;
+        if (recorder != null) {
+            callSeq = recorder.recordCall(descriptor.getName(), descriptor.isPure(), args);
+            startTime = System.nanoTime();
         }
 
-        return result;
+        bindArgs(frame, args);
+
+        try {
+            Object result = body.executeGeneric(frame);
+
+            if (needsReturnValidation) {
+                validateReturn(result);
+            }
+
+            if (recorder != null) {
+                recorder.recordReturn(callSeq, descriptor.getName(), descriptor.isPure(),
+                        args, result, System.nanoTime() - startTime);
+            }
+
+            return result;
+        } catch (Exception e) {
+            if (recorder != null) {
+                recorder.recordError(callSeq, descriptor.getName(), descriptor.isPure(),
+                        args, e.getMessage(), System.nanoTime() - startTime);
+            }
+            throw e;
+        }
     }
 
     @ExplodeLoop

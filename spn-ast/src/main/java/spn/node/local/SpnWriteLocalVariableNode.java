@@ -43,27 +43,46 @@ public abstract class SpnWriteLocalVariableNode extends SpnExpressionNode {
 
     protected abstract int getSlot();
 
+    // Variable name for trace recording (optional — set by parser)
+    private String variableName;
+
+    public void setVariableName(String name) { this.variableName = name; }
+    public String getVariableName() { return variableName; }
+
+    private void traceAssign(Object value) {
+        if (variableName != null) {
+            spn.trace.TraceRecorder recorder = spn.trace.TraceRecorder.current();
+            if (recorder != null) {
+                recorder.recordAssign(variableName, value);
+            }
+        }
+    }
+
     @Specialization
     protected long writeLong(VirtualFrame frame, long value) {
         frame.setLong(getSlot(), value);
+        traceAssign(value);
         return value;
     }
 
     @Specialization
     protected double writeDouble(VirtualFrame frame, double value) {
         frame.setDouble(getSlot(), value);
+        traceAssign(value);
         return value;
     }
 
     @Specialization
     protected boolean writeBoolean(VirtualFrame frame, boolean value) {
         frame.setBoolean(getSlot(), value);
+        traceAssign(value);
         return value;
     }
 
     @Specialization(replaces = {"writeLong", "writeDouble", "writeBoolean"})
     protected Object writeObject(VirtualFrame frame, Object value) {
         frame.setObject(getSlot(), value);
+        traceAssign(value);
         return value;
     }
 }

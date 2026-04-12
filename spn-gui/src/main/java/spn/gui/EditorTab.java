@@ -121,7 +121,13 @@ public class EditorTab extends ScrollableTab {
             window.saveFile((mods & GLFW_MOD_SHIFT) != 0);
             return true;
         }
-        if ((key == GLFW_KEY_F5 || (ctrl && key == GLFW_KEY_R)) && action == GLFW_PRESS) {
+        if (key == GLFW_KEY_F5 && action == GLFW_PRESS) {
+            boolean shift = (mods & GLFW_MOD_SHIFT) != 0;
+            if (shift) window.runWithTrace();
+            else window.runCurrentFile();
+            return true;
+        }
+        if (ctrl && key == GLFW_KEY_R && action == GLFW_PRESS) {
             window.runCurrentFile();
             return true;
         }
@@ -157,6 +163,8 @@ public class EditorTab extends ScrollableTab {
             window.pushLegacyMode(new HelpMode(window, window.getActionRegistry()));
             return true;
         }
+        // Escape: don't consume — let TabViewMode handle tab close
+        if (key == GLFW_KEY_ESCAPE) return false;
         textArea.onKey(key, mods);
         return true;
     }
