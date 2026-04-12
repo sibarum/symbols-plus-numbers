@@ -54,6 +54,7 @@ public class Main {
         first.initComponents(font);
         centerOnScreen(first.getHandle());
         glClearColor(0.12f, 0.12f, 0.14f, 1.0f);
+        WindowIcon.apply(first.getHandle());
         first.show();
         windows.add(first);
 
@@ -107,6 +108,7 @@ public class Main {
         w.makeCurrent();
         GL.createCapabilities();
         glClearColor(0.12f, 0.12f, 0.14f, 1.0f);
+        WindowIcon.apply(w.getHandle());
 
         w.show();
         pendingWindows.add(w);

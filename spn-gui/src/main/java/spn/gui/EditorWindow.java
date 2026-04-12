@@ -375,6 +375,15 @@ public class EditorWindow {
             registerStdlibModules(moduleRegistry);
             spn.canvas.CanvasBuiltins.registerModule(moduleRegistry);
             moduleRegistry.addLoader(new spn.lang.ClasspathModuleLoader(null, symbolTable));
+
+            // Add filesystem loader for local module imports
+            EditorTab activeTab = getActiveEditorTab();
+            ModuleContext moduleCtx = activeTab != null ? activeTab.getModuleContext() : null;
+            if (moduleCtx != null) {
+                moduleRegistry.addLoader(new spn.lang.FilesystemModuleLoader(
+                        moduleCtx.getRoot(), moduleCtx.getNamespace(), null, symbolTable));
+            }
+
             String fullPath = currentFile != null ? currentFile.toAbsolutePath().toString() : "untitled";
             SpnParser parser = new SpnParser(source, fullPath, null, symbolTable, moduleRegistry);
             SpnRootNode root = parser.parse();

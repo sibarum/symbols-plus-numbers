@@ -18,7 +18,7 @@ public class ModuleContext {
     private final Path root;
     private final String namespace;
     private final String version;
-    private final List<ModuleFile> files;
+    private volatile List<ModuleFile> files;
 
     public record ModuleFile(Path absolutePath, String relativePath) {}
 
@@ -33,6 +33,38 @@ public class ModuleContext {
     public String getNamespace() { return namespace; }
     public String getVersion() { return version; }
     public List<ModuleFile> getFiles() { return files; }
+
+    /** Rescan the module directory for new/deleted files. */
+    public void rescan() {
+        try {
+            Set<Path> nestedRoots = new HashSet<>();
+            findNestedModuleRoots(root, nestedRoots);
+
+            List<ModuleFile> updated = new ArrayList<>();
+            Files.walkFileTree(root, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    if (!dir.equals(root) && nestedRoots.contains(dir))
+                        return FileVisitResult.SKIP_SUBTREE;
+                    return FileVisitResult.CONTINUE;
+                }
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                    String name = file.getFileName().toString();
+                    if ((name.endsWith(".spn") || name.endsWith(".spnt"))
+                            && !name.equals(MODULE_FILE)) {
+                        String rel = root.relativize(file).toString().replace('\\', '/');
+                        updated.add(new ModuleFile(file, rel));
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+            updated.sort(Comparator.comparing(ModuleFile::relativePath));
+            this.files = List.copyOf(updated);
+        } catch (IOException ignored) {
+            // Keep existing file list on error
+        }
+    }
 
     /**
      * Detect a module by scanning up from the given file's directory.

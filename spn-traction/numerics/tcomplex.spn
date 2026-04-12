@@ -1,0 +1,15 @@
+import numerics.rational
+import numerics.omega
+
+
+data TractionNumber
+  | Rational
+  | Omega
+
+type TComplex(Rational, Rational)
+
+pure TComplex(Rational, Rational) -> TComplex = (mag, tan) {
+  this(mag, tan)
+}
+
+let x = Rational.id

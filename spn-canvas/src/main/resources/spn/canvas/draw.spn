@@ -10,18 +10,21 @@ import Array (length)
 import Canvas
 
 -- ═══════════════════════════════════════════════════════════════════════
--- DRAW COMMANDS
+-- DRAW COMMAND TYPES
 -- ═══════════════════════════════════════════════════════════════════════
 
+type CmdClear(r: float, g: float, b: float)
+type CmdFill(r: float, g: float, b: float)
+type CmdStroke(r: float, g: float, b: float)
+type CmdStrokeWeight(w: float)
+type CmdRect(x: float, y: float, w: float, h: float)
+type CmdCircle(x: float, y: float, r: float)
+type CmdLine(x1: float, y1: float, x2: float, y2: float)
+type CmdText(x: float, y: float, content: string, size: float)
+
 data DrawCmd
-  | CmdClear(r, g, b)
-  | CmdFill(r, g, b)
-  | CmdStroke(r, g, b)
-  | CmdStrokeWeight(w)
-  | CmdRect(x, y, w, h)
-  | CmdCircle(x, y, r)
-  | CmdLine(x1, y1, x2, y2)
-  | CmdText(x, y, content, size)
+  | CmdClear | CmdFill | CmdStroke | CmdStrokeWeight
+  | CmdRect | CmdCircle | CmdLine | CmdText
 
 -- ═══════════════════════════════════════════════════════════════════════
 -- RENDER — the single action boundary

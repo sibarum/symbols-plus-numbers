@@ -65,6 +65,11 @@ public final class ClasspathModuleLoader implements ModuleLoader {
                     .types(parser.getTypeRegistry())
                     .structs(parser.getStructRegistry())
                     .variants(parser.getVariantRegistry())
+                    .extra("methods", parser.getMethodRegistry())
+                    .extra("factories", parser.getFactoryRegistry())
+                    .extra("operators", parser.getOperatorRegistry())
+                    .extra("descriptors", parser.getFunctionDescriptorRegistry())
+                    .extra("constants", parser.getConstantRegistry())
                     .build();
 
             return Optional.of(module);

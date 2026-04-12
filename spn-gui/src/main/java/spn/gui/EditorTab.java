@@ -1,5 +1,6 @@
 package spn.gui;
 
+import spn.gui.diagnostic.ChangeOverlay;
 import spn.gui.diagnostic.DiagnosticEngine;
 import spn.gui.diagnostic.DiagnosticMark;
 import spn.gui.diagnostic.DiagnosticOverlay;
@@ -25,12 +26,14 @@ public class EditorTab extends ScrollableTab {
     // Real-time diagnostics
     private final DiagnosticOverlay diagnosticOverlay = new DiagnosticOverlay();
     private final DiagnosticEngine diagnosticEngine = new DiagnosticEngine(diagnosticOverlay);
+    private final ChangeOverlay changeOverlay = new ChangeOverlay();
 
     EditorTab(EditorWindow window) {
         super(window);
 
-        // Connect diagnostic overlay to TextArea
+        // Connect overlays to TextArea
         textArea.setDiagnosticOverlay(diagnosticOverlay);
+        textArea.setChangeOverlay(changeOverlay);
         textArea.setOnEditCallback(() ->
                 diagnosticEngine.notifyEdit(glfwGetTime()));
     }
@@ -43,17 +46,26 @@ public class EditorTab extends ScrollableTab {
 
     public String getSavedContent() { return savedContent; }
 
-    public void setSavedContent(String content) { this.savedContent = content; }
+    public void setSavedContent(String content) {
+        this.savedContent = content;
+        changeOverlay.snapshotSaved(content);
+    }
 
     public ModuleContext getModuleContext() { return moduleContext; }
 
-    public void setModuleContext(ModuleContext ctx) { this.moduleContext = ctx; }
+    public void setModuleContext(ModuleContext ctx) {
+        this.moduleContext = ctx;
+        if (ctx != null) {
+            diagnosticEngine.setModuleRoot(ctx.getRoot(), ctx.getNamespace());
+        }
+    }
 
     public TextArea getTextArea() { return textArea; }
 
     public void loadContent(String content) {
         textArea.setText(content);
         savedContent = content;
+        changeOverlay.snapshotSaved(content);
     }
 
     // ── Tab interface ──────────────────────────────────────────────────
@@ -74,8 +86,12 @@ public class EditorTab extends ScrollableTab {
     public void render(float x, float y, float width, float height) {
         // Tick the diagnostic engine (debounced re-parse)
         double now = glfwGetTime();
+        String source = textArea.getText();
         String fileName = filePath != null ? filePath.getFileName().toString() : "untitled";
-        diagnosticEngine.update(now, textArea.getText(), fileName);
+        diagnosticEngine.update(now, source, fileName);
+
+        // Update change indicators (modified-since-save highlighting)
+        changeOverlay.update(source);
 
         layoutAndRender(x, y, width, height);
     }
@@ -153,38 +169,41 @@ public class EditorTab extends ScrollableTab {
 
     @Override
     public String hudText() {
-        DiagnosticMark mark = diagnosticOverlay.findOnRow(textArea.getCursorRow());
-        if (mark != null && mark.isActive()) {
-            return "Error: " + mark.diagnostic().message();
-        }
-
         StringBuilder sb = new StringBuilder();
 
+        // Change and error summary
+        int changedLines = changeOverlay.changedLineCount();
+        int errorCount = (int) diagnosticOverlay.getMarks().stream()
+                .filter(DiagnosticMark::isActive).count();
+
+        if (changedLines > 0 || errorCount > 0) {
+            if (changedLines > 0) {
+                sb.append("+").append(changedLines).append(" changed");
+            }
+            if (errorCount > 0) {
+                if (!sb.isEmpty()) sb.append(" | ");
+                sb.append(errorCount).append(" error").append(errorCount > 1 ? "s" : "");
+            }
+            sb.append(" | Ctrl+S Save | ");
+        }
+
+        // Hints
         if (textArea.getText().isBlank()) {
             sb.append("*Ctrl+N New | ");
         }
         if (moduleContext != null) {
-            sb.append("*Ctrl+M Module Explorer | ");
+            sb.append("*Ctrl+M Module | ");
         }
 
+        // Undo branch info (compact)
         UndoManager.Info info = textArea.getUndoInfo();
-        if (info.depth() > 0 || info.branches() > 0) {
-            sb.append("History depth ").append(info.depth());
-            if (info.branches() > 1) {
-                sb.append(" | Branch ").append(info.activeBranch())
-                  .append(" of ").append(info.branches())
-                  .append(" | Ctrl+[ Prev | Ctrl+] Next");
-            } else if (info.branches() == 1) {
-                sb.append(" | Ctrl+Z Undo | Ctrl+Y Redo");
-            }
-            if (!info.canUndo()) {
-                sb.append(" | (at root)");
-            }
-            sb.append(" | ").append(BASE_SHORTCUTS);
-        } else {
-            sb.append(BASE_SHORTCUTS);
+        if (info.branches() > 1) {
+            sb.append("Branch ").append(info.activeBranch())
+              .append("/").append(info.branches())
+              .append(" | Ctrl+[ ] | ");
         }
 
+        sb.append(BASE_SHORTCUTS);
         return sb.toString();
     }
 }

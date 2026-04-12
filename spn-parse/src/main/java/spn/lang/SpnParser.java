@@ -62,7 +62,10 @@ public class SpnParser {
     record FactoryEntry(CallTarget callTarget, int arity, SpnFunctionDescriptor descriptor) {}
     private final Map<String, List<FactoryEntry>> factoryRegistry = new LinkedHashMap<>();
 
-    // Associated constants: "TypeName.name" → frame slot holding the value
+    // Associated constants: "TypeName.name" → zero-arg CallTarget returning the value
+    record ConstantEntry(CallTarget callTarget, FieldType type) {}
+    private final Map<String, ConstantEntry> constantRegistry = new LinkedHashMap<>();
+    // Legacy frame-slot constants (from 'let TypeName.name = expr') — kept for backward compat
     private final Map<String, Integer> typeConstantSlots = new LinkedHashMap<>();
     private final Map<String, FieldType> typeConstantTypes = new LinkedHashMap<>();
 
@@ -205,6 +208,13 @@ public class SpnParser {
     public Map<String, SpnStructDescriptor> getStructRegistry() { return structRegistry; }
     public Map<String, SpnVariantSet> getVariantRegistry() { return variantRegistry; }
     public Map<String, CallTarget> getFunctionRegistry() { return functionRegistry; }
+    public Map<String, SpnFunctionDescriptor> getFunctionDescriptorRegistry() { return functionDescriptorRegistry; }
+    public Map<String, MethodEntry> getMethodRegistry() { return methodRegistry; }
+    public Map<String, List<FactoryEntry>> getFactoryRegistry() { return factoryRegistry; }
+    public Map<String, List<OperatorOverload>> getOperatorRegistry() { return operatorRegistry; }
+    public Map<String, Integer> getTypeConstantSlots() { return typeConstantSlots; }
+    public Map<String, FieldType> getTypeConstantTypes() { return typeConstantTypes; }
+    public Map<String, ConstantEntry> getConstantRegistry() { return constantRegistry; }
 
     // ── Top-level parsing ──────────────────────────────────────────────────
 
@@ -224,6 +234,7 @@ public class SpnParser {
             case "action" -> parseFuncDecl(false);
             case "promote" -> { parsePromoteDecl(); yield null; }
             case "let" -> parseLetBinding();
+            case "const" -> { parseConstDecl(); yield null; }
             case "while" -> parseWhileStatement();
             case "if" -> parseIfStatement();
             case "yield" -> parseYieldStatement();
@@ -279,6 +290,7 @@ public class SpnParser {
         // Parse the module path
         StringBuilder path = new StringBuilder();
         SpnParseToken first = tokens.peek();
+        if (first == null) throw tokens.error("Expected module name after 'import'");
 
         if (first.type() == TokenType.TYPE_NAME) {
             // Short name: import Math, import Canvas
@@ -356,6 +368,7 @@ public class SpnParser {
         }
     }
 
+    @SuppressWarnings("unchecked")
     private void applyFullImport(SpnModule module) {
         functionRegistry.putAll(module.getFunctions());
         builtinRegistry.putAll(module.getBuiltinFactories());
@@ -366,8 +379,30 @@ public class SpnParser {
             impureBuiltins.addAll(module.getBuiltinFactories().keySet());
             impureBuiltins.addAll(module.getFunctions().keySet());
         }
+        // Import extended registries (methods, factories, operators, descriptors)
+        Map<String, MethodEntry> methods = module.getExtra("methods");
+        if (methods != null) methodRegistry.putAll(methods);
+        Map<String, List<FactoryEntry>> factories = module.getExtra("factories");
+        if (factories != null) {
+            for (var entry : factories.entrySet()) {
+                factoryRegistry.computeIfAbsent(entry.getKey(), k -> new ArrayList<>())
+                        .addAll(entry.getValue());
+            }
+        }
+        Map<String, List<OperatorOverload>> operators = module.getExtra("operators");
+        if (operators != null) {
+            for (var entry : operators.entrySet()) {
+                operatorRegistry.computeIfAbsent(entry.getKey(), k -> new ArrayList<>())
+                        .addAll(entry.getValue());
+            }
+        }
+        Map<String, SpnFunctionDescriptor> descriptors = module.getExtra("descriptors");
+        if (descriptors != null) functionDescriptorRegistry.putAll(descriptors);
+        Map<String, ConstantEntry> constants = module.getExtra("constants");
+        if (constants != null) constantRegistry.putAll(constants);
     }
 
+    @SuppressWarnings("unchecked")
     private void applySelectiveImport(SpnModule module, ImportDirective directive) {
         for (ImportDirective.ImportedName imp : directive.selectiveNames()) {
             String src = imp.name();
@@ -388,16 +423,86 @@ public class SpnParser {
             }
 
             SpnTypeDescriptor td = module.getType(src);
-            if (td != null) { typeRegistry.put(dst, td); continue; }
+            if (td != null) { typeRegistry.put(dst, td); }
 
             SpnStructDescriptor sd = module.getStruct(src);
-            if (sd != null) { structRegistry.put(dst, sd); continue; }
+            if (sd != null) { structRegistry.put(dst, sd); }
 
             SpnVariantSet vs = module.getVariant(src);
-            if (vs != null) { variantRegistry.put(dst, vs); continue; }
+            if (vs != null) { variantRegistry.put(dst, vs); }
 
-            throw tokens.error("Module '" + module.getNamespace()
-                    + "' does not export '" + src + "'");
+            // If this is a type/struct, also import all associated behavior
+            if (td != null || sd != null) {
+                importTypeAssociations(module, src);
+                continue;
+            }
+
+            if (td == null && sd == null && vs == null) {
+                throw tokens.error("Module '" + module.getNamespace()
+                        + "' does not export '" + src + "'");
+            }
+        }
+    }
+
+    /** Import methods, factories, constants, and operator overloads associated with a type. */
+    @SuppressWarnings("unchecked")
+    private void importTypeAssociations(SpnModule module, String typeName) {
+        // Methods: keys like "TypeName.methodName"
+        Map<String, MethodEntry> methods = module.getExtra("methods");
+        if (methods != null) {
+            for (var entry : methods.entrySet()) {
+                if (entry.getKey().startsWith(typeName + ".")) {
+                    methodRegistry.put(entry.getKey(), entry.getValue());
+                }
+            }
+        }
+
+        // Factories: keyed by type name
+        Map<String, List<FactoryEntry>> factories = module.getExtra("factories");
+        if (factories != null) {
+            List<FactoryEntry> typeFactories = factories.get(typeName);
+            if (typeFactories != null) {
+                factoryRegistry.computeIfAbsent(typeName, k -> new ArrayList<>())
+                        .addAll(typeFactories);
+            }
+        }
+
+        // Constants: keys like "TypeName.constName"
+        Map<String, ConstantEntry> constants = module.getExtra("constants");
+        if (constants != null) {
+            for (var entry : constants.entrySet()) {
+                if (entry.getKey().startsWith(typeName + ".")) {
+                    constantRegistry.put(entry.getKey(), entry.getValue());
+                }
+            }
+        }
+
+        // Operator overloads: import any overload where the type participates
+        Map<String, List<OperatorOverload>> operators = module.getExtra("operators");
+        if (operators != null) {
+            for (var entry : operators.entrySet()) {
+                for (OperatorOverload ov : entry.getValue()) {
+                    boolean involves = false;
+                    for (FieldType pt : ov.paramTypes()) {
+                        String desc = pt.describe();
+                        if (desc.equals(typeName)) { involves = true; break; }
+                    }
+                    if (involves) {
+                        operatorRegistry.computeIfAbsent(entry.getKey(), k -> new ArrayList<>())
+                                .add(ov);
+                    }
+                }
+            }
+        }
+
+        // Function descriptors for the type's functions
+        Map<String, SpnFunctionDescriptor> descriptors = module.getExtra("descriptors");
+        if (descriptors != null) {
+            for (var entry : descriptors.entrySet()) {
+                if (entry.getKey().startsWith(typeName + ".") || entry.getKey().equals(typeName)) {
+                    functionDescriptorRegistry.put(entry.getKey(), entry.getValue());
+                }
+            }
         }
     }
 
@@ -436,7 +541,7 @@ public class SpnParser {
             tokens.advance();
             SpnTypeDescriptor.Builder builder = SpnTypeDescriptor.builder(name);
             SpnStructDescriptor.Builder structBuilder = SpnStructDescriptor.builder(name);
-            int anonIndex = 0;
+            int position = 0;
             while (!tokens.check(")")) {
                 SpnParseToken second = tokens.peek(1);
                 if (second != null && second.text().equals(":")) {
@@ -447,10 +552,11 @@ public class SpnParser {
                     structBuilder.field(compName, ft);
                 } else {
                     FieldType ft = parseFieldType();
-                    String compName = "_" + anonIndex++;
+                    String compName = "_" + position;
                     builder.component(compName, ft);
                     structBuilder.field(compName, ft);
                 }
+                position++;
                 tokens.match(",");
             }
             tokens.expect(")");
@@ -534,24 +640,55 @@ public class SpnParser {
         String name = tokens.expectType(TokenType.TYPE_NAME).text();
         tokens.match("="); // optional — data blocks can use just pipes
 
+        // Data declarations group existing types into a tagged union.
+        // All variant types must be defined before the data declaration.
         List<SpnStructDescriptor> variants = new ArrayList<>();
         do {
             tokens.match("|"); // optional leading pipe
-            String variantName = tokens.expectType(TokenType.TYPE_NAME).text();
-            List<String> fields = new ArrayList<>();
-            if (tokens.match("(")) {
-                while (!tokens.check(")")) {
-                    fields.add(tokens.expectType(TokenType.IDENTIFIER).text());
-                    tokens.match(",");
-                }
-                tokens.expect(")");
+            SpnParseToken variantTok = tokens.expectType(TokenType.TYPE_NAME);
+            String variantName = variantTok.text();
+
+            SpnStructDescriptor desc = structRegistry.get(variantName);
+            if (desc == null) {
+                throw tokens.error("Unknown type '" + variantName
+                        + "' in data declaration. Define the type before referencing it in a data union.",
+                        variantTok);
             }
-            SpnStructDescriptor desc = new SpnStructDescriptor(variantName, fields.toArray(new String[0]));
-            structRegistry.put(variantName, desc);
             variants.add(desc);
         } while (tokens.match("|"));
 
         variantRegistry.put(name, new SpnVariantSet(name, variants.toArray(new SpnStructDescriptor[0])));
+    }
+
+    /**
+     * Parse: const TypeName.name = expr
+     * Compiles the expression into a zero-arg function (thunk) stored in constantRegistry.
+     * The value is computed once at module load time and the CallTarget is exportable.
+     */
+    private void parseConstDecl() {
+        tokens.expect("const");
+        SpnParseToken typeTok = tokens.expectType(TokenType.TYPE_NAME);
+        String typeName = typeTok.text();
+        tokens.expect(".");
+        String constName = tokens.expectType(TokenType.IDENTIFIER).text();
+        tokens.expect("=");
+
+        SpnExpressionNode value = parseExpression();
+        FieldType inferredType = inferType(value);
+
+        // Wrap in a zero-arg pure function so the value is exportable as a CallTarget
+        String key = typeName + "." + constName;
+        pushScope();
+        Scope constScope = currentScope;
+        popScope();
+
+        SpnFunctionDescriptor descriptor = SpnFunctionDescriptor.pure(key).returns(
+                inferredType != null ? inferredType : FieldType.UNTYPED).build();
+        SpnFunctionRootNode fnRoot = new SpnFunctionRootNode(
+                language, constScope.buildFrame(), descriptor, new int[0], value);
+        CallTarget callTarget = fnRoot.getCallTarget();
+
+        constantRegistry.put(key, new ConstantEntry(callTarget, inferredType));
     }
 
     /** Parse 'struct' as an alias for 'type' — both produce the same result. */
@@ -600,6 +737,7 @@ public class SpnParser {
     private SpnStatementNode parseFuncDecl(boolean isPure) {
         tokens.advance(); // consume 'pure' or 'action'
         SpnParseToken nameTok = tokens.peek();
+        if (nameTok == null) throw tokens.error("Expected function name after declaration keyword");
 
         // Dispatch by declaration form
         if (nameTok.type() == TokenType.TYPE_NAME && tokens.peek(1) != null) {
@@ -655,11 +793,14 @@ public class SpnParser {
 
         // Set factory context so this(args) resolves to raw construction
         String outerFactory = currentFactoryTypeName;
+        int outerArity = currentFactoryArity;
         currentFactoryTypeName = typeName;
+        currentFactoryArity = paramTypes.size();
 
         parseFunctionBody(typeName, paramTypes, returnType, isPure, false);
 
         currentFactoryTypeName = outerFactory;
+        currentFactoryArity = outerArity;
 
         // Move from functionRegistry to factoryRegistry
         CallTarget ct = functionRegistry.get(typeName);
@@ -876,6 +1017,7 @@ public class SpnParser {
     private boolean containsYield;
     private boolean currentFunctionIsPure;
     private String currentFactoryTypeName; // non-null when inside a factory body
+    private int currentFactoryArity;      // arity of the factory being parsed
     private final List<SpnDeferredInvokeNode> deferredCalls = new ArrayList<>();
 
     private void patchDeferredCalls(String name, CallTarget target) {
@@ -1224,6 +1366,7 @@ public class SpnParser {
 
         while (tokens.hasMore() && !tokens.check("}")) {
             SpnParseToken tok = tokens.peek();
+            if (tok == null) throw tokens.error("Unexpected end of block");
             SpnStatementNode stmt = switch (tok.text()) {
                 case "let" -> parseLetBinding();
                 case "while" -> parseWhileStatement();
@@ -1593,6 +1736,7 @@ public class SpnParser {
             if (tokens.check(".")) {
                 SpnParseToken dotTok = tokens.advance(); // consume '.'
                 SpnParseToken nextTok = tokens.peek();
+                if (nextTok == null) throw tokens.error("Expected field name or index after '.'");
 
                 // Positional access: expr.0, expr.1, etc.
                 if (nextTok.type() == TokenType.NUMBER && !nextTok.text().contains(".")) {
@@ -1810,10 +1954,23 @@ public class SpnParser {
         if (tok.type() == TokenType.TYPE_NAME) {
             SpnParseToken next = tokens.peek(1);
             if (next != null && next.text().equals(".")) {
-                // Could be TypeName.name (associated constant) — check if it's registered
                 SpnParseToken nameAfterDot = tokens.peek(2);
                 if (nameAfterDot != null && nameAfterDot.type() == TokenType.IDENTIFIER) {
                     String key = tok.text() + "." + nameAfterDot.text();
+
+                    // Check exportable constants (from 'const' declarations)
+                    ConstantEntry constEntry = constantRegistry.get(key);
+                    if (constEntry != null) {
+                        tokens.advance(); // TypeName
+                        tokens.advance(); // .
+                        tokens.advance(); // name
+                        SpnExpressionNode callNode = new spn.node.func.SpnInvokeNode(
+                                constEntry.callTarget());
+                        if (constEntry.type() != null) trackType(callNode, constEntry.type());
+                        return callNode;
+                    }
+
+                    // Legacy frame-slot constants (from 'let TypeName.name = expr')
                     Integer slot = typeConstantSlots.get(key);
                     if (slot != null) {
                         tokens.advance(); // TypeName
@@ -2033,8 +2190,15 @@ public class SpnParser {
         }
         tokens.expect(")");
 
+        // Inside a factory body, TypeName(args) with same type AND arity is recursive — reject it.
+        // The user should use this(args) for raw construction.
+        // Different arity is fine (chaining between overloads).
+        if (name.equals(currentFactoryTypeName) && args.size() == currentFactoryArity) {
+            throw tokens.error("Recursive factory call: use this("
+                    + args.size() + " args) for raw construction inside a factory", nameTok);
+        }
+
         // Check for factory — TypeName(args) always goes through factory if defined.
-        // Inside a factory body, use this(args) for raw construction to avoid recursion.
         List<FactoryEntry> factories = factoryRegistry.get(name);
         if (factories != null) {
             for (FactoryEntry fe : factories) {
@@ -2052,11 +2216,19 @@ public class SpnParser {
         // Raw construction (no factory, or inside own factory body)
         SpnStructDescriptor desc = structRegistry.get(name);
         if (desc != null) {
+            if (args.size() != desc.fieldCount()) {
+                throw tokens.error(name + " expects " + desc.fieldCount()
+                        + " argument(s), got " + args.size(), nameTok);
+            }
             return new SpnStructConstructNode(desc, args.toArray(new SpnExpressionNode[0]));
         }
 
         SpnTypeDescriptor typeDesc = typeRegistry.get(name);
         if (typeDesc != null && typeDesc.isProduct()) {
+            if (args.size() != typeDesc.componentCount()) {
+                throw tokens.error(name + " expects " + typeDesc.componentCount()
+                        + " argument(s), got " + args.size(), nameTok);
+            }
             return new spn.node.type.SpnProductConstructNode(typeDesc,
                     args.toArray(new SpnExpressionNode[0]));
         }
@@ -2076,6 +2248,7 @@ public class SpnParser {
 
         // Peek to determine: is this a dict (first element is :key value)?
         SpnParseToken first = tokens.peek();
+        if (first == null) throw tokens.error("Expected collection element after '['");
         if (first.type() == TokenType.SYMBOL) {
             // Could be dict [:key value, ...] or set [:a, :b, :c]
             SpnParseToken second = tokens.peek(1);
@@ -2181,6 +2354,7 @@ public class SpnParser {
 
     private ParsedPattern parsePattern() {
         SpnParseToken tok = tokens.peek();
+        if (tok == null) throw tokens.error("Expected pattern, but reached end of input");
 
         // Wildcard: _
         if (tok.text().equals("_")) {
@@ -2217,6 +2391,7 @@ public class SpnParser {
 
             // [h | t] — head/tail
             SpnParseToken first = tokens.peek();
+            if (first == null) throw tokens.error("Expected pattern element after '['");
             SpnParseToken second = tokens.peek(1);
             if (second != null && second.text().equals("|")) {
                 String headName = tokens.advance().text();
@@ -2367,6 +2542,7 @@ public class SpnParser {
 
     private FieldType parseFieldType() {
         SpnParseToken tok = tokens.peek();
+        if (tok == null) throw tokens.error("Expected type, but reached end of input");
 
         // Primitive type keywords (int, float, string, bool)
         if (tok.type() == TokenType.KEYWORD && PRIMITIVE_TYPE_KEYWORDS.contains(tok.text())) {

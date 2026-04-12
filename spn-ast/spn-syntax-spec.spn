@@ -54,11 +54,12 @@ type Identifier(string) where (s) { length(s) >= 1 && length(s) <= 64 }
 -- Structs are containers. They get their smartness from typed fields
 -- that reference numeric/algebraic types.
 
-data Shape
-  | Circle(radius)
-  | Rectangle(width, height)
-  | Triangle(a, b, c)
+type Circle(radius: float)
+type Rectangle(width: float, height: float)
+type Triangle(a: float, b: float, c: float)
 
+data Shape = Circle | Rectangle | Triangle
+rea
 struct Point(x: float, y: float)
 
 struct Pair(first, second)

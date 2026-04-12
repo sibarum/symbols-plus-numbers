@@ -35,13 +35,16 @@ public final class SpnModule {
     private final Map<String, SpnTypeDescriptor> types;
     private final Map<String, SpnStructDescriptor> structs;
     private final Map<String, SpnVariantSet> variants;
+    // Extensible metadata — carries parser-specific registries (methods, factories, operators, etc.)
+    private final Map<String, Object> extras;
 
     private SpnModule(String namespace, boolean impure,
                       Map<String, CallTarget> functions,
                       Map<String, BuiltinFactory> builtinFactories,
                       Map<String, SpnTypeDescriptor> types,
                       Map<String, SpnStructDescriptor> structs,
-                      Map<String, SpnVariantSet> variants) {
+                      Map<String, SpnVariantSet> variants,
+                      Map<String, Object> extras) {
         this.namespace = namespace;
         this.impure = impure;
         this.functions = Map.copyOf(functions);
@@ -49,10 +52,16 @@ public final class SpnModule {
         this.types = Map.copyOf(types);
         this.structs = Map.copyOf(structs);
         this.variants = Map.copyOf(variants);
+        this.extras = extras != null ? Map.copyOf(extras) : Map.of();
     }
 
     public String getNamespace() { return namespace; }
     public boolean isImpure() { return impure; }
+    public Map<String, Object> getExtras() { return extras; }
+
+    /** Get a typed extra registry by key. Returns null if not present. */
+    @SuppressWarnings("unchecked")
+    public <T> T getExtra(String key) { return (T) extras.get(key); }
 
     // ── Lookups ────────────────────────────────────────────────────────────
 
@@ -159,9 +168,18 @@ public final class SpnModule {
             return this;
         }
 
+        private Map<String, Object> extras;
+
+        /** Add an extensible registry (methods, factories, operators, etc.). */
+        public Builder extra(String key, Object value) {
+            if (extras == null) extras = new LinkedHashMap<>();
+            extras.put(key, value);
+            return this;
+        }
+
         public SpnModule build() {
             return new SpnModule(namespace, impure, functions, builtinFactories,
-                    types, structs, variants);
+                    types, structs, variants, extras);
         }
     }
 }

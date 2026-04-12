@@ -238,9 +238,7 @@ class ModuleMode implements Mode {
     private void openFile(ModuleContext.ModuleFile file) {
         window.popMode(); // pop ModuleMode
         try {
-            String content = Files.readString(file.absolutePath());
-            // Push a FileViewMode (stacked editor) instead of replacing current file
-            window.pushLegacyMode(new FileViewMode(window, file.absolutePath(), content));
+            window.loadFile(file.absolutePath());
         } catch (IOException e) {
             window.flash("Error: " + e.getMessage(), true);
         }

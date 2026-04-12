@@ -61,10 +61,11 @@ type HexColor where length >= 6, length <= 6, charset HEX
 -- Structs are "dumb" containers. They get their smartness from typed fields
 -- that reference numeric/algebraic types.
 
-data Shape
-  = Circle(radius)
-  | Rectangle(width, height)
-  | Triangle(a, b, c)
+type Circle(radius: float)
+type Rectangle(width: float, height: float)
+type Triangle(a: float, b: float, c: float)
+
+data Shape = Circle | Rectangle | Triangle
 
 struct Point(x: Double, y: Double)
 

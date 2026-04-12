@@ -223,11 +223,13 @@ class ImportMode implements Mode {
                     "import " + mod,
                     "import " + mod));
 
-            // Individual export imports
+            // Individual export imports (skip operators and internal names)
             for (String exp : exports) {
-                items.add(new ImportItem(mod, exp,
-                        "import " + mod + " (" + exp + ")",
-                        "import " + mod + " (" + exp + ")"));
+                if (isImportableExport(exp)) {
+                    items.add(new ImportItem(mod, exp,
+                            "import " + mod + " (" + exp + ")",
+                            "import " + mod + " (" + exp + ")"));
+                }
             }
         }
 
@@ -268,23 +270,62 @@ class ImportMode implements Mode {
             // Best-effort: continue with what we have
         }
 
-        // Add module context files as importable namespaces
+        // Add module context files as importable namespaces (relative form for sibling imports)
         ModuleContext ctx = window.getModuleContext();
         if (ctx != null) {
+            ctx.rescan(); // pick up any newly created files
             for (ModuleContext.ModuleFile f : ctx.getFiles()) {
-                // Derive a short name from the relative path
                 String rel = f.relativePath();
                 if (rel.endsWith(".spn")) rel = rel.substring(0, rel.length() - 4);
-                String namespace = rel.replace('/', '.');
-                String fullNs = ctx.getNamespace() + "." + namespace;
-                items.add(new ImportItem(fullNs, null,
-                        "import " + fullNs,
-                        "import " + fullNs));
+                String namespace = rel.replace('/', '.').replace('\\', '.');
+
+                // Module-level import
+                items.add(new ImportItem(namespace, null,
+                        "import " + namespace + "  [module]",
+                        "import " + namespace));
+
+                // Try to load and discover exports
+                try {
+                    var modRegistry = new spn.language.SpnModuleRegistry();
+                    spn.stdlib.gen.StdlibModuleLoader.registerAll(modRegistry);
+                    spn.canvas.CanvasBuiltins.registerModule(modRegistry);
+                    var symTable = new spn.type.SpnSymbolTable();
+                    modRegistry.addLoader(new spn.lang.ClasspathModuleLoader(null, symTable));
+                    modRegistry.addLoader(new spn.lang.FilesystemModuleLoader(
+                            ctx.getRoot(), ctx.getNamespace(), null, symTable));
+                    modRegistry.resolve(namespace).ifPresent(mod -> {
+                        for (String exp : mod.allExportedNames()) {
+                            if (isImportableExport(exp)) {
+                                items.add(new ImportItem(namespace, exp,
+                                        "import " + namespace + " (" + exp + ")  [module]",
+                                        "import " + namespace + " (" + exp + ")"));
+                            }
+                        }
+                    });
+                } catch (Exception e) {
+                    // Skip exports if module fails to parse
+                }
             }
         }
 
         items.sort(Comparator.comparing(ImportItem::displayText));
         return items;
+    }
+
+    /**
+     * Check if an export name should appear in the import menu.
+     * Filters out operator overloads, internal names, and method/constant keys.
+     */
+    private static boolean isImportableExport(String name) {
+        if (name.isEmpty()) return false;
+        // Skip operator overloads (+, -, *, /, etc.)
+        char first = name.charAt(0);
+        if (!Character.isLetter(first) && first != '_') return false;
+        // Skip internal anonymous fields (_0, _1, etc.)
+        if (name.startsWith("_")) return false;
+        // Skip method/constant keys (TypeName.method — these come with the type)
+        if (name.contains(".")) return false;
+        return true;
     }
 
     // ---- Filtering ----

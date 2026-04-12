@@ -1,42 +1,54 @@
 package spn.gui.diagnostic;
 
 import spn.lang.ClasspathModuleLoader;
-import spn.lang.SpnParseException;
-import spn.lang.SpnParser;
+import spn.lang.FilesystemModuleLoader;
+import spn.lang.IncrementalParser;
 import spn.language.SpnModuleRegistry;
 import spn.type.SpnSymbolTable;
+
+import java.nio.file.Path;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Debounced background diagnostic engine. Re-parses the source after a
- * quiet period (no edits) and reconciles the results with the overlay.
+ * Debounced diagnostic engine using incremental parsing.
  *
- * <p>All methods are called from the main (render/event) thread — no
- * multi-threading is needed since parse is fast enough for interactive use.
+ * <p>Uses {@link IncrementalParser} to avoid re-parsing unchanged declarations.
+ * When the source is edited, only the affected declaration spans are re-parsed.
+ * If nothing changed, the cached result is returned immediately.
+ *
+ * <p>All methods are called from the main (render/event) thread.
  */
 public class DiagnosticEngine {
 
     private static final double DEBOUNCE_SECONDS = 0.6;
 
     private final DiagnosticOverlay overlay;
-    private final SpnSymbolTable symbolTable = new SpnSymbolTable();
-    private final SpnModuleRegistry registry;
+    private final IncrementalParser incrementalParser;
 
     private double lastEditTime = -1;
     private boolean dirty;
-    private String lastParsedSource = "";
+
+    private final SpnSymbolTable symbolTable;
+    private final SpnModuleRegistry registry;
 
     public DiagnosticEngine(DiagnosticOverlay overlay) {
         this.overlay = overlay;
 
         // Set up a module registry matching the runtime environment
-        // so imports resolve during diagnostic parsing
+        this.symbolTable = new SpnSymbolTable();
         this.registry = new SpnModuleRegistry();
         spn.stdlib.gen.StdlibModuleLoader.registerAll(registry);
         spn.canvas.CanvasBuiltins.registerModule(registry);
         registry.addLoader(new ClasspathModuleLoader(null, symbolTable));
+
+        this.incrementalParser = new IncrementalParser(symbolTable, registry);
+    }
+
+    /** Configure filesystem module loading for local module imports. */
+    public void setModuleRoot(Path root, String namespace) {
+        registry.addLoader(new FilesystemModuleLoader(root, namespace, null, symbolTable));
     }
 
     /** Called whenever the source is modified. Resets the debounce timer. */
@@ -53,50 +65,26 @@ public class DiagnosticEngine {
     /**
      * Called every frame (from render). Checks if debounce has elapsed
      * and triggers a re-parse if needed.
-     *
-     * @param now       current time (glfwGetTime)
-     * @param source    current editor source text
-     * @param fileName  source file name for error messages
      */
     public void update(double now, String source, String fileName) {
         if (!dirty) return;
         if (now - lastEditTime < DEBOUNCE_SECONDS) return;
 
         dirty = false;
-        lastParsedSource = source;
 
-        List<Diagnostic> diagnostics = parse(source, fileName);
-        reconcile(diagnostics);
-    }
+        IncrementalParser.Result result = incrementalParser.parse(source, fileName);
 
-    /** Parse the source and collect diagnostics. */
-    private List<Diagnostic> parse(String source, String fileName) {
-        List<Diagnostic> result = new ArrayList<>();
-        if (source.isBlank()) return result;
-
-        int lastRow = Math.max(0, (int) source.lines().count() - 1);
-        try {
-            SpnParser parser = new SpnParser(source, fileName, null, symbolTable, registry);
-            parser.parse();
-        } catch (SpnParseException pe) {
-            int row = pe.getLine() > 0 ? pe.getLine() - 1 : lastRow;  // convert 1-based to 0-based
-            int col = pe.getCol() > 0 ? pe.getCol() - 1 : 0;
-            result.add(new Diagnostic(row, col, -1, pe.getMessage(), Diagnostic.Severity.ERROR));
-        } catch (Exception e) {
-            // Generic error — put on last line as best guess
-            String msg = e.getMessage();
-            if (msg == null) msg = e.getClass().getSimpleName();
-            result.add(new Diagnostic(lastRow, 0, -1, msg, Diagnostic.Severity.ERROR));
-        }
-        return result;
-    }
-
-    /** Reconcile new diagnostics with existing marks. */
-    private void reconcile(List<Diagnostic> newDiags) {
+        // Convert parse errors to diagnostic marks
         List<DiagnosticMark> newMarks = new ArrayList<>();
-        for (Diagnostic d : newDiags) {
-            newMarks.add(new DiagnosticMark(d));
+        for (IncrementalParser.ParseError err : result.errors()) {
+            newMarks.add(new DiagnosticMark(new Diagnostic(
+                    err.line(), err.col(), -1, err.message(), Diagnostic.Severity.ERROR)));
         }
         overlay.setMarks(newMarks);
+    }
+
+    /** Get the incremental parser for inspection (e.g., cached spans for diffing). */
+    public IncrementalParser getIncrementalParser() {
+        return incrementalParser;
     }
 }

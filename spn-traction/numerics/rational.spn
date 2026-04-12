@@ -4,9 +4,13 @@ type Rational (int, int)
 
 pure Rational(int, int) -> Rational = (n, d) {
   let g = gcd(abs(n), abs(d))
-  match d
-  | 0 -> { this(-n / g, -d / g) }
-  | _ -> { this(n / g, d / g) }
+  match [n, d]
+  | [0, 0] -> { this(1, 1) }
+  | [0, _] -> { this(0, d) }
+  | [_, 0] -> { this(n, 0) }
+  | _ -> {
+    this(n / g, d / g)
+  }
 }
 
 pure Rational(int) -> Rational = (n) {
@@ -37,7 +41,13 @@ pure /(Rational, Rational) -> Rational = (q1, q2) {
   q1 * q2.inv()
 }
 
+const Rational.id = Rational(1,1)
+const Rational.zero = Rational(0,1)
+const Rational.omega = Rational(1,0)
+
 promote int -> Rational = (i) {
-  
+  Rational(i)
 }
 
+
+Rational.omega + Rational.zero

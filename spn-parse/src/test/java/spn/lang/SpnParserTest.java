@@ -271,9 +271,9 @@ class SpnParserTest {
         @Test
         void dataVariants() {
             SpnParser p = parser("""
-                data Shape
-                  = Circle(radius)
-                  | Rectangle(width, height)
+                type Circle(radius: Double)
+                type Rectangle(width: Double, height: Double)
+                data Shape = Circle | Rectangle
                 """);
             p.parse();
             assertNotNull(p.getStructRegistry().get("Circle"));
@@ -284,9 +284,9 @@ class SpnParserTest {
         @Test
         void constructVariant() {
             Object result = run("""
-                data Shape
-                  = Circle(radius)
-                  | Rectangle(width, height)
+                type Circle(radius: Double)
+                type Rectangle(width: Double, height: Double)
+                data Shape = Circle | Rectangle
                 Circle(5.0)
                 """);
             assertInstanceOf(SpnStructValue.class, result);
@@ -451,9 +451,9 @@ class SpnParserTest {
         @Test
         void matchOnStruct() {
             assertEquals(78.53975, (double) run("""
-                data Shape
-                  = Circle(radius)
-                  | Rectangle(width, height)
+                type Circle(radius: Double)
+                type Rectangle(width: Double, height: Double)
+                data Shape = Circle | Rectangle
                 pure area(Shape) -> Double = (shape) {
                   match shape
                     | Circle(r) -> 3.14159 * r * r

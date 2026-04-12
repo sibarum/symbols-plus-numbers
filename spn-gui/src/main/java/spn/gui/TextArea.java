@@ -93,10 +93,15 @@ public class TextArea {
 
     // Diagnostic overlay (optional — set by EditorTab for error highlighting)
     private spn.gui.diagnostic.DiagnosticOverlay diagnosticOverlay;
+    private spn.gui.diagnostic.ChangeOverlay changeOverlay;
     private Runnable onEditCallback; // notified on any edit for debounce
 
     public void setDiagnosticOverlay(spn.gui.diagnostic.DiagnosticOverlay overlay) {
         this.diagnosticOverlay = overlay;
+    }
+
+    public void setChangeOverlay(spn.gui.diagnostic.ChangeOverlay overlay) {
+        this.changeOverlay = overlay;
     }
 
     public void setOnEditCallback(Runnable callback) {
@@ -314,6 +319,12 @@ public class TextArea {
                 float rw = (drawEnd - drawStart) * cellWidth;
                 font.drawRect(rx, ry, rw, cellHeight, 0.2f, 0.35f, 0.55f);
             }
+        }
+
+        // Change indicators (faint gutter bar for modified lines)
+        if (changeOverlay != null && !changeOverlay.isEmpty()) {
+            changeOverlay.render(font, boundsX + PAD, textY, cellHeight,
+                    HIGHLIGHT_OFFSET_Y, scrollRow, visibleRows, 3f);
         }
 
         // Diagnostic overlays (error underlines, stale hazes)
