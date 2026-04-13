@@ -70,6 +70,7 @@ public final class ClasspathModuleLoader implements ModuleLoader {
                     .extra("operators", parser.getOperatorRegistry())
                     .extra("descriptors", parser.getFunctionDescriptorRegistry())
                     .extra("constants", parser.getConstantRegistry())
+                    .extra("macros", parser.getMacroRegistry())
                     .build();
 
             return Optional.of(module);

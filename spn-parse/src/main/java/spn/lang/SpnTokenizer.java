@@ -130,6 +130,16 @@ public class SpnTokenizer {
         this.pos = mark;
     }
 
+    /** Return tokens between two marks (inclusive of from, exclusive of to). */
+    public List<SpnParseToken> slice(int from, int to) {
+        return new ArrayList<>(tokens.subList(from, to));
+    }
+
+    /** Inject tokens at the current position, so the next peek() sees them. */
+    public void injectAt(List<SpnParseToken> injected) {
+        tokens.addAll(pos, injected);
+    }
+
     public SpnParseException error(String message) {
         SpnParseToken tok = peek();
         if (tok != null) {

@@ -618,6 +618,9 @@ public class EditorWindow {
             Files.writeString(target, content);
             et.setFilePath(target);
             et.setSavedContent(content);
+            // Establish module context for the newly-saved file so import discovery,
+            // module-aware features, etc. work immediately without reopening.
+            detectModule(et, target);
             updateTitle();
         } catch (IOException e) {
             org.lwjgl.util.tinyfd.TinyFileDialogs.tinyfd_messageBox(

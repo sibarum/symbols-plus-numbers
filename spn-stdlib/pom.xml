@@ -32,9 +32,32 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>sibarum.spn.core</groupId>
+            <artifactId>spn-parse</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
+        <!--
+            SPN source files (*.spn) live under src/main/spn/, following the
+            same convention as src/main/java/, src/main/proto/, etc. They're
+            treated as classpath resources so ClasspathModuleLoader can
+            discover and load them by namespace.
+        -->
+        <resources>
+            <resource>
+                <directory>src/main/spn</directory>
+                <includes>
+                    <include>**/*.spn</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+        </resources>
         <plugins>
             <!--
                 Build sequence for stdlib:

@@ -62,6 +62,10 @@ public class SpnParser {
     record FactoryEntry(CallTarget callTarget, int arity, SpnFunctionDescriptor descriptor) {}
     private final Map<String, List<FactoryEntry>> factoryRegistry = new LinkedHashMap<>();
 
+    // Macro registry: "Name" → MacroDef (compile-time code template)
+    record MacroDef(String name, List<String> paramNames, List<SpnParseToken> bodyTokens) {}
+    private final Map<String, MacroDef> macroRegistry = new LinkedHashMap<>();
+
     // Associated constants: "TypeName.name" → zero-arg CallTarget returning the value
     record ConstantEntry(CallTarget callTarget, FieldType type) {}
     private final Map<String, ConstantEntry> constantRegistry = new LinkedHashMap<>();
@@ -215,12 +219,23 @@ public class SpnParser {
     public Map<String, Integer> getTypeConstantSlots() { return typeConstantSlots; }
     public Map<String, FieldType> getTypeConstantTypes() { return typeConstantTypes; }
     public Map<String, ConstantEntry> getConstantRegistry() { return constantRegistry; }
+    public Map<String, MacroDef> getMacroRegistry() { return macroRegistry; }
 
     // ── Top-level parsing ──────────────────────────────────────────────────
 
     private SpnStatementNode parseTopLevel() {
         SpnParseToken tok = tokens.peek();
         if (tok == null) return null;
+
+        // Macro invocation: Name(args) where Name is a registered macro.
+        // Detect before the keyword switch so macro names can't collide with keywords.
+        if (macroRegistry.containsKey(tok.text())) {
+            SpnParseToken next = tokens.peek(1);
+            if (next != null && next.text().equals("(")) {
+                expandMacroInvocation();
+                return null;
+            }
+        }
 
         return switch (tok.text()) {
             case "import" -> { parseImportDecl(); yield null; }
@@ -239,8 +254,115 @@ public class SpnParser {
             case "if" -> parseIfStatement();
             case "yield" -> parseYieldStatement();
             case "return" -> parseYieldStatement(); // return is syntactic sugar for yield
+            case "macro" -> { parseMacroDecl(); yield null; }
             default -> parseExpressionStatement();
         };
+    }
+
+    // ── Macros ─────────────────────────────────────────────────────────────
+
+    /**
+     * Parse: macro Name(P1, P2, ...) = { body }
+     * The body is captured as a raw token sequence; parameters are substituted
+     * textually at invocation time.
+     */
+    private void parseMacroDecl() {
+        tokens.expect("macro");
+        SpnParseToken nameTok = tokens.advance();
+        String name = nameTok.text();
+
+        // Parameter list: (P1, P2, ...)
+        tokens.expect("(");
+        List<String> paramNames = new ArrayList<>();
+        while (!tokens.check(")")) {
+            paramNames.add(tokens.advance().text());
+            tokens.match(",");
+        }
+        tokens.expect(")");
+
+        tokens.expect("=");
+        tokens.expect("{");
+
+        // Capture body tokens until matching closing brace
+        int start = tokens.mark();
+        int depth = 1;
+        while (tokens.hasMore() && depth > 0) {
+            String t = tokens.peek().text();
+            if (t.equals("{")) depth++;
+            else if (t.equals("}")) {
+                depth--;
+                if (depth == 0) break;
+            }
+            tokens.advance();
+        }
+        int end = tokens.mark();
+        tokens.expect("}");
+
+        List<SpnParseToken> bodyTokens = tokens.slice(start, end);
+        macroRegistry.put(name, new MacroDef(name, paramNames, bodyTokens));
+    }
+
+    /**
+     * Expand a macro invocation: Name(arg1, arg2, ...) at the current position.
+     * Substitutes argument tokens for parameter occurrences in the body, then
+     * injects the substituted tokens back into the stream for normal parsing.
+     */
+    private void expandMacroInvocation() {
+        SpnParseToken nameTok = tokens.advance();
+        MacroDef macro = macroRegistry.get(nameTok.text());
+
+        tokens.expect("(");
+        List<List<SpnParseToken>> args = new ArrayList<>();
+        // Guard against EOF: must also check hasMore() so we don't spin forever
+        // when the user is mid-typing and the closing ')' hasn't been written yet.
+        while (tokens.hasMore() && !tokens.check(")")) {
+            // Each argument is a single token sequence terminated by , or )
+            List<SpnParseToken> arg = new ArrayList<>();
+            int depth = 0;
+            while (tokens.hasMore()) {
+                String t = tokens.peek().text();
+                if (depth == 0 && (t.equals(",") || t.equals(")"))) break;
+                if (t.equals("(") || t.equals("[") || t.equals("{")) depth++;
+                else if (t.equals(")") || t.equals("]") || t.equals("}")) depth--;
+                arg.add(tokens.advance());
+            }
+            args.add(arg);
+            // If we reached EOF without hitting a comma or ), bail rather than loop.
+            if (!tokens.hasMore()) break;
+            tokens.match(",");
+        }
+        tokens.expect(")");
+
+        if (args.size() != macro.paramNames().size()) {
+            throw tokens.error("Macro '" + macro.name() + "' expects "
+                    + macro.paramNames().size() + " argument(s), got " + args.size(), nameTok);
+        }
+
+        // Build parameter → argument map
+        Map<String, List<SpnParseToken>> substitution = new HashMap<>();
+        for (int i = 0; i < macro.paramNames().size(); i++) {
+            substitution.put(macro.paramNames().get(i), args.get(i));
+        }
+
+        // Substitute: walk body tokens, replace any whose text matches a param.
+        // Re-stamp substituted tokens with the position of the parameter they
+        // replaced, so the parser sees them as living "inside" the macro body
+        // (line-aware checks like function-call detection work correctly).
+        List<SpnParseToken> expanded = new ArrayList<>();
+        for (SpnParseToken tok : macro.bodyTokens()) {
+            List<SpnParseToken> sub = substitution.get(tok.text());
+            if (sub != null) {
+                for (SpnParseToken s : sub) {
+                    expanded.add(new SpnParseToken(
+                            tok.line(), tok.col(), tok.endCol(), s.text(), s.type()));
+                }
+            } else {
+                expanded.add(tok);
+            }
+        }
+
+        // Inject expanded tokens at current position; parser will pick them up
+        tokens.injectAt(expanded);
     }
 
     // ── Import declarations ────────────────────────────────────────────────
@@ -400,6 +522,8 @@ public class SpnParser {
         if (descriptors != null) functionDescriptorRegistry.putAll(descriptors);
         Map<String, ConstantEntry> constants = module.getExtra("constants");
         if (constants != null) constantRegistry.putAll(constants);
+        Map<String, MacroDef> macros = module.getExtra("macros");
+        if (macros != null) macroRegistry.putAll(macros);
     }
 
     @SuppressWarnings("unchecked")
@@ -2771,6 +2895,17 @@ public class SpnParser {
         if (tok.text().equals("_")) {
             tokens.advance();
             return new MatchPattern.Wildcard();
+        }
+
+        // Boolean literals: true / false
+        // (must come before the IDENTIFIER fallback or they'd be treated as captures)
+        if (tok.text().equals("true") && tok.type() == TokenType.IDENTIFIER) {
+            tokens.advance();
+            return new MatchPattern.Literal(Boolean.TRUE);
+        }
+        if (tok.text().equals("false") && tok.type() == TokenType.IDENTIFIER) {
+            tokens.advance();
+            return new MatchPattern.Literal(Boolean.FALSE);
         }
 
         // Number literal

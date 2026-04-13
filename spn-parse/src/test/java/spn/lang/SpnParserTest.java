@@ -919,6 +919,43 @@ x + y
         }
 
         @Test
+        void macroDeclarationAndInvocation() {
+            // Macro that derives a "double" function for any numeric type
+            assertEquals(10L, run("""
+                macro deriveDouble(T) = {
+                  pure double(T) -> T = (x) { x + x }
+                }
+                deriveDouble(int)
+                double(5)
+                """));
+        }
+
+        @Test
+        void macroDerivesMultipleFunctions() {
+            // The motivating use case: one macro emits several functions for a type.
+            assertEquals(7L, run("""
+                type Point(int, int)
+                macro derivePointOps(T) = {
+                  pure sumX(T, T) -> int = (a, b) { a.0 + b.0 }
+                  pure sumY(T, T) -> int = (a, b) { a.1 + b.1 }
+                }
+                derivePointOps(Point)
+                sumX(Point(3, 9), Point(4, 1))
+                """));
+        }
+
+        @Test
+        void macroWithMultipleParams() {
+            assertEquals(7L, run("""
+                macro deriveCombine(A, B) = {
+                  pure combine(A, B) -> int = (a, b) { a + b }
+                }
+                deriveCombine(int, int)
+                combine(3, 4)
+                """));
+        }
+
+        @Test
         void blockWithLetAndTupleReturn() {
             Object result = run("""
                 let t = {

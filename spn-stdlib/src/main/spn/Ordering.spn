@@ -1,0 +1,38 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- SPN Standard Library — Ordering
+-- ═══════════════════════════════════════════════════════════════════════
+-- Macros for deriving the ordinal comparison operators (<, >, <=, >=)
+-- from a single comparator function.
+--
+-- Two conventions are supported:
+--   * Integer comparator: (T, T) -> int
+--     Returns negative if a < b, zero if a == b, positive if a > b.
+--   * Symbolic comparator: (T, T) -> :lt | :eq | :gt
+--     Returns one of three symbols describing the ordering.
+--
+-- Usage:
+--   import Ordering
+--
+--   pure cmpRationals(Rational, Rational) -> int = (a, b) { ... }
+--   deriveOrderingFromInt(Rational, cmpRationals)
+--
+--   -- now <, >, <=, >= work on Rational
+-- ═══════════════════════════════════════════════════════════════════════
+
+-- Derive ordering operators from an integer comparator.
+-- The cmp function should return < 0 for less-than, 0 for equal, > 0 for greater-than.
+macro deriveOrderingFromInt(T, cmp) = {
+  pure <(T, T) -> bool  = (a, b) { cmp(a, b) < 0 }
+  pure >(T, T) -> bool  = (a, b) { cmp(a, b) > 0 }
+  pure <=(T, T) -> bool = (a, b) { cmp(a, b) <= 0 }
+  pure >=(T, T) -> bool = (a, b) { cmp(a, b) >= 0 }
+}
+
+-- Derive ordering operators from a symbolic comparator.
+-- The cmp function should return :lt, :eq, or :gt.
+macro deriveOrderingFromOrdering(T, cmp) = {
+  pure <(T, T) -> bool  = (a, b) { cmp(a, b) == :lt }
+  pure >(T, T) -> bool  = (a, b) { cmp(a, b) == :gt }
+  pure <=(T, T) -> bool = (a, b) { cmp(a, b) != :gt }
+  pure >=(T, T) -> bool = (a, b) { cmp(a, b) != :lt }
+}

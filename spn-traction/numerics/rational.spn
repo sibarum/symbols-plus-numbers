@@ -1,4 +1,5 @@
 import Math (abs, sign, gcd)
+import Ordering
 
 type Rational (int, int)
 
@@ -45,6 +46,12 @@ pure *(Rational, Rational) -> Rational = ((q1n, q1d), (q2n, q2d)) {
 pure /(Rational, Rational) -> Rational = (q1, q2) {
   q1 * q2.inv()
 }
+
+pure compare(Rational, Rational) -> int = (q1, q2) {
+  (q2 - q1).0
+}
+
+deriveOrderingFromInt(Rational, compare)
 
 const Rational.one = Rational(1,1)
 const Rational.zero = Rational(0,1)
