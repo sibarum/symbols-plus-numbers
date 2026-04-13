@@ -838,6 +838,18 @@ public class SpnParser {
                                 paramTypes.toArray(new FieldType[0]), returnType, ct));
             }
         }
+
+        // Register inspect function on the struct descriptor
+        if (name.equals("inspect") && paramTypes.size() == 1) {
+            CallTarget ct = functionRegistry.get(name);
+            if (ct != null) {
+                String typeName = paramTypes.get(0).describe();
+                SpnStructDescriptor desc = structRegistry.get(typeName);
+                if (desc != null) {
+                    desc.setInspectTarget(ct);
+                }
+            }
+        }
         return null;
     }
 
@@ -1047,6 +1059,11 @@ public class SpnParser {
             return parseLetDestructure();
         }
 
+        // Check for tuple/positional destructuring: let (a, b) = expr
+        if (first.text().equals("(")) {
+            return parseLetTupleDestructure();
+        }
+
         // Check for associated constant: let TypeName.name = expr
         if (first.type() == TokenType.TYPE_NAME && tokens.peek(1) != null
                 && tokens.peek(1).text().equals(".")) {
@@ -1109,6 +1126,47 @@ public class SpnParser {
                 slots[i] = -1; // skip
             } else {
                 // Infer field type from the descriptor if available
+                FieldType fieldType = null;
+                if (desc != null && i < desc.fieldCount()) {
+                    fieldType = desc.fieldType(i);
+                }
+                slots[i] = currentScope.addLocal(bn, fieldType);
+            }
+        }
+
+        return new spn.node.local.SpnDestructureNode(value, slots);
+    }
+
+    /**
+     * Parse: let (a, b, c) = expr
+     * Destructures a tuple, array, struct, or product value into local bindings.
+     * Infers field types from the value expression when possible.
+     */
+    private SpnStatementNode parseLetTupleDestructure() {
+        tokens.expect("(");
+        List<String> bindNames = new ArrayList<>();
+        while (!tokens.check(")")) {
+            String bname = tokens.advance().text();
+            bindNames.add(bname);
+            tokens.match(",");
+        }
+        tokens.expect(")");
+        tokens.expect("=");
+        SpnExpressionNode value = parseExpression();
+
+        // Try to infer field types from the value's type
+        SpnStructDescriptor desc = null;
+        FieldType valueType = inferType(value);
+        if (valueType != null) {
+            desc = resolveStructDescriptor(valueType);
+        }
+
+        int[] slots = new int[bindNames.size()];
+        for (int i = 0; i < bindNames.size(); i++) {
+            String bn = bindNames.get(i);
+            if (bn.equals("_")) {
+                slots[i] = -1;
+            } else {
                 FieldType fieldType = null;
                 if (desc != null && i < desc.fieldCount()) {
                     fieldType = desc.fieldType(i);
@@ -1720,6 +1778,11 @@ public class SpnParser {
             requireTyped(operand, "negation");
             return at(SpnNegateNodeGen.create(operand));
         }
+        if (tokens.check("inspect")) {
+            tokens.advance();
+            SpnExpressionNode operand = parseUnary();
+            return new spn.node.SpnInspectNode(operand);
+        }
         return parsePostfix();
     }
 
@@ -1947,12 +2010,12 @@ public class SpnParser {
             return parseParenOrTuple();
         }
 
-        // Lambda: {expr}
+        // Block: { statements... expr }
         if (tok.text().equals("{")) {
             tokens.advance();
-            SpnExpressionNode expr = parseExpression();
+            SpnExpressionNode block = parseBlockBody();
             tokens.expect("}");
-            return expr;
+            return block;
         }
 
         // Type name — constructor TypeName(args) or associated constant TypeName.name
@@ -2052,8 +2115,9 @@ public class SpnParser {
             return parseQualifiedAccess(name);
         }
 
-        // Function call: name(args)
-        if (tokens.check("(")) {
+        // Function call: name(args) — only if '(' is on the same line (avoids
+        // treating a tuple expression on the next line as function arguments)
+        if (tokens.check("(") && tokens.peek().line() == tok.line()) {
             tokens.advance();
             List<SpnExpressionNode> args = new ArrayList<>();
             while (!tokens.check(")")) {
@@ -2367,45 +2431,19 @@ public class SpnParser {
             return new ParsedPattern(new MatchPattern.Wildcard(), new int[0]);
         }
 
-        // Tuple pattern: (literal_or_wildcard, ...)
+        // Tuple pattern: (pattern, pattern, ...)
         if (tok.text().equals("(")) {
             tokens.advance(); // consume '('
-            List<Object> expected = new ArrayList<>();
-            List<Integer> slots = new ArrayList<>();
+            List<MatchPattern> elements = new ArrayList<>();
             while (!tokens.check(")")) {
-                SpnParseToken elem = tokens.peek();
-                if (elem == null) throw tokens.error("Expected tuple pattern element");
-                if (elem.text().equals("_")) {
-                    // Wildcard position — will be bound
-                    tokens.advance();
-                    expected.add(null);
-                    // No binding for bare _ in tuple patterns
-                    // (we'd need a variable name to bind to)
-                } else if (elem.type() == TokenType.NUMBER) {
-                    tokens.advance();
-                    expected.add(elem.text().contains(".")
-                            ? (Object) Double.parseDouble(elem.text())
-                            : (Object) Long.parseLong(elem.text()));
-                } else if (elem.type() == TokenType.STRING) {
-                    tokens.advance();
-                    expected.add(unescapeString(elem.text()));
-                } else if (elem.type() == TokenType.SYMBOL) {
-                    tokens.advance();
-                    expected.add(symbolTable.intern(elem.text().substring(1)));
-                } else if (elem.type() == TokenType.IDENTIFIER) {
-                    // Variable binding at this position
-                    tokens.advance();
-                    expected.add(null); // wildcard for matching
-                    slots.add(currentScope.addLocal(elem.text()));
-                } else {
-                    throw tokens.error("Unexpected token in tuple pattern: " + elem.text(), elem);
-                }
+                elements.add(parseNestedPattern());
                 tokens.match(",");
             }
             tokens.expect(")");
             return new ParsedPattern(
-                    new MatchPattern.TupleElements(expected.toArray(), expected.size()),
-                    slots.stream().mapToInt(Integer::intValue).toArray());
+                    new MatchPattern.TupleElements(
+                            elements.toArray(MatchPattern[]::new), elements.size()),
+                    new int[0]);
         }
 
         // Empty collection: []
@@ -2538,7 +2576,7 @@ public class SpnParser {
             return new ParsedPattern(new MatchPattern.Literal(val), new int[0]);
         }
 
-        // Struct pattern: TypeName(field1, field2)
+        // Struct pattern: TypeName or TypeName(pattern, pattern, ...)
         if (tok.type() == TokenType.TYPE_NAME) {
             tokens.advance();
             String typeName = tok.text();
@@ -2546,21 +2584,18 @@ public class SpnParser {
 
             if (tokens.check("(")) {
                 tokens.advance();
-                List<Integer> slots = new ArrayList<>();
+                List<MatchPattern> fieldPatterns = new ArrayList<>();
                 while (!tokens.check(")")) {
-                    String bindName = tokens.advance().text();
-                    if (bindName.equals("_")) {
-                        slots.add(-1);
-                    } else {
-                        slots.add(currentScope.addLocal(bindName));
-                    }
+                    fieldPatterns.add(parseNestedPattern());
                     tokens.match(",");
                 }
                 tokens.expect(")");
 
                 if (desc != null) {
-                    return new ParsedPattern(new MatchPattern.Struct(desc),
-                            slots.stream().mapToInt(Integer::intValue).toArray());
+                    return new ParsedPattern(
+                            new MatchPattern.StructDestructure(
+                                    desc, fieldPatterns.toArray(MatchPattern[]::new)),
+                            new int[0]);
                 }
                 // Fall through for unknown types
             }
@@ -2579,6 +2614,86 @@ public class SpnParser {
         }
 
         throw tokens.error("Expected pattern, got: " + tok.text(), tok);
+    }
+
+    /**
+     * Parse a pattern inside a composite context (tuple element, struct field).
+     * Returns a MatchPattern directly — variable bindings use Capture with
+     * embedded frame slots, so no external bindingSlots array is needed.
+     */
+    private MatchPattern parseNestedPattern() {
+        SpnParseToken tok = tokens.peek();
+        if (tok == null) throw tokens.error("Expected pattern element");
+
+        // Wildcard: _
+        if (tok.text().equals("_")) {
+            tokens.advance();
+            return new MatchPattern.Wildcard();
+        }
+
+        // Number literal
+        if (tok.type() == TokenType.NUMBER) {
+            tokens.advance();
+            Object val = tok.text().contains(".")
+                    ? (Object) Double.parseDouble(tok.text())
+                    : (Object) Long.parseLong(tok.text());
+            return new MatchPattern.Literal(val);
+        }
+
+        // String literal
+        if (tok.type() == TokenType.STRING) {
+            tokens.advance();
+            return new MatchPattern.Literal(unescapeString(tok.text()));
+        }
+
+        // Symbol literal
+        if (tok.type() == TokenType.SYMBOL) {
+            tokens.advance();
+            return new MatchPattern.Literal(symbolTable.intern(tok.text().substring(1)));
+        }
+
+        // Nested tuple: (pattern, pattern, ...)
+        if (tok.text().equals("(")) {
+            tokens.advance();
+            List<MatchPattern> elements = new ArrayList<>();
+            while (!tokens.check(")")) {
+                elements.add(parseNestedPattern());
+                tokens.match(",");
+            }
+            tokens.expect(")");
+            return new MatchPattern.TupleElements(
+                    elements.toArray(MatchPattern[]::new), elements.size());
+        }
+
+        // Struct deconstruction: TypeName(pattern, pattern, ...) or bare TypeName
+        if (tok.type() == TokenType.TYPE_NAME) {
+            tokens.advance();
+            String typeName = tok.text();
+            SpnStructDescriptor desc = structRegistry.get(typeName);
+            if (desc == null) throw tokens.error("Unknown type in pattern: " + typeName, tok);
+
+            if (tokens.check("(")) {
+                tokens.advance();
+                List<MatchPattern> fieldPatterns = new ArrayList<>();
+                while (!tokens.check(")")) {
+                    fieldPatterns.add(parseNestedPattern());
+                    tokens.match(",");
+                }
+                tokens.expect(")");
+                return new MatchPattern.StructDestructure(
+                        desc, fieldPatterns.toArray(MatchPattern[]::new));
+            }
+            return new MatchPattern.Struct(desc);
+        }
+
+        // Identifier — variable capture
+        if (tok.type() == TokenType.IDENTIFIER) {
+            tokens.advance();
+            int slot = currentScope.addLocal(tok.text());
+            return new MatchPattern.Capture(slot);
+        }
+
+        throw tokens.error("Unexpected token in pattern: " + tok.text(), tok);
     }
 
     // ── Field type parsing ─────────────────────────────────────────────────
@@ -2635,9 +2750,24 @@ public class SpnParser {
                     SpnTypeDescriptor td = typeRegistry.get(name);
                     if (td != null) yield td.isProduct()
                             ? FieldType.ofProduct(td) : FieldType.ofConstrainedType(td);
-                    yield FieldType.UNTYPED;
+                    SpnVariantSet vs = variantRegistry.get(name);
+                    if (vs != null) yield FieldType.ofVariant(vs);
+                    throw tokens.error("Unknown type: " + name, tok);
                 }
             };
+        }
+
+        // Tuple type: (Type, Type, ...)
+        if (tok.text().equals("(")) {
+            tokens.advance();
+            List<FieldType> elementTypes = new ArrayList<>();
+            while (!tokens.check(")")) {
+                elementTypes.add(parseFieldType());
+                tokens.match(",");
+            }
+            tokens.expect(")");
+            return FieldType.ofTuple(new SpnTupleDescriptor(
+                    elementTypes.toArray(FieldType[]::new)));
         }
 
         if (tok.text().equals("_")) {

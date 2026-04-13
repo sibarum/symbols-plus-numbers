@@ -1,15 +1,68 @@
 import numerics.rational
-import numerics.omega
 
+type TComplex(scale:Rational, tangent:Rational)
 
-data TractionNumber
-  | Rational
-  | Omega
-
-type TComplex(Rational, Rational)
-
-pure TComplex(Rational, Rational) -> TComplex = (mag, tan) {
-  this(mag, tan)
+pure TComplex(Rational, Rational) -> TComplex = (scale, tan) {
+  this(scale, tan)
 }
 
-let x = Rational.id
+pure *(TComplex, TComplex) -> TComplex = ((s1, t1), (s2, t2)) {
+  let scl = s1 * s2
+  let tan = (t1 + t2) / (Rational.one - t1 * t2)
+  TComplex(scl, tan)
+}
+
+pure /(TComplex, TComplex) -> TComplex = ((s1, t1), (s2, t2)) {
+  let scl = s1 / s2
+  let tan = (t1 - t2) / (Rational.one + t1 * t2)
+  TComplex(scl, tan)
+}
+
+pure TComplex.neg() -> TComplex = () {
+  let (s, t) = this
+  TComplex(s.neg(), t)
+}
+
+pure TComplex.inv() -> TComplex = () {
+  let (s, t) = this
+  TComplex(s.inv(), -t)
+}
+
+pure ==(TComplex, TComplex) -> bool = (z1, z2) {
+  z1.scale == z2.scale && z1.tangent == z2.tangent
+}
+
+pure +(TComplex, TComplex) -> TComplex = ((s1, t1), (s2, t2)) {
+  let (a, b) = t1
+  let (c, d) = t2
+
+  let x1 = s1 * b
+  let y1 = s1 * a
+
+  let x2 = s2 * d
+  let y2 = s2 * c
+
+  let x = x1 + x2
+  let y = y1 + y2
+
+  match (x, y)
+  | ((0, _), (0, _)) -> { TComplex(Rational.zero, Rational.zero) }
+  | ((_, _), (0, _)) -> { TComplex(x, Rational.zero) }
+  | ((0, _), (_, _)) -> { TComplex(y, Rational.omega) }
+  | _ -> {
+      let tan = y / x
+      let scl = x / Rational(b)
+      TComplex(scl, tan)
+    }
+}
+
+pure TComplex.toCartesian() -> (Rational, Rational) = () {
+  let (s, t) = this
+  let (tn, td) = t
+
+  let real = s * td
+  let imag = s * tn
+
+  (real, imag)
+}
+

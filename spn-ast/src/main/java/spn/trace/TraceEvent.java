@@ -56,7 +56,12 @@ public record TraceEvent(
 
     private static String summarize(Object val) {
         if (val == null) return "null";
-        String s = val.toString();
+        String s;
+        if (val instanceof spn.type.SpnStructValue sv) {
+            s = sv.getDescriptor().inspect(sv);
+        } else {
+            s = val.toString();
+        }
         return s.length() > 60 ? s.substring(0, 57) + "..." : s;
     }
 }

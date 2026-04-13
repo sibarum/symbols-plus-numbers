@@ -253,6 +253,13 @@ public class EditorWindow {
                 }
                 updateTitle();
             }
+            return;
+        }
+
+        // Any other tab (TraceSourceTab, etc.) — close directly
+        tabView.closeActiveTab();
+        if (tabView.tabCount() == 0) {
+            openNewTab();
         }
     }
 

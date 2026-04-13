@@ -118,7 +118,7 @@ class ImportMode implements Mode {
 
     @Override
     public boolean onScroll(double xoff, double yoff) {
-        scrollOffset = Math.max(0, Math.min(scrollOffset - (int) yoff * 3,
+        scrollOffset = Math.max(0, Math.min(scrollOffset - ListScroll.delta(yoff),
                 Math.max(0, filtered.size() - MAX_VISIBLE_ROWS)));
         return true;
     }

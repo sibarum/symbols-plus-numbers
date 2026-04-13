@@ -23,6 +23,13 @@ pure Rational.neg() -> Rational = () {
   Rational(-this.0, this.1)
 }
 
+pure ==(Rational, Rational) -> bool = (r1, r2) {
+  match (r1, r2)
+  | ((0, _), (0, _)) -> { true }
+  | ((_, 0), (_, 0)) -> { true }
+  | _ -> { r1.0 == r2.0 && r1.1 == r2.1 }
+}
+
 pure +(Rational, Rational) -> Rational = ((q1n, q1d), (q2n, q2d)) {
   Rational(q1n*q2d + q2n*q1d, q1d*q2d)
 }
@@ -47,5 +54,4 @@ promote int -> Rational = (i) {
   Rational(i)
 }
 
-
-Rational.omega * Rational.omega
+Rational.one == Rational.zero

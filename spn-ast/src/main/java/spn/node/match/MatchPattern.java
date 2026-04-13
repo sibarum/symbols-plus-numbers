@@ -103,34 +103,37 @@ public sealed interface MatchPattern {
     }
 
     /**
-     * Matches a tuple/array where each position either matches a literal value
-     * or is a wildcard (null in the expected array).
+     * Matches a tuple/array where each position is checked against a sub-pattern.
+     * Supports full nesting: literals, wildcards, captures, struct patterns, etc.
      *
      * <pre>
      *   // match (n, d) | (0, _) -> ...
-     *   new TupleElements(new Object[]{0L, null}, 2)
-     * </pre>
+     *   new TupleElements(new MatchPattern[]{new Literal(0L), new Wildcard()}, 2)
      *
-     * Binding slots correspond to wildcard positions for variable capture.
+     *   // match pair | (Rational(0, _), Rational(0, _)) -> ...
+     *   new TupleElements(new MatchPattern[]{
+     *       new StructDestructure(rationalDesc, new MatchPattern[]{new Literal(0L), new Wildcard()}),
+     *       new StructDestructure(rationalDesc, new MatchPattern[]{new Literal(0L), new Wildcard()})
+     *   }, 2)
+     * </pre>
      */
-    record TupleElements(Object[] expected, int arity) implements MatchPattern {
+    record TupleElements(MatchPattern[] elements, int arity) implements MatchPattern {
         @Override
         public boolean matches(Object value) {
-            if (value instanceof SpnTupleValue tv) {
-                if (tv.arity() != arity) return false;
-                for (int i = 0; i < arity; i++) {
-                    if (expected[i] != null && !expected[i].equals(tv.get(i))) return false;
-                }
-                return true;
+            Object[] fields = extractFields(value);
+            if (fields == null || fields.length != arity) return false;
+            for (int i = 0; i < arity; i++) {
+                if (!elements[i].matches(fields[i])) return false;
             }
-            if (value instanceof spn.type.SpnArrayValue arr) {
-                if (arr.length() != arity) return false;
-                for (int i = 0; i < arity; i++) {
-                    if (expected[i] != null && !expected[i].equals(arr.getElements()[i])) return false;
-                }
-                return true;
-            }
-            return false;
+            return true;
+        }
+
+        static Object[] extractFields(Object value) {
+            if (value instanceof SpnTupleValue tv) return tv.getElements();
+            if (value instanceof SpnArrayValue arr) return arr.getElements();
+            if (value instanceof SpnStructValue sv) return sv.getFields();
+            if (value instanceof SpnProductValue pv) return pv.getComponents();
+            return null;
         }
 
         @Override
@@ -138,7 +141,7 @@ public sealed interface MatchPattern {
             var sb = new StringBuilder("(");
             for (int i = 0; i < arity; i++) {
                 if (i > 0) sb.append(", ");
-                sb.append(expected[i] != null ? expected[i] : "_");
+                sb.append(elements[i].describe());
             }
             return sb.append(")").toString();
         }
@@ -447,6 +450,65 @@ public sealed interface MatchPattern {
         @Override
         public String describe() {
             return "_";
+        }
+    }
+
+    // ── Nested / compositional patterns ────────────────────────────────────
+
+    /**
+     * Matches any value and binds it to a frame slot. Used inside composite
+     * patterns (TupleElements, StructDestructure) for variable capture.
+     *
+     * <pre>
+     *   // match pair | (x, y) -> x + y
+     *   // x and y are each a Capture with their own frame slot
+     * </pre>
+     */
+    record Capture(int slot) implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            return true;
+        }
+
+        @Override
+        public String describe() {
+            return "<bind:" + slot + ">";
+        }
+    }
+
+    /**
+     * Matches a struct by descriptor and recursively checks each field against
+     * a sub-pattern. Enables nested deconstruction like {@code Rational(0, _)}.
+     *
+     * <pre>
+     *   // match r | Rational(0, _) -> ...
+     *   new StructDestructure(rationalDesc, new MatchPattern[]{
+     *       new Literal(0L), new Wildcard()
+     *   })
+     * </pre>
+     */
+    record StructDestructure(SpnStructDescriptor descriptor,
+                             MatchPattern[] fieldPatterns) implements MatchPattern {
+        @Override
+        public boolean matches(Object value) {
+            if (!(value instanceof SpnStructValue sv)) return false;
+            if (sv.getDescriptor() != descriptor) return false;
+            Object[] fields = sv.getFields();
+            if (fields.length < fieldPatterns.length) return false;
+            for (int i = 0; i < fieldPatterns.length; i++) {
+                if (!fieldPatterns[i].matches(fields[i])) return false;
+            }
+            return true;
+        }
+
+        @Override
+        public String describe() {
+            var sb = new StringBuilder(descriptor.getName()).append("(");
+            for (int i = 0; i < fieldPatterns.length; i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(fieldPatterns[i].describe());
+            }
+            return sb.append(")").toString();
         }
     }
 }

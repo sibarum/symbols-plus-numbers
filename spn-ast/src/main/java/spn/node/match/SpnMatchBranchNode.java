@@ -143,20 +143,21 @@ public final class SpnMatchBranchNode extends Node {
             }
             case MatchPattern.ArrayExactLength _ -> bindIndexed(frame, ((SpnArrayValue) value).getElements());
             case MatchPattern.TupleElements te -> {
-                // Bind only wildcard positions (where expected[i] is null)
-                Object[] elems;
-                if (value instanceof SpnTupleValue tv) elems = tv.getElements();
-                else if (value instanceof SpnArrayValue arr) elems = arr.getElements();
-                else break;
-                int slotIdx = 0;
-                for (int i = 0; i < te.arity() && slotIdx < bindingSlots.length; i++) {
-                    if (te.expected()[i] == null) {
-                        if (bindingSlots[slotIdx] >= 0) {
-                            frame.setObject(bindingSlots[slotIdx], elems[i]);
-                        }
-                        slotIdx++;
-                    }
+                Object[] elems = MatchPattern.TupleElements.extractFields(value);
+                if (elems == null) break;
+                for (int i = 0; i < te.arity(); i++) {
+                    bindNested(frame, te.elements()[i], elems[i]);
                 }
+            }
+            case MatchPattern.StructDestructure sd -> {
+                SpnStructValue sv = (SpnStructValue) value;
+                Object[] fields = sv.getFields();
+                for (int i = 0; i < sd.fieldPatterns().length; i++) {
+                    bindNested(frame, sd.fieldPatterns()[i], fields[i]);
+                }
+            }
+            case MatchPattern.Capture c -> {
+                frame.setObject(c.slot(), value);
             }
             case MatchPattern.StringPrefix sp -> {
                 // Slot 0 gets the remainder after the prefix
@@ -199,6 +200,32 @@ public final class SpnMatchBranchNode extends Node {
             if (bindingSlots[i] >= 0) {
                 frame.setObject(bindingSlots[i], values[i]);
             }
+        }
+    }
+
+    /**
+     * Recursively bind variables from nested composite patterns.
+     * Capture nodes bind directly to their embedded frame slot.
+     * Container nodes (TupleElements, StructDestructure) recurse into children.
+     * All other patterns (Wildcard, Literal, Struct, etc.) produce no bindings.
+     */
+    private void bindNested(VirtualFrame frame, MatchPattern pat, Object value) {
+        switch (pat) {
+            case MatchPattern.Capture c -> frame.setObject(c.slot(), value);
+            case MatchPattern.TupleElements te -> {
+                Object[] elems = MatchPattern.TupleElements.extractFields(value);
+                if (elems == null) break;
+                for (int i = 0; i < te.arity(); i++) {
+                    bindNested(frame, te.elements()[i], elems[i]);
+                }
+            }
+            case MatchPattern.StructDestructure sd -> {
+                Object[] fields = ((SpnStructValue) value).getFields();
+                for (int i = 0; i < sd.fieldPatterns().length; i++) {
+                    bindNested(frame, sd.fieldPatterns()[i], fields[i]);
+                }
+            }
+            default -> { /* Wildcard, Literal, Struct, etc. — no binding */ }
         }
     }
 

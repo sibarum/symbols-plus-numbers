@@ -310,7 +310,26 @@ public class TextArea {
             }
         }
 
-        // Selection highlights
+        // Pre-text overlays (e.g., trace block highlights)
+        if (preTextRenderer != null) {
+            preTextRenderer.render(font, textX, textY, cellWidth, cellHeight,
+                    HIGHLIGHT_OFFSET_Y, scrollRow, visibleRows, boundsX, boundsW);
+        }
+
+        // Change indicators (faint gutter bar for modified lines)
+        if (changeOverlay != null && !changeOverlay.isEmpty()) {
+            changeOverlay.render(font, boundsX + PAD, textY, cellHeight,
+                    HIGHLIGHT_OFFSET_Y, scrollRow, visibleRows, 3f);
+        }
+
+        // Diagnostic overlays (error underlines, stale hazes)
+        if (diagnosticOverlay != null && !diagnosticOverlay.isEmpty()) {
+            diagnosticOverlay.render(font, textX, textY, cellWidth, cellHeight,
+                    HIGHLIGHT_OFFSET_Y, scrollRow, scrollCol, visibleRows, visibleCols,
+                    r -> r < buffer.lineCount() ? buffer.lineLength(r) : 0);
+        }
+
+        // Selection highlights (highest priority — drawn last so they cover all other highlights)
         if (hasSelection()) {
             int[] s = selectionBounds();
             for (int i = 0; i < visibleRows; i++) {
@@ -331,25 +350,6 @@ public class TextArea {
                 float rw = (drawEnd - drawStart) * cellWidth;
                 font.drawRect(rx, ry, rw, cellHeight, 0.2f, 0.35f, 0.55f);
             }
-        }
-
-        // Pre-text overlays (e.g., trace block highlights)
-        if (preTextRenderer != null) {
-            preTextRenderer.render(font, textX, textY, cellWidth, cellHeight,
-                    HIGHLIGHT_OFFSET_Y, scrollRow, visibleRows, boundsX, boundsW);
-        }
-
-        // Change indicators (faint gutter bar for modified lines)
-        if (changeOverlay != null && !changeOverlay.isEmpty()) {
-            changeOverlay.render(font, boundsX + PAD, textY, cellHeight,
-                    HIGHLIGHT_OFFSET_Y, scrollRow, visibleRows, 3f);
-        }
-
-        // Diagnostic overlays (error underlines, stale hazes)
-        if (diagnosticOverlay != null && !diagnosticOverlay.isEmpty()) {
-            diagnosticOverlay.render(font, textX, textY, cellWidth, cellHeight,
-                    HIGHLIGHT_OFFSET_Y, scrollRow, scrollCol, visibleRows, visibleCols,
-                    r -> r < buffer.lineCount() ? buffer.lineLength(r) : 0);
         }
 
         // Text (syntax-highlighted)
@@ -758,9 +758,8 @@ public class TextArea {
     }
 
     public void onScroll(double xoff, double yoff) {
-        if (yoff == 0) return;
-        int delta = (int) Math.round(yoff * 4);
-        if (delta == 0) delta = (yoff > 0) ? 1 : -1;
+        int delta = ListScroll.delta(yoff);
+        if (delta == 0) return;
         scrollRow = clampScrollRow(scrollRow - delta);
     }
 

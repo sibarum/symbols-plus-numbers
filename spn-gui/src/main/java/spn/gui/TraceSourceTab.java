@@ -39,14 +39,15 @@ public class TraceSourceTab extends ScrollableTab {
 
     private int hoveredSpan = -1;
     private int pinnedSpan = -1;
-    private int tableScroll = 0;
+    private final ListScroll tableScroll = new ListScroll();
     private int summarySelected = 0;
 
-    // Panel layout — set during render, used for click hit-testing
+    // Panel layout — set during render, used for click hit-testing and scroll routing
     private float panelTop;
     private float panelRowStart;
     private float panelRowHeight;
     private int summaryHovered = -1; // row under mouse in summary table
+    private double lastMouseY;       // for hover-based scroll routing
 
     TraceSourceTab(EditorWindow window, String source, List<TraceEvent> events, String fileName) {
         super(window);
@@ -141,19 +142,30 @@ public class TraceSourceTab extends ScrollableTab {
 
     @Override
     public void render(float x, float y, float width, float height) {
-        // Render source code with block highlights via pre-text renderer
-        layoutAndRender(x, y, width, height);
+        float hudH = window.getHudHeight();
 
-        // Set scroll padding so the panel doesn't cover the last lines
-        float cellH = window.getFont().getLineHeight(textArea.getFontScale()) * 1.2f;
-        int panelRows = cellH > 0 ? (int) (height * 0.30f / cellH) + 2 : 10;
-        textArea.setExtraScrollPadding(panelRows);
+        // Compute panel height first so the TextArea shrinks to fit above it
+        float panelH;
+        if (pinnedSpan >= 0) {
+            panelH = height * 0.30f;
+        } else if (!tracedSpanIndices.isEmpty()) {
+            panelH = Math.min(height * 0.30f, tracedSpanIndices.size() * 25f + 40f);
+        } else {
+            panelH = 0;
+        }
+
+        float sourceH = height - panelH;
+        panelTop = y + sourceH;
+
+        // Render source code in the top region (no overlap with panel)
+        layoutAndRender(x, y, width, sourceH);
+        textArea.setExtraScrollPadding(0);
 
         // Bottom panel: either invocation details (pinned) or summary table
         if (pinnedSpan >= 0) {
-            renderInvocationPanel(x, y, width, height);
+            renderInvocationPanel(x, y, width, height, panelH);
         } else {
-            renderSummaryPanel(x, y, width, height);
+            renderSummaryPanel(x, y, width, height, panelH);
         }
     }
 
@@ -194,19 +206,17 @@ public class TraceSourceTab extends ScrollableTab {
     }
 
     /** Summary panel: table of all traced blocks (default view). */
-    private void renderSummaryPanel(float x, float y, float width, float height) {
+    private void renderSummaryPanel(float x, float y, float width, float height, float panelH) {
         if (tracedSpanIndices.isEmpty()) return;
         SdfFontRenderer font = window.getFont();
 
-        float panelH = Math.min(height * 0.30f, tracedSpanIndices.size() * 25f + 40f);
-        float panelY = y + height - panelH - window.getHudHeight();
+        float panelY = panelTop;
         float lineH = font.getLineHeight(0.26f) * 1.3f;
 
         font.drawRect(x, panelY, width, panelH, 0.08f, 0.08f, 0.10f);
         font.drawRect(x, panelY, width, 1f, 0.3f, 0.3f, 0.4f);
 
         float ty = panelY + 6f;
-        panelTop = panelY;
         panelRowHeight = lineH;
 
         font.drawText("Traced Blocks (" + tracedSpanIndices.size() + ") — click to inspect",
@@ -226,10 +236,7 @@ public class TraceSourceTab extends ScrollableTab {
             float ry = ty + i * lineH;
             float rowTextY = ry + lineH - 3f;
 
-            // Hover / selection highlight
-            if (i == summaryHovered) {
-                font.drawRect(x, ry, width, lineH, 0.15f, 0.18f, 0.26f);
-            }
+            // Unified highlight — keyboard or mouse, one at a time
             if (i == summarySelected) {
                 font.drawRect(x, ry, width, lineH, 0.18f, 0.22f, 0.32f);
             }
@@ -247,14 +254,13 @@ public class TraceSourceTab extends ScrollableTab {
     }
 
     /** Invocation panel: detailed table for the pinned block. */
-    private void renderInvocationPanel(float x, float y, float width, float height) {
+    private void renderInvocationPanel(float x, float y, float width, float height, float panelH) {
         SdfFontRenderer font = window.getFont();
         List<TraceEvent> calls = spanCalls.get(pinnedSpan);
         List<TraceEvent> returns = spanReturns.get(pinnedSpan);
         if (calls == null || calls.isEmpty()) return;
 
-        float panelH = height * 0.30f;
-        float panelY = y + height - panelH - window.getHudHeight();
+        float panelY = panelTop;
         float lineH = font.getLineHeight(0.24f) * 1.3f;
 
         font.drawRect(x, panelY, width, panelH, 0.08f, 0.08f, 0.10f);
@@ -280,13 +286,15 @@ public class TraceSourceTab extends ScrollableTab {
         ty += lineH;
 
         int maxRows = (int) ((panelY + panelH - ty) / lineH);
-        for (int i = tableScroll; i < calls.size() && i - tableScroll < maxRows; i++) {
+        tableScroll.setMax(Math.max(0, calls.size() - maxRows));
+        int startRow = tableScroll.get();
+        for (int i = startRow; i < calls.size() && i - startRow < maxRows; i++) {
             TraceEvent call = calls.get(i);
             TraceEvent ret = i < (returns != null ? returns.size() : 0) ? returns.get(i) : null;
-            float ry = ty + (i - tableScroll) * lineH;
+            float ry = ty + (i - startRow) * lineH;
             float rowTextY = ry + lineH - 3f;
 
-            if ((i - tableScroll) % 2 == 1)
+            if ((i - startRow) % 2 == 1)
                 font.drawRect(x, ry, width, lineH, 0.12f, 0.12f, 0.14f);
 
             font.drawText(String.valueOf(i + 1), x + 10f, rowTextY, 0.22f, 0.4f, 0.4f, 0.45f);
@@ -319,33 +327,38 @@ public class TraceSourceTab extends ScrollableTab {
 
     // ── Input ──────────────────────────────────────────────────────────
 
+    private boolean lastInputWasKeyboard; // true = arrow keys drive highlight, false = mouse
+
     @Override
     public boolean onKey(int key, int scancode, int action, int mods) {
-        if (action != GLFW_PRESS && action != GLFW_REPEAT) return true;
+        if (action != GLFW_PRESS && action != GLFW_REPEAT) return false;
 
+        // Escape: unpin or close tab
         if (key == GLFW_KEY_ESCAPE) {
             if (pinnedSpan >= 0) {
                 pinnedSpan = -1;
-                tableScroll = 0;
+                tableScroll.reset();
                 return true;
             }
-            return false; // let TabViewMode handle it (close tab)
+            return false; // let TabViewMode close the tab
         }
 
         if (pinnedSpan >= 0) {
             // Scroll invocation table
-            if (key == GLFW_KEY_DOWN) { tableScroll++; return true; }
-            if (key == GLFW_KEY_UP) { tableScroll = Math.max(0, tableScroll - 1); return true; }
-            if (key == GLFW_KEY_PAGE_DOWN) { tableScroll += 10; return true; }
-            if (key == GLFW_KEY_PAGE_UP) { tableScroll = Math.max(0, tableScroll - 10); return true; }
+            if (key == GLFW_KEY_DOWN) { tableScroll.set(tableScroll.get() + 1); return true; }
+            if (key == GLFW_KEY_UP) { tableScroll.set(tableScroll.get() - 1); return true; }
+            if (key == GLFW_KEY_PAGE_DOWN) { tableScroll.set(tableScroll.get() + 10); return true; }
+            if (key == GLFW_KEY_PAGE_UP) { tableScroll.set(tableScroll.get() - 10); return true; }
         } else {
-            // Navigate summary table
+            // Navigate summary table with arrow keys
             if (key == GLFW_KEY_DOWN && summarySelected < tracedSpanIndices.size() - 1) {
                 summarySelected++;
+                lastInputWasKeyboard = true;
                 return true;
             }
             if (key == GLFW_KEY_UP && summarySelected > 0) {
                 summarySelected--;
+                lastInputWasKeyboard = true;
                 return true;
             }
             if (key == GLFW_KEY_ENTER && summarySelected < tracedSpanIndices.size()) {
@@ -354,12 +367,7 @@ public class TraceSourceTab extends ScrollableTab {
             }
         }
 
-        // Source scroll
-        if (key == GLFW_KEY_PAGE_UP || key == GLFW_KEY_PAGE_DOWN
-                || key == GLFW_KEY_HOME || key == GLFW_KEY_END) {
-            textArea.onKey(key, mods);
-            return true;
-        }
+        // Copy
         if ((mods & GLFW_MOD_CONTROL) != 0 && key == GLFW_KEY_C) {
             textArea.onKey(key, mods);
             return true;
@@ -373,48 +381,64 @@ public class TraceSourceTab extends ScrollableTab {
     @Override
     public boolean onMouseButton(int button, int action, int mods, double mx, double my) {
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-            // Check if click is in the panel area (using coordinates stored during render)
+            // Panel area clicks
             if (my > panelTop && panelRowHeight > 0) {
                 if (pinnedSpan < 0 && my > panelRowStart) {
-                    // Click in summary table row
                     int row = (int) ((my - panelRowStart) / panelRowHeight);
                     if (row >= 0 && row < tracedSpanIndices.size()) {
                         pinSpanAndScroll(tracedSpanIndices.get(row));
-                        return true;
                     }
                 }
-                return true; // consume clicks in the panel area
+                return true;
             }
 
-            // Click in source code area — find span
+            // Source code area clicks
             int row = sourceRowAtY(my);
             if (row >= 0) {
                 int span = findSpanForRow(row);
                 if (span >= 0 && spanCalls.containsKey(span)) {
                     pinSpanAndScroll(span);
-                    return true;
                 } else {
                     pinnedSpan = -1;
-                    tableScroll = 0;
+                    tableScroll.reset();
                 }
             }
+            return true; // always consume clicks — don't pass to text area
         }
-        return super.onMouseButton(button, action, mods, mx, my);
+        return true; // consume all mouse events
     }
 
     @Override
     public boolean onCursorPos(double mx, double my) {
+        lastMouseY = my;
         // Track hover on summary panel rows
         if (my > panelTop && pinnedSpan < 0 && panelRowHeight > 0 && my > panelRowStart) {
-            summaryHovered = (int) ((my - panelRowStart) / panelRowHeight);
-            if (summaryHovered >= tracedSpanIndices.size()) summaryHovered = -1;
+            int row = (int) ((my - panelRowStart) / panelRowHeight);
+            if (row >= 0 && row < tracedSpanIndices.size()) {
+                summaryHovered = row;
+                summarySelected = row; // unify hover and selection
+                lastInputWasKeyboard = false;
+            } else {
+                summaryHovered = -1;
+            }
         } else {
             summaryHovered = -1;
         }
         // Track hover on source code blocks
         int row = sourceRowAtY(my);
         hoveredSpan = row >= 0 ? findSpanForRow(row) : -1;
-        return super.onCursorPos(mx, my);
+        return true;
+    }
+
+    @Override
+    public boolean onScroll(double xoff, double yoff) {
+        // Scroll whichever area the cursor is hovering over
+        if (lastMouseY > panelTop) {
+            tableScroll.onScroll(yoff);
+        } else {
+            textArea.onScroll(xoff, yoff);
+        }
+        return true;
     }
 
     @Override
@@ -433,7 +457,7 @@ public class TraceSourceTab extends ScrollableTab {
 
     private void pinSpanAndScroll(int spanIdx) {
         pinnedSpan = spanIdx;
-        tableScroll = 0;
+        tableScroll.reset();
         // Scroll source to show the pinned block
         DeclarationScanner.Span span = spans.get(spanIdx);
         textArea.setScrollRow(Math.max(0, span.startLine() - 2));

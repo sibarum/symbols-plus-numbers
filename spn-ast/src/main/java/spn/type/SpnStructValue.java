@@ -53,10 +53,17 @@ public final class SpnStructValue {
         var sb = new StringBuilder(descriptor.getName()).append("(");
         for (int i = 0; i < fields.length; i++) {
             if (i > 0) sb.append(", ");
-            if (i < names.length) sb.append(names[i]).append("=");
+            // Only show field name if it's a real name (not a positional _0, _1, etc.)
+            if (i < names.length && !isPositionalName(names[i])) {
+                sb.append(names[i]).append("=");
+            }
             sb.append(fields[i]);
         }
         return sb.append(")").toString();
+    }
+
+    private static boolean isPositionalName(String name) {
+        return name.length() >= 2 && name.charAt(0) == '_' && Character.isDigit(name.charAt(1));
     }
 
     @Override

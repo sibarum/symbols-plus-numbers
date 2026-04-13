@@ -6,17 +6,21 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import spn.node.SpnExpressionNode;
 import spn.node.SpnStatementNode;
+import spn.type.SpnArrayValue;
 import spn.type.SpnStructValue;
 import spn.type.SpnProductValue;
+import spn.type.SpnTupleValue;
 
 /**
- * Destructures a struct or product value into local variable slots.
+ * Destructures a struct, product, tuple, or array value into local variable slots.
  *
  * <pre>
- *   let Complex(real, imag) = expr
+ *   let Complex(real, imag) = expr   // struct
+ *   let (a, b) = someTuple           // tuple
+ *   let (x, y) = someArray           // array
  * </pre>
  *
- * Evaluates the expression, extracts fields by index, and writes each
+ * Evaluates the expression, extracts fields/elements by index, and writes each
  * to the corresponding frame slot. Slots with value -1 are skipped (_).
  */
 public final class SpnDestructureNode extends SpnStatementNode {
@@ -41,6 +45,10 @@ public final class SpnDestructureNode extends SpnStatementNode {
             fields = sv.getFields();
         } else if (value instanceof SpnProductValue pv) {
             fields = pv.getComponents();
+        } else if (value instanceof SpnTupleValue tv) {
+            fields = tv.getElements();
+        } else if (value instanceof SpnArrayValue av) {
+            fields = av.getElements();
         } else {
             throw new IllegalArgumentException(
                     "Cannot destructure value of type " + SpnTypeName.of(value));

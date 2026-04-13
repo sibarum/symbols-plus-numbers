@@ -189,6 +189,8 @@ public final class SpnSourceReflector {
             case MatchPattern.Literal lit -> literalToString(lit.expected());
             case MatchPattern.TupleElements te -> te.describe();
             case MatchPattern.Wildcard _ -> "_";
+            case MatchPattern.Capture c -> "<bind:" + c.slot() + ">";
+            case MatchPattern.StructDestructure sd -> sd.describe();
         };
     }
 

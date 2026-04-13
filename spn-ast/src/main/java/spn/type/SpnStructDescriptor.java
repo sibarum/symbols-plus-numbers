@@ -1,5 +1,6 @@
 package spn.type;
 
+import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,6 +49,10 @@ public final class SpnStructDescriptor {
 
     @CompilationFinal(dimensions = 1)
     private final String[] typeParams;
+
+    /** Optional inspect function for developer-facing string representation. */
+    @CompilationFinal
+    private CallTarget inspectTarget;
 
     private SpnStructDescriptor(String name, FieldDescriptor[] fields, String[] typeParams) {
         this.name = name;
@@ -113,6 +118,37 @@ public final class SpnStructDescriptor {
             if (f.isTyped()) return true;
         }
         return false;
+    }
+
+    // ── Inspect ─────────────────────────────────────────────────────────────
+
+    /** Register an inspect function for this struct type. */
+    public void setInspectTarget(CallTarget target) {
+        this.inspectTarget = target;
+    }
+
+    /** Returns the inspect CallTarget, or null if none is registered. */
+    public CallTarget getInspectTarget() {
+        return inspectTarget;
+    }
+
+    /**
+     * Format a struct value using the registered inspect function, or fall back
+     * to the default representation if none is registered.
+     *
+     * <p>Safe to call from any context — if the inspect function throws
+     * (bug in user code, wrong thread, etc.), silently falls back to toString().
+     */
+    public String inspect(SpnStructValue value) {
+        if (inspectTarget != null) {
+            try {
+                Object result = inspectTarget.call(value);
+                return result != null ? result.toString() : "null";
+            } catch (Exception e) {
+                // Fall back to default representation
+            }
+        }
+        return value.toString();
     }
 
     // ── Generic support ─────────────────────────────────────────────────────

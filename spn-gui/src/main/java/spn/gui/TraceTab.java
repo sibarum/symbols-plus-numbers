@@ -272,9 +272,8 @@ public class TraceTab implements Tab {
 
     @Override
     public boolean onScroll(double xoff, double yoff) {
-        scrollOffset = Math.max(0, scrollOffset - (int) yoff * 3);
-        if (scrollOffset > Math.max(0, flatVisible.size() - 10))
-            scrollOffset = Math.max(0, flatVisible.size() - 10);
+        scrollOffset = Math.max(0, Math.min(scrollOffset - ListScroll.delta(yoff),
+                Math.max(0, flatVisible.size() - 10)));
         return true;
     }
 
