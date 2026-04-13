@@ -167,6 +167,103 @@ public class TextArea {
 
     public TextBuffer getBuffer() { return buffer; }
 
+    // ── Search state ────────────────────────────────────────────────────
+    // Active when searchTerm != null. Matches are substring occurrences.
+    private String searchTerm;
+    private final java.util.List<int[]> searchMatches = new java.util.ArrayList<>(); // [row, startCol, endCol]
+    private int currentMatchIndex = -1;
+
+    /** Activate search with the given term (substring match). Null/empty clears search. */
+    public void setSearchTerm(String term) {
+        this.searchTerm = (term == null || term.isEmpty()) ? null : term;
+        recomputeSearchMatches();
+    }
+
+    public String getSearchTerm() { return searchTerm; }
+    public int getSearchMatchCount() { return searchMatches.size(); }
+    public int getCurrentSearchIndex() { return currentMatchIndex; }
+
+    private void recomputeSearchMatches() {
+        searchMatches.clear();
+        currentMatchIndex = -1;
+        if (searchTerm == null) return;
+        for (int row = 0; row < buffer.lineCount(); row++) {
+            String line = buffer.getLine(row);
+            int idx = 0;
+            while ((idx = line.indexOf(searchTerm, idx)) != -1) {
+                searchMatches.add(new int[]{row, idx, idx + searchTerm.length()});
+                idx += searchTerm.length();
+            }
+        }
+        // Select the first match at/after the cursor, if any
+        for (int i = 0; i < searchMatches.size(); i++) {
+            int[] m = searchMatches.get(i);
+            if (m[0] > cursorRow || (m[0] == cursorRow && m[1] >= cursorCol)) {
+                currentMatchIndex = i;
+                return;
+            }
+        }
+        if (!searchMatches.isEmpty()) currentMatchIndex = 0; // wrap to first
+    }
+
+    /** Jump to next match (wraps). Returns true if there was a match to jump to. */
+    public boolean jumpToNextMatch() {
+        if (searchMatches.isEmpty()) return false;
+        currentMatchIndex = (currentMatchIndex + 1) % searchMatches.size();
+        jumpToCurrentMatch();
+        return true;
+    }
+
+    /** Jump to previous match (wraps). Returns true if there was a match to jump to. */
+    public boolean jumpToPrevMatch() {
+        if (searchMatches.isEmpty()) return false;
+        currentMatchIndex = (currentMatchIndex - 1 + searchMatches.size()) % searchMatches.size();
+        jumpToCurrentMatch();
+        return true;
+    }
+
+    private void jumpToCurrentMatch() {
+        int[] m = searchMatches.get(currentMatchIndex);
+        cursorRow = m[0];
+        cursorCol = m[1];
+        scrollToCursor = true;
+        clearSelection();
+    }
+
+    /** Replace the current match with the given replacement and advance. Returns true on success. */
+    public boolean replaceCurrentMatch(String replacement) {
+        if (currentMatchIndex < 0 || currentMatchIndex >= searchMatches.size()) return false;
+        int[] m = searchMatches.get(currentMatchIndex);
+        buffer.deleteRange(m[0], m[1], m[0], m[2]);
+        buffer.insertText(m[0], m[1], replacement);
+        if (onEditCallback != null) onEditCallback.run();
+        // Recompute matches (buffer changed)
+        int savedIdx = currentMatchIndex;
+        recomputeSearchMatches();
+        // Try to stay at the same index (or wrap)
+        if (!searchMatches.isEmpty()) {
+            currentMatchIndex = Math.min(savedIdx, searchMatches.size() - 1);
+            jumpToCurrentMatch();
+        }
+        return true;
+    }
+
+    /** Replace all matches with the replacement. Returns the number of replacements made. */
+    public int replaceAllMatches(String replacement) {
+        if (searchMatches.isEmpty()) return 0;
+        // Replace from the end so earlier offsets stay valid
+        int count = 0;
+        for (int i = searchMatches.size() - 1; i >= 0; i--) {
+            int[] m = searchMatches.get(i);
+            buffer.deleteRange(m[0], m[1], m[0], m[2]);
+            buffer.insertText(m[0], m[1], replacement);
+            count++;
+        }
+        if (onEditCallback != null) onEditCallback.run();
+        recomputeSearchMatches();
+        return count;
+    }
+
     public UndoManager.Info getUndoInfo() { return undo.getInfo(); }
 
     UndoManager getUndoManager() { return undo; }
@@ -288,8 +385,8 @@ public class TextArea {
             font.drawText(num, nx, ny, fontScale, bright, bright, bright);
         }
 
-        // Term highlights (word under cursor)
-        if (!hasSelection()) {
+        // Term highlights (word under cursor) — suppressed during search
+        if (!hasSelection() && searchTerm == null) {
             String term = wordAtCursor();
             if (term != null) {
                 List<TermHighlighter.Match> matches = TermHighlighter.findMatches(
@@ -306,6 +403,28 @@ public class TextArea {
                     float ry = textY + vRow * cellHeight + HIGHLIGHT_OFFSET_Y;
                     float rw = (drawEnd - drawStart) * cellWidth;
                     font.drawRect(rx, ry, rw, cellHeight, 0.25f, 0.25f, 0.18f);
+                }
+            }
+        }
+
+        // Search highlights — all matches dim, current match bright
+        if (searchTerm != null) {
+            for (int i = 0; i < searchMatches.size(); i++) {
+                int[] m = searchMatches.get(i);
+                int vRow = m[0] - scrollRow;
+                if (vRow < 0 || vRow >= visibleRows) continue;
+                int drawStart = Math.max(m[1] - scrollCol, 0);
+                int drawEnd = Math.min(m[2] - scrollCol, visibleCols);
+                if (drawEnd <= 0 || drawStart >= visibleCols) continue;
+                float rx = textX + drawStart * cellWidth;
+                float ry = textY + vRow * cellHeight + HIGHLIGHT_OFFSET_Y;
+                float rw = (drawEnd - drawStart) * cellWidth;
+                if (i == currentMatchIndex) {
+                    // Active match: bright yellow
+                    font.drawRect(rx, ry, rw, cellHeight, 0.55f, 0.45f, 0.10f);
+                } else {
+                    // Other matches: dim amber
+                    font.drawRect(rx, ry, rw, cellHeight, 0.30f, 0.25f, 0.10f);
                 }
             }
         }
@@ -871,7 +990,7 @@ public class TextArea {
         removeSelection();
     }
 
-    private String getSelectedText() {
+    String getSelectedText() {
         if (!hasSelection()) return "";
         int[] s = selectionBounds();
         return buffer.getTextRange(s[0], s[1], s[2], s[3]);

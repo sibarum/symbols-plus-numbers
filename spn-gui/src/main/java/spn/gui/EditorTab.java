@@ -28,6 +28,13 @@ public class EditorTab extends ScrollableTab {
     private final DiagnosticEngine diagnosticEngine = new DiagnosticEngine(diagnosticOverlay);
     private final ChangeOverlay changeOverlay = new ChangeOverlay();
 
+    // Find/replace state — active when findActive == true.
+    // In replace mode, editingReplace == true and keystrokes go to the replace field.
+    private boolean findActive;
+    private boolean editingReplace;
+    private final StringBuilder findQuery = new StringBuilder();
+    private final StringBuilder replaceQuery = new StringBuilder();
+
     EditorTab(EditorWindow window) {
         super(window);
 
@@ -101,6 +108,57 @@ public class EditorTab extends ScrollableTab {
         if (action != GLFW_PRESS && action != GLFW_REPEAT) return false;
 
         boolean ctrl = (mods & GLFW_MOD_CONTROL) != 0;
+        boolean shift = (mods & GLFW_MOD_SHIFT) != 0;
+
+        // Find mode intercepts most input
+        if (findActive) {
+            if (key == GLFW_KEY_ESCAPE) { closeFind(); return true; }
+            if (ctrl && key == GLFW_KEY_H && action == GLFW_PRESS) {
+                // Toggle into replace mode (or focus replace field)
+                editingReplace = true;
+                return true;
+            }
+            if (key == GLFW_KEY_TAB && action == GLFW_PRESS) {
+                editingReplace = !editingReplace;
+                return true;
+            }
+            if (key == GLFW_KEY_BACKSPACE) {
+                StringBuilder q = editingReplace ? replaceQuery : findQuery;
+                if (q.length() > 0) {
+                    q.deleteCharAt(q.length() - 1);
+                    if (!editingReplace) textArea.setSearchTerm(q.toString());
+                }
+                return true;
+            }
+            if (key == GLFW_KEY_ENTER) {
+                if (editingReplace && !replaceQuery.isEmpty()) {
+                    if (shift) {
+                        // Shift+Enter in replace mode: replace all
+                        int n = textArea.replaceAllMatches(replaceQuery.toString());
+                        window.flash("Replaced " + n + " occurrence(s)", false);
+                    } else {
+                        textArea.replaceCurrentMatch(replaceQuery.toString());
+                    }
+                } else {
+                    // Navigate matches
+                    if (shift) textArea.jumpToPrevMatch();
+                    else textArea.jumpToNextMatch();
+                }
+                return true;
+            }
+            // Swallow all other keys while in find mode (except pure modifier presses)
+            return true;
+        }
+
+        // Ctrl+F opens find mode
+        if (ctrl && key == GLFW_KEY_F && action == GLFW_PRESS) {
+            openFind(false);
+            return true;
+        }
+        if (ctrl && key == GLFW_KEY_H && action == GLFW_PRESS) {
+            openFind(true);
+            return true;
+        }
 
         // Sample shortcuts (F1, F2, ...)
         if (!ctrl && action == GLFW_PRESS) {
@@ -122,7 +180,6 @@ public class EditorTab extends ScrollableTab {
             return true;
         }
         if (key == GLFW_KEY_F5 && action == GLFW_PRESS) {
-            boolean shift = (mods & GLFW_MOD_SHIFT) != 0;
             if (shift) window.runWithTrace();
             else window.runCurrentFile();
             return true;
@@ -171,12 +228,74 @@ public class EditorTab extends ScrollableTab {
 
     @Override
     public boolean onChar(int codepoint) {
+        if (findActive) {
+            StringBuilder q = editingReplace ? replaceQuery : findQuery;
+            q.appendCodePoint(codepoint);
+            if (!editingReplace) textArea.setSearchTerm(findQuery.toString());
+            return true;
+        }
         textArea.onCharInput(codepoint);
         return true;
     }
 
+    // ── Find / replace ─────────────────────────────────────────────────
+
+    void openFind(boolean replaceMode) {
+        findActive = true;
+        editingReplace = replaceMode;
+        findQuery.setLength(0);
+        replaceQuery.setLength(0);
+        // Seed the find query with the current selection or word under cursor
+        String seed = textArea.getSelectedText();
+        if (seed == null || seed.isEmpty()) seed = textArea.wordAtCursor();
+        if (seed != null && !seed.isEmpty() && !seed.contains("\n")) {
+            findQuery.append(seed);
+            textArea.setSearchTerm(seed);
+        }
+    }
+
+    private void closeFind() {
+        findActive = false;
+        editingReplace = false;
+        findQuery.setLength(0);
+        replaceQuery.setLength(0);
+        textArea.setSearchTerm(null);
+    }
+
+    /** Expose for HUD rendering. */
+    public boolean isFindActive() { return findActive; }
+
+    /** HUD content while find mode is active. */
+    private String findHudText() {
+        StringBuilder sb = new StringBuilder();
+        int total = textArea.getSearchMatchCount();
+        int current = textArea.getCurrentSearchIndex();
+
+        // Show the find field (cursor shown as │ when that field is active)
+        String findShown = findQuery.toString() + (editingReplace ? "" : "\u2502");
+        sb.append("Find: ").append(findShown.isEmpty() ? " " : findShown);
+
+        if (total > 0) {
+            sb.append(" | ").append(current + 1).append("/").append(total);
+        } else if (!findQuery.isEmpty()) {
+            sb.append(" | no matches");
+        }
+
+        String replaceShown = replaceQuery.toString() + (editingReplace ? "\u2502" : "");
+        sb.append(" | Replace: ").append(replaceShown.isEmpty() ? " " : replaceShown);
+
+        sb.append(" | Enter ").append(editingReplace ? "Replace" : "Next");
+        sb.append(" | Shift+Enter ").append(editingReplace ? "ReplaceAll" : "Prev");
+        sb.append(" | Tab ").append(editingReplace ? "Find" : "Replace");
+        sb.append(" | Esc Close");
+        return sb.toString();
+    }
+
     @Override
     public String hudText() {
+        // Find/replace mode takes over the HUD
+        if (findActive) return findHudText();
+
         StringBuilder sb = new StringBuilder();
 
         // Change and error summary

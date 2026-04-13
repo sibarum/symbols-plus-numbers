@@ -136,6 +136,8 @@ public class EditorWindow {
         actionRegistry.register("Run with Trace","Run",    "Shift+F5",     "Execute with full tracing. Records all function calls, then opens an interactive trace viewer.", this::runWithTrace);
         actionRegistry.register("Undo",          "Edit",   "Ctrl+Z",       "Undo the last edit in the active editor.",              () -> { TextArea ta = getTextArea(); if (ta != null) ta.performUndo(); });
         actionRegistry.register("Redo",          "Edit",   "Ctrl+Y",       "Redo a previously undone edit.",                        () -> { TextArea ta = getTextArea(); if (ta != null) ta.performRedo(); });
+        actionRegistry.register("Find",          "Edit",   "Ctrl+F",       "Search within the current file. Enter next, Shift+Enter prev, Tab to replace mode, Esc to close.", this::openFindInActiveTab);
+        actionRegistry.register("Find & Replace","Edit",   "Ctrl+H",       "Search and replace within the current file.",           this::openReplaceInActiveTab);
         actionRegistry.register("Zoom In",       "View",   "Ctrl+=",       "Increase editor font size.",                            () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomIn(); });
         actionRegistry.register("Zoom Out",      "View",   "Ctrl+-",       "Decrease editor font size.",                            () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomOut(); });
         actionRegistry.register("Zoom Reset",    "View",   "Ctrl+0",       "Reset editor font size to default.",                    () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomReset(); });
@@ -215,6 +217,18 @@ public class EditorWindow {
         tab.loadContent(content);
         tabView.addTab(tab);
         updateTitle();
+    }
+
+    /** Activate find mode in the active editor tab. */
+    void openFindInActiveTab() {
+        EditorTab et = getActiveEditorTab();
+        if (et != null) et.openFind(false);
+    }
+
+    /** Activate find+replace mode in the active editor tab. */
+    void openReplaceInActiveTab() {
+        EditorTab et = getActiveEditorTab();
+        if (et != null) et.openFind(true);
     }
 
     /** Open the log tab, or switch to it if already open. */
