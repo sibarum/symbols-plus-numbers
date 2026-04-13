@@ -104,6 +104,10 @@ public final class SpnMatchBranchNode extends Node {
         return pattern;
     }
 
+    public SpnExpressionNode getBody() {
+        return body;
+    }
+
     // ── Binding ─────────────────────────────────────────────────────────────
 
     @ExplodeLoop

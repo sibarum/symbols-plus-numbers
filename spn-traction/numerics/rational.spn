@@ -53,5 +53,3 @@ const Rational.omega = Rational(1,0)
 promote int -> Rational = (i) {
   Rational(i)
 }
-
-Rational.one == Rational.zero

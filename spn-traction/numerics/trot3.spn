@@ -25,3 +25,4 @@ pure TRot3.inv() -> TRot3 = () {
 }
 
 const TRot3.id = TRot3(0, 0, 0)
+

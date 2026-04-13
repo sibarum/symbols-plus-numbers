@@ -65,4 +65,3 @@ pure TComplex.toCartesian() -> (Rational, Rational) = () {
 
   (real, imag)
 }
-

@@ -1237,6 +1237,48 @@ public class SpnParser {
     }
 
     /**
+     * Unify two types into a single type. Used for inferring the result type
+     * of if/match expressions where branches may return different types.
+     *
+     * <ul>
+     *   <li>Same type → that type</li>
+     *   <li>null + T → T (best effort)</li>
+     *   <li>Different structs → anonymous union (Circle | Rectangle)</li>
+     *   <li>Struct + existing union → expanded union</li>
+     *   <li>Union + union → merged union</li>
+     *   <li>Incompatible (e.g., int + string) → null</li>
+     * </ul>
+     */
+    private FieldType unifyTypes(FieldType a, FieldType b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        if (typesMatch(a, b)) return a;
+
+        // Try to build a union from struct-compatible types
+        List<SpnStructDescriptor> variants = new ArrayList<>();
+        try {
+            collectUnionMembers(variants, a);
+            collectUnionMembers(variants, b);
+        } catch (SpnParseException e) {
+            return null; // incompatible types (primitives etc.) — can't form union
+        }
+
+        // Sort and deduplicate
+        variants.sort(java.util.Comparator.comparing(SpnStructDescriptor::getName));
+        for (int i = variants.size() - 1; i > 0; i--) {
+            if (variants.get(i) == variants.get(i - 1)) variants.remove(i);
+        }
+
+        if (variants.size() == 1) return FieldType.ofStruct(variants.get(0));
+
+        String name = variants.stream()
+                .map(SpnStructDescriptor::getName)
+                .collect(java.util.stream.Collectors.joining(" | "));
+        return FieldType.ofVariant(new SpnVariantSet(name,
+                variants.toArray(new SpnStructDescriptor[0])));
+    }
+
+    /**
      * Ensure an expression does not have untyped (_) type.
      * Untyped values can only be passed to other _ parameters or narrowed via match;
      * they cannot be used in arithmetic, comparisons, indexing, or invocation.
@@ -1406,7 +1448,15 @@ public class SpnParser {
             }
         }
 
-        return new SpnIfNode(condition, thenBranch, elseBranch);
+        SpnStatementNode ifNode = new SpnIfNode(condition, thenBranch, elseBranch);
+        // Infer result type from branches (union if different)
+        if (elseBranch instanceof SpnExpressionNode elseExpr) {
+            FieldType unified = unifyTypes(inferType(thenBranch), inferType(elseExpr));
+            if (unified != null && ifNode instanceof SpnExpressionNode ifExpr) {
+                trackType(ifExpr, unified);
+            }
+        }
+        return ifNode;
     }
 
     // ── Yield / Return ─────────────────────────────────────────────────────
@@ -1447,7 +1497,14 @@ public class SpnParser {
         if (stmts.size() == 1 && stmts.getFirst() instanceof SpnExpressionNode expr) {
             return expr;
         }
-        return new SpnBlockExprNode(stmts.toArray(new SpnStatementNode[0]));
+        SpnExpressionNode block = new SpnBlockExprNode(stmts.toArray(new SpnStatementNode[0]));
+        // Propagate the last expression's type to the block
+        SpnStatementNode last = stmts.getLast();
+        if (last instanceof SpnExpressionNode lastExpr) {
+            FieldType lastType = inferType(lastExpr);
+            if (lastType != null) trackType(block, lastType);
+        }
+        return block;
     }
 
     // ── Expression statement ───────────────────────────────────────────────
@@ -1480,6 +1537,7 @@ public class SpnParser {
         while (tokens.match("||")) {
             SpnExpressionNode right = parseAnd();
             left = new SpnOrNode(left, right);
+            trackType(left, FieldType.BOOLEAN);
         }
         return left;
     }
@@ -1489,6 +1547,7 @@ public class SpnParser {
         while (tokens.match("&&")) {
             SpnExpressionNode right = parseEquality();
             left = new SpnAndNode(left, right);
+            trackType(left, FieldType.BOOLEAN);
         }
         return left;
     }
@@ -1501,11 +1560,13 @@ public class SpnParser {
                 SpnExpressionNode right = parseComparison();
                 SpnExpressionNode dispatched = tryOperatorDispatch("==", left, right);
                 left = dispatched != null ? dispatched : at(SpnEqualNodeGen.create(left, right), opTok);
+                trackType(left, FieldType.BOOLEAN);
             } else if (tokens.match("!=")) {
                 SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseComparison();
                 SpnExpressionNode dispatched = tryOperatorDispatch("!=", left, right);
                 left = dispatched != null ? dispatched : at(SpnNotEqualNodeGen.create(left, right), opTok);
+                trackType(left, FieldType.BOOLEAN);
             } else {
                 SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseComparison, "==", "!=");
                 if (qualified != null) { left = qualified; continue; }
@@ -1524,24 +1585,28 @@ public class SpnParser {
                 SpnExpressionNode dispatched = tryOperatorDispatch("<", left, right);
                 if (dispatched != null) { left = dispatched; }
                 else { requireTyped(left, "ordering comparison '<'"); requireTyped(right, "ordering comparison '<'"); left = at(SpnLessThanNodeGen.create(left, right), opTok); }
+                trackType(left, FieldType.BOOLEAN);
             } else if (tokens.match(">")) {
                 SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseConcatenation();
                 SpnExpressionNode dispatched = tryOperatorDispatch(">", left, right);
                 if (dispatched != null) { left = dispatched; }
                 else { requireTyped(left, "ordering comparison '>'"); requireTyped(right, "ordering comparison '>'"); left = at(SpnGreaterThanNodeGen.create(left, right), opTok); }
+                trackType(left, FieldType.BOOLEAN);
             } else if (tokens.match("<=")) {
                 SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseConcatenation();
                 SpnExpressionNode dispatched = tryOperatorDispatch("<=", left, right);
                 if (dispatched != null) { left = dispatched; }
                 else { requireTyped(left, "ordering comparison '<='"); requireTyped(right, "ordering comparison '<='"); left = at(SpnLessEqualNodeGen.create(left, right), opTok); }
+                trackType(left, FieldType.BOOLEAN);
             } else if (tokens.match(">=")) {
                 SpnParseToken opTok = tokens.lastConsumed();
                 SpnExpressionNode right = parseConcatenation();
                 SpnExpressionNode dispatched = tryOperatorDispatch(">=", left, right);
                 if (dispatched != null) { left = dispatched; }
                 else { requireTyped(left, "ordering comparison '>='"); requireTyped(right, "ordering comparison '>='"); left = at(SpnGreaterEqualNodeGen.create(left, right), opTok); }
+                trackType(left, FieldType.BOOLEAN);
             } else {
                 SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseConcatenation, "<", ">", "<=", ">=");
                 if (qualified != null) { left = qualified; continue; }
@@ -1559,6 +1624,7 @@ public class SpnParser {
             requireTyped(left, "string concatenation '++'");
             requireTyped(right, "string concatenation '++'");
             left = at(SpnStringConcatNodeGen.create(left, right), opTok);
+            trackType(left, FieldType.STRING);
         }
         return left;
     }
@@ -1763,13 +1829,49 @@ public class SpnParser {
                 || type == FieldType.BOOLEAN || type == FieldType.STRING;
     }
 
-    /** Check if a declared parameter type matches an inferred argument type. */
+    /**
+     * Check if an inferred type is assignable to a declared type.
+     *
+     * <p>Handles union subtyping:
+     * <ul>
+     *   <li>{@code Circle} is assignable to {@code Circle | Rectangle} (member of union)</li>
+     *   <li>{@code Circle | Rectangle} is assignable to {@code Circle | Rectangle | Triangle} (subset)</li>
+     *   <li>{@code Circle} is assignable to {@code Circle} (identity)</li>
+     * </ul>
+     */
     private boolean typesMatch(FieldType declared, FieldType inferred) {
         if (declared == null || inferred == null) return false;
         // Same object (e.g., both FieldType.LONG)
         if (declared == inferred) return true;
         // Both describe the same type name
-        return declared.describe().equals(inferred.describe());
+        if (declared.describe().equals(inferred.describe())) return true;
+
+        // Union assignability: inferred is assignable to declared union
+        // if every variant in inferred is a member of declared
+        if (declared instanceof FieldType.OfVariant declaredUnion) {
+            SpnStructDescriptor[] declaredVariants = declaredUnion.variantSet().getVariants();
+
+            // Concrete struct assignable to union containing it
+            if (inferred instanceof FieldType.OfStruct inferredStruct) {
+                for (SpnStructDescriptor v : declaredVariants) {
+                    if (v == inferredStruct.descriptor()) return true;
+                }
+            }
+
+            // Smaller union assignable to larger union (subset check)
+            if (inferred instanceof FieldType.OfVariant inferredUnion) {
+                outer:
+                for (SpnStructDescriptor iv : inferredUnion.variantSet().getVariants()) {
+                    for (SpnStructDescriptor dv : declaredVariants) {
+                        if (iv == dv) continue outer;
+                    }
+                    return false; // inferred variant not in declared
+                }
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private SpnExpressionNode parseUnary() {
@@ -1942,6 +2044,19 @@ public class SpnParser {
     /** Look up a method by receiver type and name. */
     private MethodEntry resolveMethod(FieldType receiverType, String methodName) {
         if (receiverType == null) return null;
+
+        // Union types: check that the method exists on ALL variants.
+        // Return the first variant's method entry (they should be compatible).
+        if (receiverType instanceof FieldType.OfVariant ov) {
+            MethodEntry first = null;
+            for (SpnStructDescriptor variant : ov.variantSet().getVariants()) {
+                MethodEntry entry = methodRegistry.get(variant.getName() + "." + methodName);
+                if (entry == null) return null; // not on all variants
+                if (first == null) first = entry;
+            }
+            return first;
+        }
+
         // Try exact type description match
         String key = receiverType.describe() + "." + methodName;
         MethodEntry entry = methodRegistry.get(key);
@@ -2389,19 +2504,46 @@ public class SpnParser {
     // ── Match expression ───────────────────────────────────────────────────
 
     private SpnExpressionNode parseMatchExpression() {
-        tokens.expect("match");
+        SpnParseToken matchTok = tokens.expect("match");
         SpnExpressionNode subject = parseExpression();
 
         List<SpnMatchBranchNode> branches = new ArrayList<>();
+        FieldType resultType = null;
         while (tokens.match("|")) {
-            branches.add(parseMatchBranch());
+            SpnMatchBranchNode branch = parseMatchBranch();
+            branches.add(branch);
+            // Unify branch body types to infer the match result type
+            resultType = unifyTypes(resultType, inferType(branch.getBody()));
         }
 
         if (branches.isEmpty()) {
             throw tokens.error("Match expression must have at least one branch");
         }
 
-        return new SpnMatchNode(subject, branches.toArray(new SpnMatchBranchNode[0]));
+        // Exhaustiveness check: if subject type is a union/variant, verify coverage
+        FieldType subjectType = inferType(subject);
+        if (subjectType instanceof FieldType.OfVariant ov) {
+            MatchPattern[] patterns = new MatchPattern[branches.size()];
+            for (int i = 0; i < branches.size(); i++) {
+                patterns[i] = branches.get(i).getPattern();
+            }
+            SpnVariantSet vs = ov.variantSet();
+            if (!vs.isCoveredBy(patterns)) {
+                SpnStructDescriptor[] missing = vs.uncoveredVariants(patterns);
+                var names = new StringBuilder();
+                for (int i = 0; i < missing.length; i++) {
+                    if (i > 0) names.append(", ");
+                    names.append(missing[i].getName());
+                }
+                throw tokens.error("Non-exhaustive match on " + vs.getName()
+                        + ": missing pattern(s) for " + names, matchTok);
+            }
+        }
+
+        SpnExpressionNode matchNode = new SpnMatchNode(subject,
+                branches.toArray(new SpnMatchBranchNode[0]));
+        if (resultType != null) trackType(matchNode, resultType);
+        return matchNode;
     }
 
     private SpnMatchBranchNode parseMatchBranch() {
@@ -2701,7 +2843,61 @@ public class SpnParser {
     private static final Set<String> PRIMITIVE_TYPE_KEYWORDS =
             Set.of("int", "float", "string", "bool");
 
+    /**
+     * Parse a type expression, including anonymous union types: {@code Circle | Rectangle}.
+     * Delegates to {@link #parseSingleFieldType()} for each component.
+     */
     private FieldType parseFieldType() {
+        FieldType first = parseSingleFieldType();
+
+        if (!tokens.check("|")) return first;
+
+        // Union type: Type | Type | ...
+        List<SpnStructDescriptor> variants = new ArrayList<>();
+        collectUnionMembers(variants, first);
+        while (tokens.match("|")) {
+            collectUnionMembers(variants, parseSingleFieldType());
+        }
+
+        // Sort for order-independence: Circle | Rectangle == Rectangle | Circle
+        variants.sort(java.util.Comparator.comparing(SpnStructDescriptor::getName));
+        // Deduplicate (after sorting, duplicates are adjacent)
+        for (int i = variants.size() - 1; i > 0; i--) {
+            if (variants.get(i) == variants.get(i - 1)) variants.remove(i);
+        }
+
+        if (variants.size() == 1) {
+            return FieldType.ofStruct(variants.get(0));
+        }
+
+        String name = variants.stream()
+                .map(SpnStructDescriptor::getName)
+                .collect(java.util.stream.Collectors.joining(" | "));
+        return FieldType.ofVariant(new SpnVariantSet(name,
+                variants.toArray(new SpnStructDescriptor[0])));
+    }
+
+    /** Extract struct descriptors from a FieldType for union construction. */
+    private void collectUnionMembers(List<SpnStructDescriptor> variants, FieldType type) {
+        if (type instanceof FieldType.OfStruct os) {
+            variants.add(os.descriptor());
+        } else if (type instanceof FieldType.OfVariant ov) {
+            java.util.Collections.addAll(variants, ov.variantSet().getVariants());
+        } else if (type instanceof FieldType.OfConstrainedType oct) {
+            SpnStructDescriptor sd = structRegistry.get(oct.descriptor().getName());
+            if (sd != null) { variants.add(sd); return; }
+            throw tokens.error("Cannot use type '" + oct.descriptor().getName() + "' in union");
+        } else if (type instanceof FieldType.OfProduct op) {
+            SpnStructDescriptor sd = structRegistry.get(op.descriptor().getName());
+            if (sd != null) { variants.add(sd); return; }
+            throw tokens.error("Cannot use type '" + op.descriptor().getName() + "' in union");
+        } else {
+            throw tokens.error("Union types can only combine struct/data types, got: " + type.describe());
+        }
+    }
+
+    /** Parse a single (non-union) type expression. */
+    private FieldType parseSingleFieldType() {
         SpnParseToken tok = tokens.peek();
         if (tok == null) throw tokens.error("Expected type, but reached end of input");
 

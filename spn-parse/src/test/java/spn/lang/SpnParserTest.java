@@ -733,4 +733,202 @@ x + y
             assertTrue(msg.contains("+(Foo, Bar)"), "Should include op signature: " + msg);
         }
     }
+
+    // ── Union types and type inference ─────────────────────────────────────
+
+    @Nested
+    class UnionTypesAndInference {
+
+        @Test
+        void anonymousUnionInParamType() {
+            assertEquals(78.53975, (double) run("""
+                type Circle(radius: Double)
+                type Rectangle(width: Double, height: Double)
+                pure area(Circle | Rectangle) -> Double = (shape) {
+                  match shape
+                    | Circle(r) -> 3.14159 * r * r
+                    | Rectangle(w, h) -> w * h
+                }
+                area(Circle(5.0))
+                """), 0.001);
+        }
+
+        @Test
+        void anonymousUnionOrderIndependent() {
+            // Rectangle | Circle should work the same as Circle | Rectangle
+            assertEquals(12.0, (double) run("""
+                type Circle(radius: Double)
+                type Rectangle(width: Double, height: Double)
+                pure area(Rectangle | Circle) -> Double = (shape) {
+                  match shape
+                    | Circle(r) -> 3.14159 * r * r
+                    | Rectangle(w, h) -> w * h
+                }
+                area(Rectangle(3.0, 4.0))
+                """), 0.001);
+        }
+
+        @Test
+        void letDestructureThenMethodCall() {
+            // Type inference through tuple destructure → method call
+            assertEquals(42L, run("""
+                type Wrapper(value: int)
+                pure Wrapper.get() -> int = () { this.value }
+                let w = Wrapper(42)
+                let (v) = w
+                v
+                """));
+        }
+
+        @Test
+        void blockExpressionPreservesType() {
+            // Block expression's type = last expression's type
+            assertEquals(10L, run("""
+                type Wrapper(value: int)
+                pure Wrapper.get() -> int = () { this.value }
+                let w = {
+                  let x = 5
+                  Wrapper(x + x)
+                }
+                w.get()
+                """));
+        }
+
+        @Test
+        void matchUnifiesSameType() {
+            // All match branches return same type → result type is tracked
+            assertEquals(10L, run("""
+                type Wrapper(value: int)
+                pure Wrapper.get() -> int = () { this.value }
+                let w = match true
+                  | true -> Wrapper(10)
+                  | false -> Wrapper(20)
+                w.get()
+                """));
+        }
+
+        @Test
+        void unknownTypeNameThrows() {
+            assertThrows(SpnParseException.class, () -> run("""
+                type Foo(bar: NonexistentType)
+                """));
+        }
+
+        @Test
+        void variantTypeInParamPosition() {
+            // Named data union in param position (existing feature, regression test)
+            assertEquals(78.53975, (double) run("""
+                type Circle(radius: Double)
+                type Rectangle(width: Double, height: Double)
+                data Shape = Circle | Rectangle
+                pure area(Shape) -> Double = (shape) {
+                  match shape
+                    | Circle(r) -> 3.14159 * r * r
+                    | Rectangle(w, h) -> w * h
+                }
+                area(Circle(5.0))
+                """), 0.001);
+        }
+
+        @Test
+        void tupleReturnType() {
+            Object result = run("""
+                pure swap(int, int) -> (int, int) = (a, b) { (b, a) }
+                swap(1, 2)
+                """);
+            assertInstanceOf(SpnTupleValue.class, result);
+            SpnTupleValue tuple = (SpnTupleValue) result;
+            assertEquals(2L, tuple.get(0));
+            assertEquals(1L, tuple.get(1));
+        }
+
+        @Test
+        void letTupleDestructure() {
+            assertEquals(30L, run("""
+                let (a, b) = (10, 20)
+                a + b
+                """));
+        }
+
+        @Test
+        void letTupleDestructureWithSkip() {
+            assertEquals(20L, run("""
+                let (_, b) = (10, 20)
+                b
+                """));
+        }
+
+        @Test
+        void concreteTypeAssignableToUnionParam() {
+            // Passing Circle to a function expecting Circle | Rectangle
+            assertEquals(78.53975, (double) run("""
+                type Circle(radius: Double)
+                type Rectangle(width: Double, height: Double)
+                pure area(Circle | Rectangle) -> Double = (shape) {
+                  match shape
+                    | Circle(r) -> 3.14159 * r * r
+                    | Rectangle(w, h) -> w * h
+                }
+                let c = Circle(5.0)
+                area(c)
+                """), 0.001);
+        }
+
+        @Test
+        void nonExhaustiveMatchOnUnionThrows() {
+            // Missing Rectangle branch → parse error
+            assertThrows(SpnParseException.class, () -> run("""
+                type Circle(radius: Double)
+                type Rectangle(width: Double, height: Double)
+                pure area(Circle | Rectangle) -> Double = (shape) {
+                  match shape
+                    | Circle(r) -> 3.14159 * r * r
+                }
+                area(Circle(5.0))
+                """));
+        }
+
+        @Test
+        void exhaustiveMatchOnUnionSucceeds() {
+            // All variants covered → no error
+            assertEquals(78.53975, (double) run("""
+                type Circle(radius: Double)
+                type Rectangle(width: Double, height: Double)
+                pure area(Circle | Rectangle) -> Double = (shape) {
+                  match shape
+                    | Circle(r) -> 3.14159 * r * r
+                    | Rectangle(w, h) -> w * h
+                }
+                area(Circle(5.0))
+                """), 0.001);
+        }
+
+        @Test
+        void exhaustiveMatchWithWildcard() {
+            // Wildcard covers everything → no error
+            assertEquals(0.0, (double) run("""
+                type Circle(radius: Double)
+                type Rectangle(width: Double, height: Double)
+                pure area(Circle | Rectangle) -> Double = (shape) {
+                  match shape
+                    | Circle(r) -> 3.14159 * r * r
+                    | _ -> 0.0
+                }
+                area(Rectangle(3.0, 4.0))
+                """), 0.001);
+        }
+
+        @Test
+        void blockWithLetAndTupleReturn() {
+            Object result = run("""
+                let t = {
+                  let x = 3
+                  let y = 4
+                  (x, y)
+                }
+                t
+                """);
+            assertInstanceOf(SpnTupleValue.class, result);
+        }
+    }
 }

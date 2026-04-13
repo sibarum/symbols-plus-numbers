@@ -53,23 +53,24 @@ public final class SpnVariantSet {
                     && ot.fieldType() instanceof FieldType.Untyped) return true;
         }
 
-        // Check that every variant has at least one matching Struct pattern
+        // Check that every variant has at least one matching pattern
         outer:
         for (SpnStructDescriptor variant : variants) {
             for (MatchPattern p : patterns) {
-                if (p instanceof MatchPattern.Struct sp && sp.descriptor() == variant) {
-                    continue outer;
-                }
-                // OfType(OfStruct(desc)) also covers this variant
-                if (p instanceof MatchPattern.OfType ot
-                        && ot.fieldType() instanceof FieldType.OfStruct os
-                        && os.descriptor() == variant) {
-                    continue outer;
-                }
+                if (coversVariant(p, variant)) continue outer;
             }
             return false; // this variant is not covered
         }
         return true;
+    }
+
+    /** Returns true if the pattern covers the given variant. */
+    private static boolean coversVariant(MatchPattern p, SpnStructDescriptor variant) {
+        if (p instanceof MatchPattern.Struct sp) return sp.descriptor() == variant;
+        if (p instanceof MatchPattern.StructDestructure sd) return sd.descriptor() == variant;
+        if (p instanceof MatchPattern.OfType ot
+                && ot.fieldType() instanceof FieldType.OfStruct os) return os.descriptor() == variant;
+        return false;
     }
 
     /**
@@ -86,14 +87,7 @@ public final class SpnVariantSet {
         outer:
         for (SpnStructDescriptor variant : variants) {
             for (MatchPattern p : patterns) {
-                if (p instanceof MatchPattern.Struct sp && sp.descriptor() == variant) {
-                    continue outer;
-                }
-                if (p instanceof MatchPattern.OfType ot
-                        && ot.fieldType() instanceof FieldType.OfStruct os
-                        && os.descriptor() == variant) {
-                    continue outer;
-                }
+                if (coversVariant(p, variant)) continue outer;
             }
             missing.add(variant);
         }
