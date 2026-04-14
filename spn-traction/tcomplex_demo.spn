@@ -1,0 +1,157 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- TComplex Rotation vs. sin/cos
+-- ═══════════════════════════════════════════════════════════════════════
+-- TComplex represents a complex number as (scale, tangent) where tangent
+-- is a Rational. Its cartesian form is (scale * td, scale * tn) where
+-- tangent = tn/td.
+--
+-- For any Pythagorean triple (a, b, c) with a² + b² = c², the value
+-- TComplex(1/c, b/a) is an EXACT rational unit vector at angle atan(b/a).
+-- No floating point — every coordinate is a ratio of small integers.
+--
+-- This script draws the smooth sin/cos unit circle, then overlays TComplex
+-- points for a handful of Pythagorean triples. The TComplex dots should
+-- land exactly on the smooth circle.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import Array (concat, append)
+import Canvas
+import Math (sin, cos, toFloat)
+import spn.canvas.draw
+import numerics.tcomplex
+import numerics.rational
+
+-- ── helpers ───────────────────────────────────────────────────────────
+
+-- Convert a Rational to a float for plotting
+pure ratToFloat(Rational) -> float = (r) {
+  match r.1
+  | 0 -> 0
+  | _ -> toFloat(r.0) / toFloat(r.1)
+}
+
+-- Convert a TComplex to screen-space (cx, cy) pixel coordinates.
+-- The Y axis is flipped because screen Y grows downward.
+pure tcToScreen(TComplex, float, float, float) -> (float, float) = (tc, cx, cy, r) {
+  let (re, im) = tc.toCartesian()
+  let x = cx + r * ratToFloat(re)
+  let y = cy - r * ratToFloat(im)
+  (x, y)
+}
+
+-- Draw commands for a labelled marker at a given screen position.
+pure markerAt(float, float, string, float, float, float) -> Array = (x, y, label, r, g, b) {
+  [CmdFill(r, g, b),
+   CmdCircle(x, y, 7.0),
+   CmdFill(0.85, 0.85, 0.9),
+   CmdText(x + 10.0, y - 8.0, label, 0.22)]
+}
+
+-- ── the smooth sin/cos reference circle ────────────────────────────────
+
+pure drawSinCosCircle(float, float, float) -> Array = (cx, cy, r) {
+  let cmds = [CmdStroke(0.3, 0.55, 0.95), CmdStrokeWeight(1.5)]
+  let n = 180
+  let i = 0
+  let prevX = cx + r * cos(0.0)
+  let prevY = cy - r * sin(0.0)
+  while {i < n} do {
+    let theta = toFloat(i + 1) * 6.2831853 / toFloat(n)
+    let x = cx + r * cos(theta)
+    let y = cy - r * sin(theta)
+    cmds = append(cmds, CmdLine(prevX, prevY, x, y))
+    prevX = x
+    prevY = y
+    i = i + 1
+  }
+  cmds
+}
+
+-- ── scene composition ──────────────────────────────────────────────────
+
+canvas(800, 600)
+
+let cx = 400.0
+let cy = 300.0
+let radius = 220.0
+
+-- Start with a clear background and title
+let cmds = [CmdClear(0.08, 0.08, 0.11)]
+
+cmds = concat(cmds, [
+  CmdFill(0.92, 0.92, 0.96),
+  CmdText(230.0, 32.0, "TComplex rotation vs. sin/cos", 0.32)
+])
+
+-- Coordinate axes through the centre
+cmds = concat(cmds, [
+  CmdStroke(0.25, 0.25, 0.3),
+  CmdStrokeWeight(1.0),
+  CmdLine(cx - radius - 30.0, cy, cx + radius + 30.0, cy),
+  CmdLine(cx, cy - radius - 30.0, cx, cy + radius + 30.0)
+])
+
+-- The smooth sin/cos reference circle
+cmds = concat(cmds, drawSinCosCircle(cx, cy, radius))
+
+-- Pythagorean-triple TComplex points (exact rational unit vectors)
+-- (3, 4, 5): atan(4/3) ≈ 53.13°
+let p345 = TComplex(3, 4, 5)
+let (x1, y1) = tcToScreen(p345, cx, cy, radius)
+cmds = concat(cmds, markerAt(x1, y1, "(3,4,5)", 1.0, 0.65, 0.2))
+
+-- (4, 3, 5): atan(3/4) ≈ 36.87°
+let p435 = TComplex(4, 3, 5)
+let (x2, y2) = tcToScreen(p435, cx, cy, radius)
+cmds = concat(cmds, markerAt(x2, y2, "(4,3,5)", 1.0, 0.4, 0.3))
+
+-- (5, 12, 13): atan(12/5) ≈ 67.38°
+let p5_12 = TComplex(5, 12, 13)
+let (x3, y3) = tcToScreen(p5_12, cx, cy, radius)
+cmds = concat(cmds, markerAt(x3, y3, "(5,12,13)", 0.85, 1.0, 0.3))
+
+-- (12, 5, 13): atan(5/12) ≈ 22.62°
+let p12_5 = TComplex(12, 5, 13)
+let (x4, y4) = tcToScreen(p12_5, cx, cy, radius)
+cmds = concat(cmds, markerAt(x4, y4, "(12,5,13)", 0.4, 0.9, 1.0))
+
+-- (8, 15, 17): atan(15/8) ≈ 61.93°
+let p8_15 = TComplex(8, 15, 17)
+let (x5, y5) = tcToScreen(p8_15, cx, cy, radius)
+cmds = concat(cmds, markerAt(x5, y5, "(8,15,17)", 0.75, 0.55, 1.0))
+
+-- Negative angles (y-negated triples)
+let p345n = TComplex(3, -4, 5)
+let (x6, y6) = tcToScreen(p345n, cx, cy, radius)
+cmds = concat(cmds, markerAt(x6, y6, "(3,-4,5)", 1.0, 0.65, 0.2))
+
+let p12_5n = TComplex(12, -5, 13)
+let (x7, y7) = tcToScreen(p12_5n, cx, cy, radius)
+cmds = concat(cmds, markerAt(x7, y7, "(12,-5,13)", 0.4, 0.9, 1.0))
+
+let test = TComplex(12)
+let (xt, yt) = tcToScreen(test, cx, cy, radius)
+cmds = concat(cmds, markerAt(xt, yt, "(12)", 1.0, 0.0, 0.0))
+
+let test = test * test
+let (xt, yt) = tcToScreen(test, cx, cy, radius)
+cmds = concat(cmds, markerAt(xt, yt, "(12^2)", 1.0, 0.0, 0.0))
+
+let test = test * test
+let (xt, yt) = tcToScreen(test, cx, cy, radius)
+cmds = concat(cmds, markerAt(xt, yt, "(12^^2)", 1.0, 0.0, 0.0))
+
+
+-- Legend
+cmds = concat(cmds, [
+  CmdStroke(0.3, 0.55, 0.95), CmdStrokeWeight(2.0),
+  CmdLine(40.0, 555.0, 70.0, 555.0),
+  CmdFill(0.75, 0.75, 0.8),
+  CmdText(80.0, 560.0, "sin/cos reference circle (180 segments)", 0.24),
+  CmdFill(1.0, 0.65, 0.2), CmdCircle(55.0, 580.0, 5.0),
+  CmdFill(0.75, 0.75, 0.8),
+  CmdText(80.0, 585.0, "TComplex unit vectors at Pythagorean angles (exact rational)", 0.24)
+])
+
+render(cmds)
+show()

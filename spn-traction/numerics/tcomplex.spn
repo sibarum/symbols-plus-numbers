@@ -2,6 +2,14 @@ import numerics.rational
 
 type TComplex(scale:Rational, tangent:Rational)
 
+pure TComplex(Rational) -> TComplex = (t) {
+  TComplex(1/(1+t*t), (2*t)/(1-t*t))
+}
+
+pure TComplex(int, int, int) -> TComplex = (a, b, c) {
+  TComplex(Rational(1, c), Rational(b, a))
+}
+
 pure TComplex(Rational, Rational) -> TComplex = (scale, tan) {
   this(scale, tan)
 }
@@ -18,14 +26,8 @@ pure /(TComplex, TComplex) -> TComplex = ((s1, t1), (s2, t2)) {
   TComplex(scl, tan)
 }
 
-pure TComplex.neg() -> TComplex = () {
-  let (s, t) = this
-  TComplex(s.neg(), t)
-}
-
-pure TComplex.inv() -> TComplex = () {
-  let (s, t) = this
-  TComplex(s.inv(), -t)
+pure -(TComplex) -> TComplex = ((s, t)) {
+  TComplex(-s, t)
 }
 
 pure ==(TComplex, TComplex) -> bool = (z1, z2) {
@@ -50,10 +52,30 @@ pure +(TComplex, TComplex) -> TComplex = ((s1, t1), (s2, t2)) {
   | ((_, _), (0, _)) -> { TComplex(x, Rational.zero) }
   | ((0, _), (_, _)) -> { TComplex(y, Rational.omega) }
   | _ -> {
-      let tan = y / x
-      let scl = x / Rational(b)
-      TComplex(scl, tan)
+      TComplex(x, y / x)
     }
+}
+
+pure *(Rational, TComplex) -> TComplex = (k, (s, t)) {
+  let (a, b) = t
+
+  let x = s * b
+  let y = s * a
+
+  let x2 = k * x
+  let y2 = k * y
+
+  match (x2, y2)
+  | ((0, _), (0, _)) -> { TComplex(Rational.zero, Rational.zero) }
+  | ((_, _), (0, _)) -> { TComplex(x2, Rational.zero) }
+  | ((0, _), (_, _)) -> { TComplex(y2, Rational.omega) }
+  | _ -> {
+      TComplex(x2, y2 / x2)
+    }
+}
+
+pure -(TComplex, TComplex) -> TComplex = (c1, c2) {
+  c1 + (-c2)
 }
 
 pure TComplex.toCartesian() -> (Rational, Rational) = () {

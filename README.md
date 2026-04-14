@@ -1,3 +1,15 @@
+```
+    __________________________________________________________
+   /___         _        _      _ _   _          _            \
+  /   *\=======|*\======|*\====/*\ \=|*\========|*\============\
+ /| [--/ _ _ __| |__ ___| |____| |_ \| |_ _ _ __| |__ ___ ____ _\
+/ \   \|| \ ' '\ '_*\ _*\ | _[_  *_] \ ||| | '`*\ '_ \ _*\ *__/_\\
+\/--] *|| | | |*||_) )_) )|__*\| | \ * |||*| | | ||_)*)__/ |\__*\/
+ \____/_,*|_|_|_|.__/___/_|___/\_/_|\__|_._/_|_|_|.__/__\|_|/___/
+  \====_/ |====================================================/
+   \__(__/____________________________________________________/
+```
+
 # Symbols+Numbers (SPN)
 
 A programming language where numeric types carry their own algebraic rules, pattern matching is exhaustive by design, and a built-in OpenGL graphics engine lets you visualize results without leaving the language.
@@ -21,18 +33,20 @@ pure +(Rational, Rational) -> Rational = ((n1, d1), (n2, d2)) {
   Rational(n1*d2 + d1*n2, d1*d2)
 }
 
--- Define a data type with variants
-data Shape
-  | Circle(radius)
-  | Rectangle(width, height)
-  | Triangle(a, b, c)
+-- Unary inverse operators
+pure -(Rational) -> Rational = ((n, d)) { Rational(-n, d) }
+pure /(Rational) -> Rational = ((n, d)) { Rational(d, n) }
 
--- Pure functions with exhaustive pattern matching
-pure area(Shape) -> float = (shape) {
+-- Derive ordering from a single comparator
+import Ordering
+pure compare(Rational, Rational) -> int = (a, b) { ... }
+deriveOrderingFromInt(Rational, compare)
+
+-- Anonymous union types
+pure area(Circle | Rectangle) -> float = (shape) {
   match shape
-    | Circle(r)          -> 3.14159 * r * r
-    | Rectangle(w, h)    -> w * h
-    | Triangle(a, b, c)  -> heron(a, b, c)
+    | Circle(r)         -> 3.14159 * r * r
+    | Rectangle(w, h)   -> w * h
 }
 ```
 
@@ -69,9 +83,66 @@ type Direction = Symbol
 type Color = Symbol
 ```
 
+### Union Types
+
+Types can be combined with `|` to form anonymous unions. Named unions via `data` declarations are also supported. The compiler enforces exhaustive pattern matching over all variants.
+
+```
+-- Anonymous union (inline)
+pure describe(Circle | Rectangle | Triangle) -> string = (shape) { ... }
+
+-- Named union
+data Shape = Circle | Rectangle | Triangle
+pure describe(Shape) -> string = (shape) { ... }
+
+-- Union subtyping: Circle is assignable to Circle | Rectangle
+let c = Circle(5.0)
+area(c)  -- works: Circle is a member of Circle | Rectangle
+
+-- Exhaustiveness checking at parse time
+match shape
+  | Circle(r) -> ...       -- error: missing Rectangle branch
+```
+
+### Macros
+
+Compile-time code generation via textual template macros. Macros are functions that emit code at their call site.
+
+```
+-- Define a macro
+macro deriveDouble(T) = {
+  pure double(T) -> T = (x) { x + x }
+}
+
+-- Invoke it — emits the function for a specific type
+deriveDouble(int)
+double(5)  -- 10
+
+-- Macros cross module boundaries via imports
+import Ordering
+deriveOrderingFromInt(Rational, compare)
+-- now <, >, <=, >= work on Rational
+```
+
+Macros support multiple parameters, emit multiple declarations, and can be defined in stdlib SPN files that are importable without touching Java code.
+
+### Unary Operator Dispatch
+
+Unary operators dispatch through the same overload system as binary operators.
+
+```
+-- Additive inverse: -x dispatches to -(T) -> T
+pure -(Rational) -> Rational = ((n, d)) { Rational(-n, d) }
+-myRational  -- calls the overload
+
+-- Multiplicative inverse: 1/x dispatches to /(T) -> T
+pure /(Rational) -> Rational = ((n, d)) { Rational(d, n) }
+1/myRational  -- calls the overload (only literal 1 triggers this)
+```
+
 ### Pure Functions & Pattern Matching
 
-Pure functions are typed, total, and side-effect-free. The compiler checks exhaustiveness across all match branches.
+Pure functions are typed, total, and side-effect-free. The compiler checks exhaustiveness across all match branches and validates pattern categories against the subject type at parse time.
 
 ```
 pure opposite(Direction) -> Direction = (dir) {
@@ -82,32 +153,46 @@ pure opposite(Direction) -> Direction = (dir) {
     | :west  -> :east
 }
 
--- String decomposition via prefix matching and regex capture
-pure parseUrl(string) -> string = (url) {
-  match url
-    | "http://" ++ rest                -> "web: " ++ rest
-    | "ftp://" ++ rest                 -> "file: " ++ rest
-    | /(\w+):\/\/(.*)/(_,proto,path) -> proto ++ "://" ++ path
-    | _                                -> "unknown"
-}
+-- Nested pattern matching with struct destructuring
+match (r1, r2)
+  | (Rational(0, _), Rational(0, _)) -> true
+  | _ -> r1.0 == r2.0 && r1.1 == r2.1
 
--- Array head|tail destructuring
-pure sum(Array) -> int = (arr) {
-  match arr
-    | []      -> 0
-    | [h | t] -> h + sum(t)
-}
-
--- Guards
-pure classify(int) -> string = (x) {
-  match x
-    | v if {v < 0}  -> "negative"
-    | v if {v > 0}  -> "positive"
-    | _              -> "zero"
-}
+-- Block expressions with let bindings
+match pair
+  | _ -> {
+      let x = compute(pair)
+      let y = transform(x)
+      Result(x, y)
+    }
 ```
 
-Pattern matching supports: struct destructuring, literals, type checks, string prefix/suffix/regex, array head/tail, set membership, dictionary key destructuring, wildcards, and guard expressions.
+Pattern matching supports: struct destructuring (nominal), nested patterns, tuple positional matching, literals, type checks, string prefix/suffix/regex, array head/tail, set membership, dictionary key destructuring, wildcards, guard expressions, and boolean literal patterns.
+
+**Parse-time categorical checking** rejects patterns that can't match the subject's type:
+```
+let r = Rational(3, 4)
+match r
+  | (n, d) -> ...           -- ERROR: tuple pattern can't match Rational
+  | Rational(n, d) -> ...   -- OK: nominal destructuring
+```
+
+### Tuple Types & Destructuring
+
+Tuples are first-class with type annotations, return types, and positional destructuring.
+
+```
+-- Tuple return type
+pure swap(int, int) -> (int, int) = (a, b) { (b, a) }
+
+-- Let-destructuring (works on tuples, arrays, structs, products)
+let (x, y) = someFunction()
+let (a, _, c) = myTuple       -- skip elements with _
+
+-- Type inference through destructuring
+let (re, im) = tc.toCartesian()   -- re and im get Rational type
+re.neg()                            -- method dispatch works
+```
 
 ### Closures & Streaming
 
@@ -119,7 +204,6 @@ let sum = 0
 while range(1, 10) do (n) {
   sum = sum + n
 }
--- sum == 45
 
 -- Producer functions use yield
 pure range(int, int) = (start, end) {
@@ -131,61 +215,74 @@ pure range(int, int) = (start, end) {
 }
 ```
 
+### Developer Tooling — `inspect`
+
+The `inspect` prefix operator provides developer-facing string formatting for any struct type. Registered on the struct descriptor at parse time, used automatically by Trace Mode.
+
+```
+pure inspect(Rational) -> string = (r) { r.0 ++ "/" ++ r.1 }
+inspect myRational   -- "3/4"
+```
+
 ### Built-in OpenGL Graphics
 
 An integrated canvas API provides hardware-accelerated 2D drawing with SDF font rendering, all callable directly from SPN code.
 
 ```
 import Canvas
-
-canvas(800, 600)
-clear(0.1, 0.1, 0.12)
-
-fill(0.2, 0.4, 0.8)
-rect(50.0, 50.0, 200.0, 150.0)
-
-fill(0.9, 0.2, 0.2)
-circle(400.0, 300.0, 80.0)
-
-stroke(1.0, 1.0, 1.0)
-strokeWeight(2.0)
-line(400.0, 80.0, 300.0, 220.0)
-
-show()
-```
-
-A built-in 2D plotting library handles axes, ticks, labels, and auto-scaling:
-
-```
-import Canvas
-import Math
+import spn.canvas.draw
 import spn.canvas.plot
 
-pure sinFn(_) = (x) { sin(x) }
-
 canvas(800, 600)
-clear(0.08, 0.08, 0.1)
-plotFnAuto(sinFn, 800.0, 600.0, -6.3, 6.3, "sin(x)")
+render(concat(
+    [CmdClear(0.08, 0.08, 0.1)],
+    plotFnAuto(sinFn, 800.0, 600.0, -6.3, 6.3, "sin(x)")
+))
 show()
 ```
+
+The canvas supports static rendering, animation via `animate(fps, drawFn)`, and a command-based drawing model (`CmdRect`, `CmdCircle`, `CmdLine`, `CmdText`, etc.) where all scene computation is pure.
 
 ### Built-in Mini-IDE
 
-An OpenGL-based editor with syntax highlighting, code suggestions, parameter hints, undo/redo, and multi-window support. No external editor required.
+An OpenGL-based editor with:
+
+- **Syntax highlighting** with incremental lexing
+- **Real-time diagnostics** — parse errors appear as you type (0.6s debounce)
+- **Ctrl+F / Ctrl+H** — find and replace with live highlighting
+- **Ctrl+P** — command palette (action menu)
+- **Ctrl+/** — help browser
+- **Ctrl+I** — import browser with module discovery
+- **Ctrl+M** — module browser with file search (Ctrl+R to refresh caches)
+- **Shift+F5** — Trace Mode (execution profiler with per-file source overlay)
+- **F5** — run current file
+- **Multi-tab editing** with dirty detection and Ctrl+Tab cycling
+- **Undo/redo** with branch navigation
+
+### Trace Mode (Debugger)
+
+Shift+F5 records all function calls, returns, errors, and variable assignments during execution. Results open as source-overlay tabs — one per module file — with:
+
+- Block highlights showing call frequency
+- Summary table of all traced declarations
+- Click-to-inspect invocation details (inputs, locals, outputs, duration)
+- Per-file attribution: operator overloads across files are correctly separated
+- Scroll-aware panels (hover to scroll independently)
 
 ## Standard Library
 
-60 built-in functions across 7 modules:
+113+ built-in functions across 7 modules, plus SPN-source stdlib modules:
 
 | Module | Functions |
 |--------|-----------|
-| **Math** | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `ceil`, `floor`, `round`, `abs`, `sign`, `min`, `max`, `clamp`, `pow`, `sqrt`, `heron` |
-| **Array** | `map`, `filter`, `fold`, `flatten`, `zip`, `reverse`, `take`, `drop`, `find`, `all`, `any`, `sort`, `enumerate` |
+| **Math** | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `ceil`, `floor`, `round`, `abs`, `sign`, `min`, `max`, `clamp`, `pow`, `sqrt`, `heron`, `gcd`, `toFloat` |
+| **Array** | `map`, `filter`, `fold`, `flatten`, `zip`, `reverse`, `take`, `drop`, `find`, `all`, `any`, `sort`, `enumerate`, `concat`, `append`, `length`, `first`, `last`, `unique`, `chunk`, `groupBy`, `indexOf`, `contains` |
 | **Dict** | `hasKey`, `keys`, `values`, `entries`, `merge`, `remove`, `mapValues` |
 | **Set** | `difference`, `intersection`, `isSubset`, `fromArray`, `toArray`, `size` |
 | **String** | `toUpper`, `toLower`, `trim`, `replace`, `substring`, `split`, `startsWith`, `show`, `join`, `formatNum` |
 | **Range** | `rangeStep`, `repeat`, `iterate` |
 | **Option** | `mapOption`, `flatMap`, `unwrap`, `unwrapOr` |
+| **Ordering** | `deriveOrderingFromInt(T, cmp)`, `deriveOrderingFromOrdering(T, cmp)` — stdlib macros |
 
 Canvas functions (`canvas`, `show`, `clear`, `fill`, `stroke`, `strokeWeight`, `rect`, `circle`, `line`, `text`, `animate`) are provided by the spn-canvas module.
 
@@ -193,14 +290,15 @@ Canvas functions (`canvas`, `show`, `clear`, `fill`, `stroke`, `strokeWeight`, `
 
 ```
 spn-parent/
-  spn-ast/        Core AST nodes, type system, runtime
-  spn-parse/      Hand-written recursive descent parser & lexer
-  spn-stdlib/     Standard library with post-compile code generation
-  spn-canvas/     OpenGL 2D drawing API + plotting library
-  spn-fonts/      SDF font rendering via STB/LWJGL
-  spn-stdui/      Platform-neutral UI framework (modes, widgets, input)
-  spn-gui/        OpenGL mini-IDE (GLFW/LWJGL), bridges to spn-stdui
+  spn-ast/        Core AST nodes, type system, trace recorder, runtime
+  spn-parse/      Hand-written recursive descent parser, lexer, macro expander
+  spn-stdlib/     Standard library (Java builtins + SPN-source modules in src/main/spn/)
+  spn-canvas/     OpenGL 2D drawing API + plotting library (spn.canvas.draw, spn.canvas.plot)
+  spn-fonts/      SDF font rendering via STB/LWJGL (per-context VAO, shared atlas)
+  spn-stdui/      Platform-neutral UI framework (modes, widgets, input, HUD)
+  spn-gui/        OpenGL mini-IDE (GLFW/LWJGL), diagnostic engine, tracer UI
   spn-pkg/        Package management & import resolution
+  spn-traction/   Example SPN project (Rational, TComplex, TRot3 numerics)
   spn-intellij-plugin/  IntelliJ IDE support
 ```
 
@@ -208,14 +306,27 @@ spn-parent/
 
 SPN uses nominal typing throughout. The type hierarchy includes:
 
-- **Primitives** -- int (64-bit long), float (64-bit double), string, bool
+- **Primitives** -- int (64-bit long), float (64-bit double), string, bool, Symbol
 - **Constrained types** -- scalars with runtime-checked invariants
 - **Product types** -- multi-component types with externalized operations
-- **Structs** -- named record types
+- **Structs** -- named record types with typed or positional fields
 - **Variants (ADTs)** -- tagged unions with exhaustiveness checking
-- **Tuples** -- anonymous structurally-typed products
+- **Anonymous unions** -- inline `Circle | Rectangle` type expressions with subtype assignability
+- **Tuples** -- positionally-typed anonymous products with `(Type, Type)` syntax
 - **Collections** -- Array, Set, Dictionary (unified `[]` syntax)
 - **Function types** -- typed callable references
+
+### Parse-Time Type Inference
+
+The parser tracks expression types through the full precedence chain. This enables:
+
+- **Operator dispatch** at parse time (not runtime) with promotion chains
+- **Method resolution** on inferred receiver types
+- **Categorical pattern checking** (tuple patterns can't match structs, etc.)
+- **Missing overload detection** ("No overload for +(Foo, Bar)" at parse time)
+- **Exhaustiveness checking** on union/variant subjects
+- **Block/if/match type unification** (branch types merge into unions)
+- **Implicit Long-to-Double widening** at function boundaries
 
 ### Design Principles
 
@@ -224,6 +335,9 @@ SPN uses nominal typing throughout. The type hierarchy includes:
 - **Pure and pragmatic coexist.** Pure functions for logic, closures for control flow and mutation.
 - **Types are smart, structs are dumb.** Numeric types carry algebraic rules. Structs are plain containers whose fields may reference smart types.
 - **Arithmetic is externalized.** Operations are defined as `pure` functions outside the type, with `promote` rules for automatic dispatch across the type hierarchy.
+- **Nominal typing.** Structs, tuples, and algebraic types are categorically distinct. No cross-type structural matching in pattern matching.
+- **Newlines are statement boundaries.** No semicolons. Operators on a new line start a new expression (same-line rule for function calls and binary operators).
+- **Macros are code templates.** Compile-time textual substitution with function-invocation semantics. Output is normal SPN code, debuggable and inspectable.
 
 ## Building
 
@@ -237,7 +351,11 @@ This compiles the source, runs the Truffle DSL annotation processor, then execut
 
 ## Future Directions
 
-- Complete decoupling of implementation details (like monads, but simpler and more expressive)
+- **Macro evolution** -- `emit { }` blocks with logic, `Type` as a first-class type, compile-time evaluation, macro composition via splicing
+- **AND-types (interfaces)** -- globally namespaced interfaces that can be dynamically attached to any type at compile time, enabling omnidirectional dependency injection
+- **`=?` three-way comparator** -- single `compareTo` dispatch replacing individual `<`, `>`, `<=`, `>=` overloads, returning `:lt | :eq | :gt`
+- **Cross-file trace links** -- clickable caller links in the Tracer invocation panel
+- **Type narrowing in match branches** -- union types narrow to the matched variant inside each arm
 - Highly optimized 3D scenegraph runtime with unified geometry and physics simulation
 - Vector math and Cayley transforms for full 3D with zero transcendental functions
 - Native image compilation via GraalVM

@@ -16,6 +16,8 @@ package spn.trace;
  * @param error          error message (ERROR only, null for others)
  * @param parentSequence sequence ID of the enclosing CALL (-1 for top-level)
  * @param durationNanos  wall-clock duration in nanoseconds (RETURN/ERROR only)
+ * @param sourceFile     absolute path of the file that declared this function
+ *                       (null for top-level and non-file-backed code)
  */
 public record TraceEvent(
         long sequence,
@@ -26,7 +28,8 @@ public record TraceEvent(
         Object output,
         String error,
         long parentSequence,
-        long durationNanos
+        long durationNanos,
+        String sourceFile
 ) {
     public enum Kind {
         CALL,       // function entry

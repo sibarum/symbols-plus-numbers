@@ -65,6 +65,24 @@ public final class SpnModuleRegistry {
         return Collections.unmodifiableMap(modules);
     }
 
+    /**
+     * Clear all dynamically-loaded modules (those loaded by loaders on demand).
+     * Retains pre-registered native modules (stdlib, canvas). Call this before
+     * a re-parse to ensure module caches don't carry stale state.
+     */
+    public void clearDynamicModules(Set<String> nativeNamespaces) {
+        modules.keySet().retainAll(nativeNamespaces);
+        loading.clear();
+    }
+
+    /**
+     * Evict a single cached module by namespace. Called when a file is saved
+     * so importers pick up the fresh version on their next parse.
+     */
+    public void invalidate(String namespace) {
+        modules.remove(namespace);
+    }
+
     // ── Cycle detection for module loading ──────────────────────────────────
 
     /**

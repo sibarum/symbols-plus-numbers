@@ -130,20 +130,12 @@ public final class SpnMatchBranchNode extends Node {
                 }
             }
             case MatchPattern.SetContaining _ -> {
-                // Slot 0 gets the entire set
-                if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
-                    frame.setObject(bindingSlots[0], value);
-                }
+                bindSlot(frame, 0, value);
             }
             case MatchPattern.ArrayHeadTail _ -> {
-                // Slot 0 = head, slot 1 = tail
                 SpnArrayValue arr = (SpnArrayValue) value;
-                if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
-                    frame.setObject(bindingSlots[0], arr.head());
-                }
-                if (bindingSlots.length > 1 && bindingSlots[1] >= 0) {
-                    frame.setObject(bindingSlots[1], arr.tail());
-                }
+                bindSlot(frame, 0, arr.head());
+                bindSlot(frame, 1, arr.tail());
             }
             case MatchPattern.ArrayExactLength _ -> bindIndexed(frame, ((SpnArrayValue) value).getElements());
             case MatchPattern.TupleElements te -> {
@@ -164,16 +156,10 @@ public final class SpnMatchBranchNode extends Node {
                 frame.setObject(c.slot(), value);
             }
             case MatchPattern.StringPrefix sp -> {
-                // Slot 0 gets the remainder after the prefix
-                if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
-                    frame.setObject(bindingSlots[0], sp.remainder((String) value));
-                }
+                bindSlot(frame, 0, sp.remainder((String) value));
             }
             case MatchPattern.StringSuffix ss -> {
-                // Slot 0 gets the prefix before the suffix
-                if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
-                    frame.setObject(bindingSlots[0], ss.prefix((String) value));
-                }
+                bindSlot(frame, 0, ss.prefix((String) value));
             }
             case MatchPattern.StringRegex sr -> {
                 // Slot 0 gets the full match, slots 1..N get capture groups
@@ -184,17 +170,16 @@ public final class SpnMatchBranchNode extends Node {
                     }
                 }
             }
-            case MatchPattern.OfType _ -> {
-                if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
-                    frame.setObject(bindingSlots[0], value);
-                }
-            }
-            case MatchPattern.Wildcard _ -> {
-                if (bindingSlots.length > 0 && bindingSlots[0] >= 0) {
-                    frame.setObject(bindingSlots[0], value);
-                }
-            }
+            case MatchPattern.OfType _ -> bindSlot(frame, 0, value);
+            case MatchPattern.Wildcard _ -> bindSlot(frame, 0, value);
             case MatchPattern.Literal _ -> { /* no bindings for literals */ }
+        }
+    }
+
+    /** Bind a value to the binding slot at the given index, if it exists and isn't skipped (-1). */
+    private void bindSlot(VirtualFrame frame, int index, Object value) {
+        if (index < bindingSlots.length && bindingSlots[index] >= 0) {
+            frame.setObject(bindingSlots[index], value);
         }
     }
 

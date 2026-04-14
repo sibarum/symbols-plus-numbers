@@ -124,7 +124,7 @@ public final class SpnFunctionRootNode extends RootNode {
         long callSeq = -1;
         long startTime = 0;
         if (recorder != null) {
-            callSeq = recorder.recordCall(descriptor.getName(), descriptor.isPure(), args);
+            callSeq = recorder.recordCall(descriptor.getName(), descriptor.isPure(), args, sourceFile);
             startTime = System.nanoTime();
         }
 
@@ -134,19 +134,19 @@ public final class SpnFunctionRootNode extends RootNode {
             Object result = body.executeGeneric(frame);
 
             if (needsReturnValidation) {
-                validateReturn(result);
+                result = validateReturn(result);
             }
 
             if (recorder != null) {
                 recorder.recordReturn(callSeq, descriptor.getName(), descriptor.isPure(),
-                        args, result, System.nanoTime() - startTime);
+                        args, result, System.nanoTime() - startTime, sourceFile);
             }
 
             return result;
         } catch (Exception e) {
             if (recorder != null) {
                 recorder.recordError(callSeq, descriptor.getName(), descriptor.isPure(),
-                        args, e.getMessage(), System.nanoTime() - startTime);
+                        args, e.getMessage(), System.nanoTime() - startTime, sourceFile);
             }
             throw e;
         }
@@ -155,13 +155,20 @@ public final class SpnFunctionRootNode extends RootNode {
     @ExplodeLoop
     private void validateArgs(Object[] args) {
         for (int i = 0; i < paramTypes.length; i++) {
-            if (!paramTypes[i].accepts(args[i])) {
-                throw new SpnException("Argument '" + descriptor.getParams()[i].name()
-                        + "' of function '" + descriptor.getName()
-                        + "' expects " + paramTypes[i].describe()
-                        + ", got " + args[i].getClass().getSimpleName(),
-                        this);
+            if (paramTypes[i].accepts(args[i])) continue;
+
+            // Implicit numeric widening: Long → Double when the parameter expects Double.
+            // This is a lossless promotion that matches what math.toFloat would do.
+            if (paramTypes[i] == spn.type.FieldType.DOUBLE && args[i] instanceof Long l) {
+                args[i] = (double) l;
+                continue;
             }
+
+            throw new SpnException("Argument '" + descriptor.getParams()[i].name()
+                    + "' of function '" + descriptor.getName()
+                    + "' expects " + paramTypes[i].describe()
+                    + ", got " + args[i].getClass().getSimpleName(),
+                    this);
         }
     }
 
@@ -172,16 +179,21 @@ public final class SpnFunctionRootNode extends RootNode {
         }
     }
 
-    private void validateReturn(Object result) {
-        if (!returnType.accepts(result)) {
-            String msg = "Function '" + descriptor.getName()
-                    + "' return type is " + returnType.describe()
-                    + ", but body produced " + SpnTypeName.of(result);
-            if (sourceLine >= 0) {
-                throw new SpnException(msg, sourceFile, sourceLine, sourceCol);
-            }
-            throw new SpnException(msg, this);
+    private Object validateReturn(Object result) {
+        if (returnType.accepts(result)) return result;
+
+        // Implicit numeric widening: Long → Double when the return type is Double
+        if (returnType == spn.type.FieldType.DOUBLE && result instanceof Long l) {
+            return (double) l;
         }
+
+        String msg = "Function '" + descriptor.getName()
+                + "' return type is " + returnType.describe()
+                + ", but body produced " + SpnTypeName.of(result);
+        if (sourceLine >= 0) {
+            throw new SpnException(msg, sourceFile, sourceLine, sourceCol);
+        }
+        throw new SpnException(msg, this);
     }
 
     @Override

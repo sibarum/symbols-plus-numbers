@@ -711,8 +711,9 @@ x+y
     }
 
     @Test
-    void runtimeErrorIncludesLocationAndSignature() {
-        // Trigger a type error by applying + to types without a matching overload
+    void parseErrorForUndefinedOperatorOnNonPrimitives() {
+        // Applying + to struct types with no matching overload should fail at
+        // parse time (not runtime), with a helpful message naming the types.
         String source = """
 type Foo(int)
 type Bar(int)
@@ -721,16 +722,16 @@ let y = Bar(2)
 x + y
 """;
         SpnParser parser = new SpnParser(source, "test.spn", null, symbolTable, null);
-        SpnRootNode root = parser.parse();
         try {
-            root.getCallTarget().call();
-            fail("Expected SpnException");
-        } catch (spn.language.SpnException e) {
-            String msg = e.formatMessage();
-            // Should include source file and line
-            assertTrue(msg.contains("test.spn"), "Should include file name: " + msg);
-            // Should include the operator signature
-            assertTrue(msg.contains("+(Foo, Bar)"), "Should include op signature: " + msg);
+            parser.parse();
+            fail("Expected SpnParseException");
+        } catch (SpnParseException e) {
+            String msg = e.getMessage();
+            // Should name the missing overload's operand types
+            assertTrue(msg.contains("Foo") && msg.contains("Bar"),
+                    "Should include operand types: " + msg);
+            assertTrue(msg.toLowerCase().contains("no overload"),
+                    "Should say no overload: " + msg);
         }
     }
 
@@ -952,6 +953,111 @@ x + y
                 }
                 deriveCombine(int, int)
                 combine(3, 4)
+                """));
+        }
+
+        @Test
+        void tuplePatternOnStructSubjectThrows() {
+            // Nominal typing: (n, d) is a tuple pattern, can't match a Rational struct
+            assertThrows(SpnParseException.class, () -> run("""
+                type Rational(int, int)
+                let r = Rational(3, 4)
+                match r
+                  | (n, d) -> n
+                """));
+        }
+
+        @Test
+        void structPatternOnWrongStructThrows() {
+            assertThrows(SpnParseException.class, () -> run("""
+                type Circle(radius: int)
+                type Square(side: int)
+                let c = Circle(5)
+                match c
+                  | Square(s) -> s
+                """));
+        }
+
+        @Test
+        void arrayPatternOnTupleSubjectThrows() {
+            assertThrows(SpnParseException.class, () -> run("""
+                let t = (1, 2, 3)
+                match t
+                  | [] -> 0
+                """));
+        }
+
+        @Test
+        void structPatternOnMatchingStructSubjectWorks() {
+            assertEquals(3L, run("""
+                type Rational(int, int)
+                let r = Rational(3, 4)
+                match r
+                  | Rational(n, d) -> n
+                """));
+        }
+
+        @Test
+        void comparisonOnStructWithoutOverloadThrowsAtParse() {
+            // < / > / <= / >= on structs without an overload is a parse error
+            assertThrows(SpnParseException.class, () -> run("""
+                type Foo(int)
+                let a = Foo(1)
+                let b = Foo(2)
+                a < b
+                """));
+        }
+
+        @Test
+        void methodOnWrongTypeThrowsAtParse() {
+            // Calling a method that doesn't exist for the receiver type
+            assertThrows(SpnParseException.class, () -> run("""
+                type Circle(radius: int)
+                pure Circle.area() -> int = () { this.radius * this.radius }
+                let n = 42
+                n.area()
+                """));
+        }
+
+        @Test
+        void constructorWrongArityThrowsAtParse() {
+            // Passing wrong number of args to a constructor
+            assertThrows(SpnParseException.class, () -> run("""
+                type Point(int, int)
+                Point(1, 2, 3)
+                """));
+        }
+
+        @Test
+        void unaryNegateDispatchesForStructs() {
+            // -(T) -> T dispatches for non-primitive types
+            assertEquals(-7L, run("""
+                type Box(int)
+                pure -(Box) -> int = (x) { -(x.0) }
+                let w = Box(7)
+                -w
+                """));
+        }
+
+        @Test
+        void multiplicativeInverseViaOneSlash() {
+            // 1/x dispatches to unary /(T) -> T overload
+            assertEquals(42L, run("""
+                type Box(int)
+                pure /(Box) -> int = (b) { b.0 }
+                let b = Box(42)
+                1/b
+                """));
+        }
+
+        @Test
+        void twoSlashDoesNotTriggerInverse() {
+            // 2/x should NOT trigger unary inverse — only literal 1 does
+            assertThrows(Exception.class, () -> run("""
+                type Box(int)
+                pure /(Box) -> int = (b) { b.0 }
+                let b = Box(42)
+                2/b
                 """));
         }
 

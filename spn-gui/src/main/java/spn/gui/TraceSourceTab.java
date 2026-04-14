@@ -17,12 +17,6 @@ import static org.lwjgl.glfw.GLFW.*;
  */
 public class TraceSourceTab extends ScrollableTab {
 
-    // Block tint colors (cycling)
-    private static final float[][] BLOCK_COLORS = {
-            {0.3f, 0.5f, 0.9f}, {0.3f, 0.8f, 0.5f}, {0.6f, 0.4f, 0.8f},
-            {0.8f, 0.6f, 0.3f}, {0.5f, 0.8f, 0.8f},
-    };
-
     private final String fileName;
     private final String source;
     private final List<TraceEvent> events;
@@ -39,21 +33,49 @@ public class TraceSourceTab extends ScrollableTab {
 
     private int hoveredSpan = -1;
     private int pinnedSpan = -1;
+
+    // ── Panel state machine ──────────────────────────────────────────────
+    // SUMMARY → (Enter/click) → INVOCATIONS
+    // In INVOCATIONS, clicking a row opens its detail in the SOURCE AREA
+    // (the panel stays on the invocation list for easy navigation).
+    // Esc from detail → back to source view. Esc from invocations → summary.
+    private enum PanelState { SUMMARY, INVOCATIONS }
+    private PanelState panelState = PanelState.SUMMARY;
+
+    // Shared selection model for both summary and invocation lists
     private final ListScroll tableScroll = new ListScroll();
-    private int summarySelected = 0;
+    private int listSelected = 0;
+    private int listHovered = -1;
+
+    // Detail view: read-only TextArea showing full invocation info
+    private final TextArea detailArea;
+    private int detailCallIndex = -1;     // which invocation is being detailed
 
     // Panel layout — set during render, used for click hit-testing and scroll routing
     private float panelTop;
     private float panelRowStart;
     private float panelRowHeight;
-    private int summaryHovered = -1; // row under mouse in summary table
-    private double lastMouseY;       // for hover-based scroll routing
+    private double lastMouseY;
+
+    /** File path used to filter events to those originating in this file, or null to accept all. */
+    private final String sourceFilePath;
 
     TraceSourceTab(EditorWindow window, String source, List<TraceEvent> events, String fileName) {
+        this(window, source, events, fileName, null);
+    }
+
+    /**
+     * @param sourceFilePath absolute path of the file shown in this tab. When non-null,
+     *                       only events whose sourceFile matches are mapped to spans.
+     *                       When null, all events are considered (legacy single-file mode).
+     */
+    TraceSourceTab(EditorWindow window, String source, List<TraceEvent> events,
+                   String fileName, String sourceFilePath) {
         super(window);
         this.fileName = fileName;
         this.source = source;
         this.events = events;
+        this.sourceFilePath = sourceFilePath;
 
         textArea.setText(source);
         spans = DeclarationScanner.scan(source);
@@ -61,6 +83,22 @@ public class TraceSourceTab extends ScrollableTab {
 
         // Install pre-text renderer for block highlights
         textArea.setPreTextRenderer(this::renderBlockOverlays);
+
+        // Detail area: read-only text for invocation inspection
+        detailArea = new TextArea(window.getFont());
+        detailArea.setClipboard(new TextArea.ClipboardHandler() {
+            @Override public void set(String text) {
+                org.lwjgl.glfw.GLFW.glfwSetClipboardString(window.getHandle(), text);
+            }
+            @Override public String get() {
+                return org.lwjgl.glfw.GLFW.glfwGetClipboardString(window.getHandle());
+            }
+        });
+    }
+
+    /** True if at least one event in this tab's event list is attributable to this file. */
+    public boolean hasTraces() {
+        return !tracedSpanIndices.isEmpty();
     }
 
     private void mapEventsToSpans() {
@@ -69,12 +107,24 @@ public class TraceSourceTab extends ScrollableTab {
             String name = extractDeclName(spans.get(i));
             if (name != null) nameToSpan.put(name, i);
         }
+        // First pass: gather the set of CALL sequence IDs that belong to THIS file
+        // (by matching sourceFile). ASSIGN events are attributed via parentSequence,
+        // so they stay with the file where the enclosing call was defined.
+        java.util.Set<Long> callsInThisFile = new java.util.HashSet<>();
+        for (TraceEvent e : events) {
+            if (e.kind() != TraceEvent.Kind.CALL) continue;
+            if (!matchesThisFile(e)) continue;
+            callsInThisFile.add(e.sequence());
+        }
         for (TraceEvent e : events) {
             if (e.kind() == TraceEvent.Kind.ASSIGN) {
-                // Group ASSIGN events by their parent CALL sequence
+                // Only attach ASSIGN to a parent CALL that belongs to this file
+                if (!callsInThisFile.contains(e.parentSequence())) continue;
                 callAssigns.computeIfAbsent(e.parentSequence(), k -> new ArrayList<>()).add(e);
                 continue;
             }
+            // CALL / RETURN / ERROR: must be attributable to this file
+            if (!matchesThisFile(e)) continue;
             Integer idx = nameToSpan.get(e.location());
             if (idx == null) continue;
             if (e.kind() == TraceEvent.Kind.CALL)
@@ -85,6 +135,17 @@ public class TraceSourceTab extends ScrollableTab {
         // Build sorted list of traced spans (by call count, descending)
         tracedSpanIndices.addAll(spanCalls.keySet());
         tracedSpanIndices.sort((a, b) -> spanCalls.get(b).size() - spanCalls.get(a).size());
+        // Cache max call count for heat-map normalization
+        for (List<TraceEvent> calls : spanCalls.values()) {
+            if (calls.size() > maxCallCount) maxCallCount = calls.size();
+        }
+    }
+
+    /** True if the event's source file matches this tab's file (or no filter set). */
+    private boolean matchesThisFile(TraceEvent e) {
+        if (sourceFilePath == null) return true;         // legacy / single-file mode
+        if (e.sourceFile() == null) return false;        // event has no file attribution
+        return e.sourceFile().equals(sourceFilePath);
     }
 
     private String extractDeclName(DeclarationScanner.Span span) {
@@ -157,19 +218,31 @@ public class TraceSourceTab extends ScrollableTab {
         float sourceH = height - panelH;
         panelTop = y + sourceH;
 
-        // Render source code in the top region (no overlap with panel)
-        layoutAndRender(x, y, width, sourceH);
-        textArea.setExtraScrollPadding(0);
-
-        // Bottom panel: either invocation details (pinned) or summary table
-        if (pinnedSpan >= 0) {
-            renderInvocationPanel(x, y, width, height, panelH);
+        // Source area: either source code with overlays, or detail TextArea
+        if (detailCallIndex >= 0) {
+            // Detail view replaces source area — panel stays on invocation list
+            detailArea.setBounds(x, y, width - ScrollableTab.SCROLLBAR_SIZE, sourceH - hudH);
+            detailArea.render();
         } else {
-            renderSummaryPanel(x, y, width, height, panelH);
+            layoutAndRender(x, y, width, sourceH);
+            textArea.setExtraScrollPadding(0);
+        }
+
+        // Bottom panel: summary or invocations (always visible)
+        switch (panelState) {
+            case SUMMARY -> renderSummaryPanel(x, y, width, height, panelH);
+            case INVOCATIONS -> renderInvocationPanel(x, y, width, height, panelH);
         }
     }
 
-    /** Pre-text renderer callback — draws block highlights inside TextArea's render pipeline. */
+    /** Pre-text renderer callback — draws block highlights inside TextArea's render pipeline.
+     *
+     * Color encodes call frequency (heat map):
+     *   blue (low) → green (medium) → red (high)
+     * Brightness encodes interaction state:
+     *   base (has data) → brighter on hover → brightest when pinned
+     * Blocks with no recorded calls are not highlighted at all.
+     */
     private void renderBlockOverlays(SdfFontRenderer font, float textX, float textY,
                                       float cellWidth, float cellHeight, float highlightY,
                                       int scrollRow, int visibleRows,
@@ -178,17 +251,20 @@ public class TraceSourceTab extends ScrollableTab {
             DeclarationScanner.Span span = spans.get(i);
             List<TraceEvent> calls = spanCalls.get(i);
             int callCount = calls != null ? calls.size() : 0;
-            if (callCount == 0 && i != hoveredSpan && i != pinnedSpan) continue;
+            if (callCount == 0 && i != hoveredSpan) continue;
 
             int startRow = Math.max(span.startLine() - scrollRow, 0);
             int endRow = Math.min(span.endLine() - scrollRow, visibleRows);
             if (startRow >= visibleRows || endRow <= 0) continue;
 
-            float[] color = BLOCK_COLORS[i % BLOCK_COLORS.length];
+            float[] color = heatColor(callCount, maxCallCount);
+
+            // Brightness: base → hover (darker) → pinned (darkest)
             float alpha;
-            if (i == pinnedSpan) alpha = 0.18f;
-            else if (i == hoveredSpan) alpha = 0.12f;
-            else alpha = 0.05f + Math.min(callCount * 0.005f, 0.05f);
+            if (i == pinnedSpan) alpha = 0.22f;
+            else if (i == hoveredSpan) alpha = 0.15f;
+            else if (callCount > 0) alpha = 0.08f;
+            else continue;
 
             float ry = textY + startRow * cellHeight + highlightY;
             float rh = (endRow - startRow) * cellHeight;
@@ -200,7 +276,8 @@ public class TraceSourceTab extends ScrollableTab {
                 String badge = callCount + "x";
                 float badgeW = font.getTextWidth(badge, 0.20f);
                 font.drawText(badge, boundsX + totalWidth - badgeW - 8f,
-                        ry + cellHeight * 0.8f, 0.20f, color[0] * 0.7f, color[1] * 0.7f, color[2] * 0.7f);
+                        ry + cellHeight * 0.8f, 0.20f,
+                        color[0] * 0.7f, color[1] * 0.7f, color[2] * 0.7f);
             }
         }
     }
@@ -231,13 +308,13 @@ public class TraceSourceTab extends ScrollableTab {
             String name = extractDeclName(span);
             if (name == null) name = span.kind();
             int callCount = spanCalls.get(spanIdx).size();
-            float[] color = BLOCK_COLORS[spanIdx % BLOCK_COLORS.length];
+            float[] color = heatColor(callCount, maxCallCount);
 
             float ry = ty + i * lineH;
             float rowTextY = ry + lineH - 3f;
 
             // Unified highlight — keyboard or mouse, one at a time
-            if (i == summarySelected) {
+            if (i == listSelected) {
                 font.drawRect(x, ry, width, lineH, 0.18f, 0.22f, 0.32f);
             }
 
@@ -253,7 +330,7 @@ public class TraceSourceTab extends ScrollableTab {
         }
     }
 
-    /** Invocation panel: detailed table for the pinned block. */
+    /** Invocation panel: simplified table with row selection. */
     private void renderInvocationPanel(float x, float y, float width, float height, float panelH) {
         SdfFontRenderer font = window.getFont();
         List<TraceEvent> calls = spanCalls.get(pinnedSpan);
@@ -273,17 +350,17 @@ public class TraceSourceTab extends ScrollableTab {
                 x + 10f, ty + font.getLineHeight(0.26f), 0.26f, 0.7f, 0.7f, 0.8f);
         ty += font.getLineHeight(0.26f) * 1.6f;
 
-        // Column headers
+        // Column headers: #, Inputs, Output, Duration
         float colInputs = x + 40f;
-        float colLocals = x + width * 0.35f;
-        float colOutput = x + width * 0.60f;
+        float colOutput = x + width * 0.55f;
         float colTime = x + width - 80f;
         font.drawText("#", x + 10f, ty + font.getLineHeight(0.22f), 0.22f, 0.5f, 0.5f, 0.55f);
         font.drawText("Inputs", colInputs, ty + font.getLineHeight(0.22f), 0.22f, 0.5f, 0.5f, 0.55f);
-        font.drawText("Locals", colLocals, ty + font.getLineHeight(0.22f), 0.22f, 0.5f, 0.5f, 0.55f);
         font.drawText("Output", colOutput, ty + font.getLineHeight(0.22f), 0.22f, 0.5f, 0.5f, 0.55f);
         font.drawText("Time", colTime, ty + font.getLineHeight(0.22f), 0.22f, 0.5f, 0.5f, 0.55f);
         ty += lineH;
+        panelRowStart = ty;
+        panelRowHeight = lineH;
 
         int maxRows = (int) ((panelY + panelH - ty) / lineH);
         tableScroll.setMax(Math.max(0, calls.size() - maxRows));
@@ -294,23 +371,15 @@ public class TraceSourceTab extends ScrollableTab {
             float ry = ty + (i - startRow) * lineH;
             float rowTextY = ry + lineH - 3f;
 
-            if ((i - startRow) % 2 == 1)
+            // Selection highlight
+            if (i == listSelected) {
+                font.drawRect(x, ry, width, lineH, 0.18f, 0.22f, 0.32f);
+            } else if ((i - startRow) % 2 == 1) {
                 font.drawRect(x, ry, width, lineH, 0.12f, 0.12f, 0.14f);
+            }
 
             font.drawText(String.valueOf(i + 1), x + 10f, rowTextY, 0.22f, 0.4f, 0.4f, 0.45f);
             font.drawText(call.inputsSummary(), colInputs, rowTextY, 0.24f, 0.75f, 0.75f, 0.78f);
-
-            // Local variables assigned during this call
-            List<TraceEvent> assigns = callAssigns.get(call.sequence());
-            if (assigns != null && !assigns.isEmpty()) {
-                StringBuilder locals = new StringBuilder();
-                for (TraceEvent a : assigns) {
-                    if (!locals.isEmpty()) locals.append(", ");
-                    locals.append(a.location()).append("=").append(
-                            a.output() != null ? TraceEvent.summarizeValue(a.output()) : "null");
-                }
-                font.drawText(locals.toString(), colLocals, rowTextY, 0.22f, 0.65f, 0.60f, 0.80f);
-            }
 
             if (ret != null) {
                 if (ret.kind() == TraceEvent.Kind.RETURN) {
@@ -325,53 +394,197 @@ public class TraceSourceTab extends ScrollableTab {
         }
     }
 
+    /** Build a detail string for the selected invocation. */
+    private String buildInvocationDetail(int callIndex) {
+        List<TraceEvent> calls = spanCalls.get(pinnedSpan);
+        List<TraceEvent> returns = spanReturns.get(pinnedSpan);
+        if (calls == null || callIndex >= calls.size()) return "";
+        TraceEvent call = calls.get(callIndex);
+        TraceEvent ret = callIndex < (returns != null ? returns.size() : 0) ? returns.get(callIndex) : null;
+
+        String declName = extractDeclName(spans.get(pinnedSpan));
+        if (declName == null) declName = spans.get(pinnedSpan).kind();
+
+        var sb = new StringBuilder();
+        sb.append("═══ Invocation #").append(callIndex + 1).append(" of ").append(declName).append(" ═══\n\n");
+
+        // Inputs (full, not truncated)
+        sb.append("── Inputs ──\n");
+        if (call.inputs() != null) {
+            for (int i = 0; i < call.inputs().length; i++) {
+                Object val = call.inputs()[i];
+                sb.append("  arg").append(i).append(" = ").append(val != null ? val.toString() : "null").append("\n");
+            }
+        } else {
+            sb.append("  (none)\n");
+        }
+
+        // Output
+        sb.append("\n── Output ──\n");
+        if (ret != null) {
+            if (ret.kind() == TraceEvent.Kind.RETURN) {
+                sb.append("  ").append(ret.output() != null ? ret.output().toString() : "null").append("\n");
+            } else {
+                sb.append("  ERROR: ").append(ret.error()).append("\n");
+            }
+            sb.append("  Duration: ").append(formatDuration(ret.durationNanos())).append("\n");
+        } else {
+            sb.append("  (no return recorded)\n");
+        }
+
+        // Local variable assignments
+        List<TraceEvent> assigns = callAssigns.get(call.sequence());
+        if (assigns != null && !assigns.isEmpty()) {
+            sb.append("\n── Local Variables ──\n");
+            for (TraceEvent a : assigns) {
+                sb.append("  ").append(a.location()).append(" = ")
+                  .append(a.output() != null ? a.output().toString() : "null").append("\n");
+            }
+        }
+
+        // Call stack: walk the parent chain to show where this call happened.
+        sb.append("\n── Call Stack ──\n");
+        // Frame 0: this call itself
+        sb.append("  → ").append(call.location()).append(call.inputsSummary()).append("\n");
+        if (call.sourceFile() != null)
+            sb.append("      defined in ").append(shortenPath(call.sourceFile())).append("\n");
+        // Caller chain
+        long parentSeq = call.parentSequence();
+        int depth = 0;
+        while (parentSeq >= 0 && depth < 20) {
+            TraceEvent parent = findCallEvent(parentSeq);
+            if (parent == null) {
+                sb.append("    called from [event #").append(parentSeq).append(" — not found]\n");
+                break;
+            }
+            sb.append("    called from ").append(parent.location()).append(parent.inputsSummary()).append("\n");
+            if (parent.sourceFile() != null) {
+                sb.append("      defined in ").append(shortenPath(parent.sourceFile())).append("\n");
+            }
+            parentSeq = parent.parentSequence();
+            depth++;
+        }
+        if (call.parentSequence() < 0) sb.append("    (called from top-level script)\n");
+
+        sb.append("\n── Metadata ──\n");
+        sb.append("  Defined in: ").append(call.sourceFile() != null ? shortenPath(call.sourceFile()) : "(unknown)").append("\n");
+        sb.append("  Pure: ").append(call.pure()).append("\n");
+        sb.append("  Event sequence: ").append(call.sequence()).append("\n");
+
+        return sb.toString();
+    }
+
+    /** Shorten a file path to just the last 2-3 segments for readability. */
+    private static String shortenPath(String path) {
+        if (path == null) return "(unknown)";
+        String normalized = path.replace('\\', '/');
+        int lastSlash = normalized.lastIndexOf('/');
+        if (lastSlash <= 0) return normalized;
+        int secondLast = normalized.lastIndexOf('/', lastSlash - 1);
+        return secondLast >= 0 ? normalized.substring(secondLast + 1) : normalized.substring(lastSlash + 1);
+    }
+
+    // Index: sequence → CALL event (built lazily for O(1) call-stack lookups)
+    private Map<Long, TraceEvent> callEventIndex;
+
+    /** Find a CALL event by sequence number (for call-stack reconstruction). */
+    private TraceEvent findCallEvent(long sequence) {
+        if (callEventIndex == null) {
+            callEventIndex = new HashMap<>();
+            for (TraceEvent e : events) {
+                if (e.kind() == TraceEvent.Kind.CALL) callEventIndex.put(e.sequence(), e);
+            }
+        }
+        return callEventIndex.get(sequence);
+    }
+
     // ── Input ──────────────────────────────────────────────────────────
 
-    private boolean lastInputWasKeyboard; // true = arrow keys drive highlight, false = mouse
+    /** Item count for the current list state (summary or invocations). */
+    private int listSize() {
+        return switch (panelState) {
+            case SUMMARY -> tracedSpanIndices.size();
+            case INVOCATIONS -> {
+                List<TraceEvent> calls = spanCalls.get(pinnedSpan);
+                yield calls != null ? calls.size() : 0;
+            }
+            default -> 0;
+        };
+    }
 
     @Override
     public boolean onKey(int key, int scancode, int action, int mods) {
         if (action != GLFW_PRESS && action != GLFW_REPEAT) return false;
+        boolean ctrl = (mods & GLFW_MOD_CONTROL) != 0;
 
-        // Escape: unpin or close tab
+        // Escape: back one level
         if (key == GLFW_KEY_ESCAPE) {
-            if (pinnedSpan >= 0) {
+            if (detailCallIndex >= 0) {
+                // Close detail → back to source view (panel stays on invocations)
+                detailCallIndex = -1;
+                return true;
+            }
+            if (panelState == PanelState.INVOCATIONS) {
+                panelState = PanelState.SUMMARY;
                 pinnedSpan = -1;
+                detailCallIndex = -1;
+                listSelected = 0;
                 tableScroll.reset();
                 return true;
             }
-            return false; // let TabViewMode close the tab
+            return false; // let TabViewMode close
         }
 
-        if (pinnedSpan >= 0) {
-            // Scroll invocation table
-            if (key == GLFW_KEY_DOWN) { tableScroll.set(tableScroll.get() + 1); return true; }
-            if (key == GLFW_KEY_UP) { tableScroll.set(tableScroll.get() - 1); return true; }
-            if (key == GLFW_KEY_PAGE_DOWN) { tableScroll.set(tableScroll.get() + 10); return true; }
-            if (key == GLFW_KEY_PAGE_UP) { tableScroll.set(tableScroll.get() - 10); return true; }
-        } else {
-            // Navigate summary table with arrow keys
-            if (key == GLFW_KEY_DOWN && summarySelected < tracedSpanIndices.size() - 1) {
-                summarySelected++;
-                lastInputWasKeyboard = true;
-                return true;
-            }
-            if (key == GLFW_KEY_UP && summarySelected > 0) {
-                summarySelected--;
-                lastInputWasKeyboard = true;
-                return true;
-            }
-            if (key == GLFW_KEY_ENTER && summarySelected < tracedSpanIndices.size()) {
-                pinSpanAndScroll(tracedSpanIndices.get(summarySelected));
-                return true;
-            }
-        }
-
-        // Copy
-        if ((mods & GLFW_MOD_CONTROL) != 0 && key == GLFW_KEY_C) {
-            textArea.onKey(key, mods);
+        // Ctrl+S: save detail (when viewing one)
+        if (ctrl && key == GLFW_KEY_S && detailCallIndex >= 0) {
+            saveDetail();
             return true;
         }
+
+        // Ctrl+C: copy from whichever area is active
+        if (ctrl && key == GLFW_KEY_C) {
+            if (detailCallIndex >= 0) {
+                detailArea.onKey(key, mods);
+            } else {
+                textArea.onKey(key, mods);
+            }
+            return true;
+        }
+
+        // List navigation (shared by SUMMARY and INVOCATIONS)
+        int prevSelected = listSelected;
+        if (key == GLFW_KEY_DOWN && listSelected < listSize() - 1) {
+            listSelected++;
+        } else if (key == GLFW_KEY_UP && listSelected > 0) {
+            listSelected--;
+        } else if (key == GLFW_KEY_PAGE_DOWN) {
+            listSelected = Math.min(listSelected + 10, Math.max(0, listSize() - 1));
+        } else if (key == GLFW_KEY_PAGE_UP) {
+            listSelected = Math.max(listSelected - 10, 0);
+        }
+        if (listSelected != prevSelected) {
+            // If detail is open, update it to follow the selection
+            if (detailCallIndex >= 0 && panelState == PanelState.INVOCATIONS) {
+                openInvocationDetail(listSelected);
+            }
+            return true;
+        }
+
+        // Enter: activate selected item
+        if (key == GLFW_KEY_ENTER) {
+            if (panelState == PanelState.SUMMARY && listSelected < tracedSpanIndices.size()) {
+                pinSpanAndScroll(tracedSpanIndices.get(listSelected));
+                panelState = PanelState.INVOCATIONS;
+                listSelected = 0;
+                tableScroll.reset();
+                return true;
+            }
+            if (panelState == PanelState.INVOCATIONS && listSelected < listSize()) {
+                openInvocationDetail(listSelected);
+                return true;
+            }
+        }
+
         return true;
     }
 
@@ -381,60 +594,71 @@ public class TraceSourceTab extends ScrollableTab {
     @Override
     public boolean onMouseButton(int button, int action, int mods, double mx, double my) {
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-            // Panel area clicks
-            if (my > panelTop && panelRowHeight > 0) {
-                if (pinnedSpan < 0 && my > panelRowStart) {
-                    int row = (int) ((my - panelRowStart) / panelRowHeight);
-                    if (row >= 0 && row < tracedSpanIndices.size()) {
-                        pinSpanAndScroll(tracedSpanIndices.get(row));
-                    }
+            // Click in source/detail area — forward to the active TextArea for selection
+            if (my < panelTop) {
+                if (detailCallIndex >= 0) {
+                    detailArea.onMouseButton(button, action, mods, mx, my);
                 }
                 return true;
             }
 
-            // Source code area clicks
-            int row = sourceRowAtY(my);
-            if (row >= 0) {
-                int span = findSpanForRow(row);
-                if (span >= 0 && spanCalls.containsKey(span)) {
-                    pinSpanAndScroll(span);
-                } else {
-                    pinnedSpan = -1;
-                    tableScroll.reset();
+            // Panel area clicks (summary or invocation list)
+            if (panelRowHeight > 0 && my > panelRowStart) {
+                int row = (int) ((my - panelRowStart) / panelRowHeight) + tableScroll.get();
+                if (row >= 0 && row < listSize()) {
+                    listSelected = row;
+                    if (panelState == PanelState.SUMMARY) {
+                        pinSpanAndScroll(tracedSpanIndices.get(row));
+                        panelState = PanelState.INVOCATIONS;
+                        listSelected = 0;
+                        tableScroll.reset();
+                    } else if (panelState == PanelState.INVOCATIONS) {
+                        openInvocationDetail(row);
+                    }
                 }
             }
-            return true; // always consume clicks — don't pass to text area
+            return true;
         }
-        return true; // consume all mouse events
+        return true;
     }
 
     @Override
     public boolean onCursorPos(double mx, double my) {
         lastMouseY = my;
-        // Track hover on summary panel rows
-        if (my > panelTop && pinnedSpan < 0 && panelRowHeight > 0 && my > panelRowStart) {
-            int row = (int) ((my - panelRowStart) / panelRowHeight);
-            if (row >= 0 && row < tracedSpanIndices.size()) {
-                summaryHovered = row;
-                summarySelected = row; // unify hover and selection
-                lastInputWasKeyboard = false;
+        // Forward to detail area for text selection drag
+        if (detailCallIndex >= 0 && my < panelTop) {
+            detailArea.onCursorPos(mx, my);
+        }
+        // Track hover on panel rows (summary or invocations)
+        if (my > panelTop && panelRowHeight > 0 && my > panelRowStart) {
+            int row = (int) ((my - panelRowStart) / panelRowHeight) + tableScroll.get();
+            if (row >= 0 && row < listSize()) {
+                listHovered = row;
+                listSelected = row;
+                // Live-update detail as mouse moves over invocation rows
+                if (detailCallIndex >= 0 && panelState == PanelState.INVOCATIONS) {
+                    openInvocationDetail(row);
+                }
             } else {
-                summaryHovered = -1;
+                listHovered = -1;
             }
         } else {
-            summaryHovered = -1;
+            listHovered = -1;
         }
-        // Track hover on source code blocks
-        int row = sourceRowAtY(my);
-        hoveredSpan = row >= 0 ? findSpanForRow(row) : -1;
+        // Track hover on source code blocks (only when source is showing)
+        if (detailCallIndex < 0) {
+            int row = sourceRowAtY(my);
+            hoveredSpan = row >= 0 ? findSpanForRow(row) : -1;
+        }
         return true;
     }
 
     @Override
     public boolean onScroll(double xoff, double yoff) {
-        // Scroll whichever area the cursor is hovering over
         if (lastMouseY > panelTop) {
             tableScroll.onScroll(yoff);
+        } else if (detailCallIndex >= 0) {
+            detailArea.onScroll(xoff, yoff);
         } else {
             textArea.onScroll(xoff, yoff);
         }
@@ -443,17 +667,70 @@ public class TraceSourceTab extends ScrollableTab {
 
     @Override
     public String hudText() {
-        if (pinnedSpan >= 0) {
-            String name = extractDeclName(spans.get(pinnedSpan));
-            List<TraceEvent> calls = spanCalls.get(pinnedSpan);
-            return (name != null ? name : "block") + ": "
-                    + (calls != null ? calls.size() : 0)
-                    + " invocations | Up/Down Scroll | Esc Unpin";
+        if (detailCallIndex >= 0) {
+            return "Invocation #" + (detailCallIndex + 1) + " | Ctrl+C Copy | Ctrl+S Save | Esc Source";
         }
-        return tracedSpanIndices.size() + " traced blocks | Click or Enter to inspect | Shift+F5 Re-trace";
+        return switch (panelState) {
+            case SUMMARY -> tracedSpanIndices.size() + " traced blocks | Enter Inspect | Shift+F5 Re-trace";
+            case INVOCATIONS -> {
+                String name = extractDeclName(spans.get(pinnedSpan));
+                List<TraceEvent> calls = spanCalls.get(pinnedSpan);
+                yield (name != null ? name : "block") + ": "
+                        + (calls != null ? calls.size() : 0)
+                        + " invocations | Enter Detail | Esc Back";
+            }
+        };
+    }
+
+    // ── Detail helpers ──────────────────────────────────────────────────
+
+    private void openInvocationDetail(int callIndex) {
+        detailCallIndex = callIndex;
+        String detail = buildInvocationDetail(callIndex);
+        detailArea.setText(detail);
+    }
+
+    private void saveDetail() {
+        String declName = extractDeclName(spans.get(pinnedSpan));
+        if (declName == null) declName = "trace";
+        declName = declName.replace("/", "_").replace(".", "_");
+        long ts = System.currentTimeMillis();
+        String filename = declName + "_" + (detailCallIndex + 1) + "-invocationTrace_" + ts + ".txt";
+
+        String path = org.lwjgl.util.tinyfd.TinyFileDialogs.tinyfd_saveFileDialog(
+                "Save Invocation Detail", filename, null, null);
+        if (path != null) {
+            try {
+                java.nio.file.Files.writeString(java.nio.file.Path.of(path), detailArea.getText());
+                window.flash("Saved: " + path, false);
+            } catch (java.io.IOException e) {
+                window.flash("Save failed: " + e.getMessage(), true);
+            }
+        }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────
+
+    /** Heat-map color: blue (low calls) → green (medium) → red (high). */
+    private static float[] heatColor(int callCount, int maxCalls) {
+        float t = maxCalls > 0 ? (float) callCount / maxCalls : 0f;
+        float r, g, b;
+        if (t < 0.5f) {
+            float s = t * 2f;
+            r = 0.2f * (1f - s);
+            g = 0.3f + 0.5f * s;
+            b = 0.8f * (1f - s) + 0.2f * s;
+        } else {
+            float s = (t - 0.5f) * 2f;
+            r = 0.3f + 0.6f * s;
+            g = 0.8f * (1f - s) + 0.2f * s;
+            b = 0.2f * (1f - s);
+        }
+        return new float[]{r, g, b};
+    }
+
+    /** Max call count across all traced spans (cached at map time). */
+    private int maxCallCount = 1;
 
     private void pinSpanAndScroll(int spanIdx) {
         pinnedSpan = spanIdx;

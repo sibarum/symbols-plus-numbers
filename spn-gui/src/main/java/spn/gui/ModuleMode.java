@@ -100,6 +100,16 @@ class ModuleMode implements Mode {
             return true;
         }
 
+        // Ctrl+R refreshes module: rescan files, clear caches, force re-parse
+        if (ctrl && key == GLFW_KEY_R) {
+            module.rescan();
+            filtered = fullTextSearch ? module.searchContents(query.toString())
+                    : module.filterByName(query.toString());
+            window.refreshModuleCaches();
+            window.flash("Module refreshed — caches cleared", false);
+            return true;
+        }
+
         return true;
     }
 
@@ -216,7 +226,7 @@ class ModuleMode implements Mode {
     @Override
     public String hudText() {
         String mode = fullTextSearch ? "Full-text" : "Filename";
-        return "Type to search (" + mode + ") | Ctrl+F Toggle | Enter Open | Esc Close";
+        return "Type to search (" + mode + ") | Ctrl+F Toggle | Ctrl+R Refresh | Enter Open | Esc Close";
     }
 
     private void refilter() {

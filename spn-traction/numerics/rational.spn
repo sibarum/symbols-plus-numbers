@@ -5,11 +5,12 @@ type Rational (int, int)
 
 pure Rational(int, int) -> Rational = (n, d) {
   let g = gcd(abs(n), abs(d))
-  match (n, d)
-  | (0, 0) -> { this(1, 1) }
-  | (0, _) -> { this(0, d) }
-  | (_, 0) -> { this(n, 0) }
-  | _ -> { this(n / g, d / g) }
+  match (n, d, g)
+  | (0, 0, _) -> { this(1, 1) }
+  | (0, _, _) -> { this(0, d) }
+  | (_, 0, _) -> { this(n, 0) }
+  | (_, _, 0) -> { this(n, 0) }
+  | _ -> { this(sign(d) * n / g, abs(d) / g) }
 }
 
 pure Rational(int) -> Rational = (n) {
@@ -39,12 +40,24 @@ pure -(Rational, Rational) -> Rational = (q1, q2) {
   q1 + q2.neg()
 }
 
+pure -(Rational) -> Rational = (q) {
+  q.neg()
+}
+
 pure *(Rational, Rational) -> Rational = ((q1n, q1d), (q2n, q2d)) {
   Rational(q1n*q2n, q1d*q2d)
 }
 
+pure *(Rational, int) -> Rational = ((n, d), i) {
+  Rational(n*i, d)
+}
+
+pure /(Rational) -> Rational = (q) {
+  Rational(sign(q.0)*q.1, abs(q.0))
+}
+
 pure /(Rational, Rational) -> Rational = (q1, q2) {
-  q1 * q2.inv()
+  q1 * ( 1/q2 )
 }
 
 pure compare(Rational, Rational) -> int = (q1, q2) {

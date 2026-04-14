@@ -42,6 +42,10 @@ public class EditorWindow {
     private final LogBuffer logBuffer = new LogBuffer();
     private boolean initialized;
 
+    // Set to true while a canvas window is active. Prevents the editor's
+    // window-refresh callback from stealing the GL context.
+    private volatile boolean canvasActive;
+
     // ---- Sample scripts -------------------------------------------------
 
     record Sample(int key, String label, String resource) {}
@@ -191,6 +195,18 @@ public class EditorWindow {
     }
 
     WindowFrame getFrame() { return frame; }
+
+    /**
+     * Clear all caches and force a fresh diagnostic re-parse on the active tab.
+     * Called from Module Mode's Ctrl+R "Refresh" action.
+     */
+    void refreshModuleCaches() {
+        // Force the active editor tab's diagnostic engine to do a full re-parse
+        EditorTab et = getActiveEditorTab();
+        if (et != null) {
+            et.invalidateDiagnostics();
+        }
+    }
 
     String getSavedContent() {
         Tab active = tabView.getActiveTab();
@@ -413,6 +429,7 @@ public class EditorWindow {
 
             if (canvasState.isCanvasRequested()) {
                 spn.canvas.CanvasWindow cw = new spn.canvas.CanvasWindow();
+                canvasActive = true;
                 cw.open(canvasState.getWidth(), canvasState.getHeight(), handle, font);
                 try {
                     if (canvasState.getAnimateCallback() != null) {
@@ -423,6 +440,7 @@ public class EditorWindow {
                     }
                 } finally {
                     cw.close();
+                    canvasActive = false;
                     makeCurrent();
                 }
             } else {
@@ -477,6 +495,7 @@ public class EditorWindow {
 
             if (canvasState.isCanvasRequested()) {
                 spn.canvas.CanvasWindow cw = new spn.canvas.CanvasWindow();
+                canvasActive = true;
                 cw.open(canvasState.getWidth(), canvasState.getHeight(), handle, font);
                 try {
                     if (canvasState.getAnimateCallback() != null) {
@@ -487,18 +506,24 @@ public class EditorWindow {
                     }
                 } finally {
                     cw.close();
+                    canvasActive = false;
                     makeCurrent();
                 }
             }
 
-            // Open trace results — source overlay as primary, raw tree as secondary
+            // Open trace results. If the file belongs to a module, open a
+            // TraceSourceTab for every module file with recorded events so the
+            // user can inspect traces across the whole module. Otherwise fall
+            // back to just the current file.
             flash("[" + fileName + "] Traced: " + recorder.size() + " events", false);
-            tabView.addTab(new TraceSourceTab(this, source, recorder.getEvents(), fileName));
+            openTraceTabsForModule(moduleCtx, currentFile, source, fileName,
+                    recorder.getEvents(), false);
 
         } catch (spn.language.SpnException se) {
             flash(se.formatMessage(), true);
             if (recorder.size() > 0) {
-                tabView.addTab(new TraceSourceTab(this, source, recorder.getEvents(), fileName + " (error)"));
+                openTraceTabsForModule(et.getModuleContext(), currentFile, source,
+                        fileName + " (error)", recorder.getEvents(), true);
             }
         } catch (spn.lang.SpnParseException pe) {
             flash(pe.formatMessage(), true);
@@ -507,12 +532,68 @@ public class EditorWindow {
             if (msg == null) msg = e.getClass().getSimpleName();
             flash("[" + fileName + "] Error: " + msg, true);
             if (recorder.size() > 0) {
-                tabView.addTab(new TraceSourceTab(this, source, recorder.getEvents(), fileName + " (error)"));
+                openTraceTabsForModule(et.getModuleContext(), currentFile, source,
+                        fileName + " (error)", recorder.getEvents(), true);
             }
         } finally {
             spn.trace.TraceRecorder.end();
             spn.canvas.CanvasState.clear();
         }
+    }
+
+    /**
+     * Open trace result tabs. The current file always gets a tab (and becomes
+     * active). Every other module file whose events attribute to it via
+     * TraceEvent.sourceFile also gets a tab. Because each TraceSourceTab
+     * filters events by absolute file path, operator overloads and other name
+     * collisions across files are attributed correctly.
+     *
+     * @param moduleCtx     module context for the running file, or null for single-file
+     * @param currentFile   the path of the running file, or null
+     * @param currentSource source of the running file
+     * @param currentLabel  label suffix for the current file's tab
+     * @param events        all captured trace events
+     * @param errorSuffix   if true, append " (error)" to sibling tab labels too
+     */
+    private void openTraceTabsForModule(ModuleContext moduleCtx, Path currentFile,
+                                        String currentSource, String currentLabel,
+                                        java.util.List<spn.trace.TraceEvent> events,
+                                        boolean errorSuffix) {
+        String currentPath = currentFile != null ? currentFile.toAbsolutePath().toString() : null;
+
+        // Always open the current file's tab first (it becomes the active tab).
+        TraceSourceTab currentTab = new TraceSourceTab(
+                this, currentSource, events, currentLabel, currentPath);
+        tabView.addTab(currentTab);
+
+        if (moduleCtx == null || currentFile == null) return;
+
+        Path currentAbs = currentFile.toAbsolutePath();
+        for (ModuleContext.ModuleFile mf : moduleCtx.getFiles()) {
+            if (mf.absolutePath().equals(currentAbs)) continue; // already handled
+            String mfPath = mf.absolutePath().toString();
+            // Only open a tab if at least one event is attributed to this file.
+            if (!eventsInFile(events, mfPath)) continue;
+            try {
+                String src = java.nio.file.Files.readString(mf.absolutePath());
+                String label = mf.relativePath() + (errorSuffix ? " (error)" : "");
+                tabView.addTab(new TraceSourceTab(this, src, events, label, mfPath));
+            } catch (java.io.IOException ignored) {
+                // Skip unreadable files silently
+            }
+        }
+
+        // Return focus to the current file's tab.
+        tabView.switchTo(currentTab);
+    }
+
+    /** True if any CALL event is attributed to the given file path. */
+    private static boolean eventsInFile(java.util.List<spn.trace.TraceEvent> events, String path) {
+        for (spn.trace.TraceEvent e : events) {
+            if (e.kind() == spn.trace.TraceEvent.Kind.CALL
+                    && path.equals(e.sourceFile())) return true;
+        }
+        return false;
     }
 
     // ---- Module detection ------------------------------------------------
@@ -523,6 +604,36 @@ public class EditorWindow {
         tab.setModuleContext(ctx);
         if (ctx != null) {
             flash("Module: " + ctx.getNamespace(), false);
+        }
+    }
+
+    /**
+     * When a file is saved, derive its module namespace from its path relative
+     * to the module root, and invalidate that namespace in every open tab's
+     * diagnostic module cache. This ensures other tabs that import this file
+     * re-load the fresh version on their next diagnostic parse.
+     */
+    private void invalidateSavedModuleInAllTabs(EditorTab savedTab, Path savedFile) {
+        ModuleContext ctx = savedTab.getModuleContext();
+        if (ctx == null) return;
+
+        // Derive namespace: module root relative path, slashes → dots, drop .spn
+        Path relative = ctx.getRoot().relativize(savedFile.toAbsolutePath());
+        String namespace = relative.toString()
+                .replace('\\', '/').replace('/', '.');
+        if (namespace.endsWith(".spn")) {
+            namespace = namespace.substring(0, namespace.length() - 4);
+        }
+        // Strip index suffix (numerics/index.spn → numerics)
+        if (namespace.endsWith(".index")) {
+            namespace = namespace.substring(0, namespace.length() - 6);
+        }
+
+        String ns = namespace;
+        for (Tab tab : tabView.getTabs()) {
+            if (tab instanceof EditorTab et) {
+                et.invalidateModule(ns);
+            }
         }
     }
 
@@ -621,6 +732,9 @@ public class EditorWindow {
             // Establish module context for the newly-saved file so import discovery,
             // module-aware features, etc. work immediately without reopening.
             detectModule(et, target);
+            // Invalidate this file's module namespace in ALL open tabs' diagnostic
+            // caches so importers pick up the fresh version on their next re-parse.
+            invalidateSavedModuleInAllTabs(et, target);
             updateTitle();
         } catch (IOException e) {
             org.lwjgl.util.tinyfd.TinyFileDialogs.tinyfd_messageBox(
@@ -690,6 +804,9 @@ public class EditorWindow {
                 Main.instance.onWindowFocusChanged());
 
         glfwSetWindowRefreshCallback(handle, win -> {
+            // Skip editor refresh while a canvas window owns the GL context.
+            // The canvas sets its own refresh callback and manages its own rendering.
+            if (canvasActive) return;
             makeCurrent();
             render();
         });

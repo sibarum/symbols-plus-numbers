@@ -62,11 +62,15 @@ public final class CanvasWindow {
      * One-shot mode: replay the command buffer once and wait until the window is closed.
      */
     public void showStatic(List<DrawCommand> commands) {
-        // Render once
-        glViewport(0, 0, width, height);
-        glClear(GL_COLOR_BUFFER_BIT);
-        renderer.replay(commands, width, height, font);
-        glfwSwapBuffers(handle);
+        // Render into BOTH buffers so the window is correct regardless of which
+        // buffer the compositor shows first. Without this, the un-rendered buffer
+        // can flash briefly on some systems (intermittent missing text/garbled output).
+        for (int i = 0; i < 2; i++) {
+            glViewport(0, 0, width, height);
+            glClear(GL_COLOR_BUFFER_BIT);
+            renderer.replay(commands, width, height, font);
+            glfwSwapBuffers(handle);
+        }
 
         // Wait loop — re-render on expose/resize
         glfwSetWindowRefreshCallback(handle, win -> {

@@ -330,6 +330,19 @@ public class SdfFontRenderer implements Renderer {
 
     private void flushBatch(int batchSize, int bufPos) {
         if (batchSize == 0) return;
+
+        // Defensively re-establish all GL state before drawing.
+        // When the font renderer is shared across GL contexts (editor + canvas),
+        // the shader/texture/VAO state may not be what we expect — another
+        // renderer (CanvasRenderer) may have changed it between our beginText
+        // and this flush. Re-binding everything is cheap and eliminates an
+        // intermittent rendering failure where text silently doesn't appear.
+        glUseProgram(program);
+        glActiveTexture(GL_TEXTURE0);
+        atlas.bind();
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
         glBindVertexArray(ensureVao());
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
 

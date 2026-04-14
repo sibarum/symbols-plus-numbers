@@ -265,6 +265,18 @@ public class EditorTab extends ScrollableTab {
     /** Expose for HUD rendering. */
     public boolean isFindActive() { return findActive; }
 
+    /** Clear all diagnostic and module caches, force a full re-parse. */
+    void invalidateDiagnostics() {
+        diagnosticEngine.invalidateAll();
+        diagnosticOverlay.setMarks(java.util.List.of());
+    }
+
+    /** Evict a module from this tab's diagnostic cache so it gets re-loaded fresh. */
+    void invalidateModule(String namespace) {
+        diagnosticEngine.invalidateModule(namespace);
+        diagnosticEngine.notifyEdit(org.lwjgl.glfw.GLFW.glfwGetTime());
+    }
+
     /** HUD content while find mode is active. */
     private String findHudText() {
         StringBuilder sb = new StringBuilder();

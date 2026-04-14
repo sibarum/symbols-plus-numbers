@@ -90,18 +90,17 @@ public class DiagnosticOverlay {
             float ry = textY + viewRow * cellHeight + highlightY;
             float rw = (drawEnd - drawStart) * cellWidth;
 
-            if (mark.isActive()) {
-                // Background tint
-                font.drawRect(rx, ry, rw, cellHeight,
-                        ACTIVE_BG_R, ACTIVE_BG_G, ACTIVE_BG_B);
-                // Underline at bottom of cell
-                font.drawRect(rx, ry + cellHeight - UNDERLINE_H, rw, UNDERLINE_H,
-                        UNDERLINE_R, UNDERLINE_G, UNDERLINE_B);
-            } else {
-                // Stale: faint haze only
-                font.drawRect(rx, ry, rw, cellHeight,
-                        STALE_BG_R, STALE_BG_G, STALE_BG_B);
-            }
+            // Only render active (confirmed by latest parse) errors.
+            // Stale marks (from before the current edit) are not rendered —
+            // they'll either be confirmed or cleared on the next reparse.
+            if (!mark.isActive()) continue;
+
+            // Background tint
+            font.drawRect(rx, ry, rw, cellHeight,
+                    ACTIVE_BG_R, ACTIVE_BG_G, ACTIVE_BG_B);
+            // Underline at bottom of cell
+            font.drawRect(rx, ry + cellHeight - UNDERLINE_H, rw, UNDERLINE_H,
+                    UNDERLINE_R, UNDERLINE_G, UNDERLINE_B);
         }
     }
 }
