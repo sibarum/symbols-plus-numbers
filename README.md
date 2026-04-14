@@ -263,11 +263,14 @@ An OpenGL-based editor with:
 
 Shift+F5 records all function calls, returns, errors, and variable assignments during execution. Results open as source-overlay tabs — one per module file — with:
 
-- Block highlights showing call frequency
-- Summary table of all traced declarations
-- Click-to-inspect invocation details (inputs, locals, outputs, duration)
-- Per-file attribution: operator overloads across files are correctly separated
-- Scroll-aware panels (hover to scroll independently)
+- Heat-map block highlights (blue → green → red by call frequency, darker on hover/pin)
+- Summary table of all traced declarations sorted by call count
+- Invocation list with row selection (arrow keys, mouse, Enter to inspect)
+- Invocation detail view: full inputs/outputs, local variables, call stack with file attribution, metadata — opens in the source area while the invocation list stays navigable
+- Call stack reconstruction showing the full caller chain across files
+- Per-file event attribution: operator overloads across files are correctly separated
+- Ctrl+S to export invocation detail as a text file
+- Scroll-aware split layout (hover to scroll source or panel independently)
 
 ## Standard Library
 
@@ -326,6 +329,7 @@ The parser tracks expression types through the full precedence chain. This enabl
 - **Missing overload detection** ("No overload for +(Foo, Bar)" at parse time)
 - **Exhaustiveness checking** on union/variant subjects
 - **Block/if/match type unification** (branch types merge into unions)
+- **Implicit argument promotion** via user-defined `promote` rules at function call sites
 - **Implicit Long-to-Double widening** at function boundaries
 
 ### Design Principles
@@ -336,18 +340,53 @@ The parser tracks expression types through the full precedence chain. This enabl
 - **Types are smart, structs are dumb.** Numeric types carry algebraic rules. Structs are plain containers whose fields may reference smart types.
 - **Arithmetic is externalized.** Operations are defined as `pure` functions outside the type, with `promote` rules for automatic dispatch across the type hierarchy.
 - **Nominal typing.** Structs, tuples, and algebraic types are categorically distinct. No cross-type structural matching in pattern matching.
-- **Newlines are statement boundaries.** No semicolons. Operators on a new line start a new expression (same-line rule for function calls and binary operators).
+- **Newlines are statement boundaries.** No semicolons. Operators on a new line start a new expression (same-line rule for function calls, binary minus, and parenthesized expressions).
+- **Definition order matters.** Each line can use everything above it. Unary operators before binary operators that use them. Types before functions that reference them. The file reads as a dependency chain.
 - **Macros are code templates.** Compile-time textual substitution with function-invocation semantics. Output is normal SPN code, debuggable and inspectable.
 
-## Building
+## Getting Started
 
-Requires Java 25+ and Maven 3.9+.
+### Prerequisites
+
+- **GraalVM JDK 25+** — download from [graalvm.org](https://www.graalvm.org/downloads/). Set `JAVA_HOME` to the GraalVM installation directory.
+- **Apache Maven 3.9+** — download from [maven.apache.org](https://maven.apache.org/download.cgi). Ensure `mvn` is on your `PATH`.
+
+### Building
 
 ```bash
-mvn process-classes
+mvn clean install
 ```
 
-This compiles the source, runs the Truffle DSL annotation processor, then executes post-compile code generation for the standard library registry.
+This compiles all modules, runs the Truffle DSL annotation processor, generates the standard library registry, and runs the test suite.
+
+### Running the IDE
+
+```bash
+mvn -pl spn-gui exec:java
+```
+
+This launches the SPN editor. The IDE opens with an empty editor tab. From there:
+
+| Action | Shortcut |
+|--------|----------|
+| Run | F5 |
+| Run with Trace | Shift+F5 |
+| New tab | Ctrl+N |
+| Open file | Ctrl+O |
+| Save | Ctrl+S |
+| Find / Replace | Ctrl+F / Ctrl+H |
+| Command palette | Ctrl+P |
+| Help | Ctrl+/ |
+| Import browser | Ctrl+I |
+| Module browser | Ctrl+M |
+
+To run with a file directly, open it with Ctrl+O or pass it as a working directory argument. For module-aware features (imports, trace across files), save your file inside a directory with a `module.spn` file.
+
+### Running tests
+
+```bash
+mvn test
+```
 
 ## Future Directions
 
