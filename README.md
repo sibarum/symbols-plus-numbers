@@ -14,6 +14,33 @@
 
 A programming language where numeric types carry their own algebraic rules, pattern matching is exhaustive by design, and a built-in OpenGL graphics engine lets you visualize results without leaving the language.
 
+## Table of Contents
+
+- [Quick Look](#quick-look)
+- [Features](#features)
+  - [Custom Numeric Types](#custom-numeric-types)
+  - [Union Types](#union-types)
+  - [Macros](#macros)
+  - [Unary Operator Dispatch](#unary-operator-dispatch)
+  - [Pure Functions & Pattern Matching](#pure-functions--pattern-matching)
+  - [Tuple Types & Destructuring](#tuple-types--destructuring)
+  - [Closures & Streaming](#closures--streaming)
+  - [Developer Tooling — `inspect`](#developer-tooling--inspect)
+  - [Built-in OpenGL Graphics](#built-in-opengl-graphics)
+  - [Built-in Mini-IDE](#built-in-mini-ide)
+  - [Trace Mode (Debugger)](#trace-mode-debugger)
+- [Standard Library](#standard-library)
+- [Architecture](#architecture)
+  - [Type System](#type-system)
+  - [Parse-Time Type Inference](#parse-time-type-inference)
+  - [Design Principles](#design-principles)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Building](#building)
+  - [Running the IDE](#running-the-ide)
+  - [Running tests](#running-tests)
+- [Future Directions](#future-directions)
+
 SPN runs on GraalVM with the Truffle framework for JIT compilation to native machine code.
 
 ## Quick Look
