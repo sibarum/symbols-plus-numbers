@@ -1,5 +1,6 @@
 import Math (abs, sign, gcd)
 import Ordering
+import Math (toFloat)
 
 type Rational (int, int)
 
@@ -72,4 +73,10 @@ const Rational.omega = Rational(1,0)
 
 promote int -> Rational = (i) {
   Rational(i)
+}
+
+promote Rational -> float = (q) {
+  match q
+  | Rational(_, 0) -> 0
+  | Rational(n,d) -> toFloat(n) / toFloat(d)
 }

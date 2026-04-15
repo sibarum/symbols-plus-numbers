@@ -1,0 +1,107 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Expr — Symbolic rational expressions
+-- ═══════════════════════════════════════════════════════════════════════
+-- A small expression language over Rational values. Expressions form a
+-- tree that can be evaluated against a variable environment (dictionary)
+-- or simplified symbolically via algebraic identities.
+--
+-- SPN requires type definitions before references. Because variant types
+-- would need to reference the not-yet-defined Expr union for recursion,
+-- composite variants hold their children in an untyped Array. Builder
+-- functions (lit, add, mul, ...) provide an ergonomic public API.
+
+import numerics.rational
+import Array (append, length)
+import Dict (hasKey)
+import String (show)
+
+-- ── AST ─────────────────────────────────────────────────────────────
+
+type Lit(Rational)
+type Var(Symbol)
+type Add(Array)
+type Mul(Array)
+type Neg(Array)
+type Inv(Array)
+
+data Expr = Lit | Var | Add | Mul | Neg | Inv
+
+-- ── builder functions ───────────────────────────────────────────────
+
+pure lit(Rational) -> Expr = (r) { Lit(r) }
+pure var(Symbol) -> Expr = (name) { Var(name) }
+pure add(Expr, Expr) -> Expr = (a, b) { Add([a, b]) }
+pure mul(Expr, Expr) -> Expr = (a, b) { Mul([a, b]) }
+pure neg(Expr) -> Expr = (a) { Neg([a]) }
+pure inv(Expr) -> Expr = (a) { Inv([a]) }
+
+-- ── evaluate against a variable environment ─────────────────────────
+
+pure eval(Expr, Dict) -> Rational = (expr, env) {
+  match expr
+  | Lit(v) -> v
+  | Var(name) -> { if hasKey(env, name) { env[name] } else { Rational.omega } }
+  | Add(cs) -> eval(cs[0], env) + eval(cs[1], env)
+  | Mul(cs) -> eval(cs[0], env) * eval(cs[1], env)
+  | Neg(cs) -> -eval(cs[0], env)
+  | Inv(cs) -> 1/eval(cs[0], env)
+}
+
+-- ── pretty-printing ─────────────────────────────────────────────────
+
+pure inspect(Rational) -> string = ((n, d)) {
+  match d | 1 -> show(n) | _ -> show(n) ++ "/" ++ show(d)
+}
+
+pure inspect(Expr) -> string = (expr) {
+  match expr
+  | Lit(v) -> inspect(v)
+  | Var(name) -> show(name)
+  | Add(cs) -> "(" ++ inspect(cs[0]) ++ " + " ++ inspect(cs[1]) ++ ")"
+  | Mul(cs) -> "(" ++ inspect(cs[0]) ++ " * " ++ inspect(cs[1]) ++ ")"
+  | Neg(cs) -> "-" ++ inspect(cs[0])
+  | Inv(cs) -> "(1/" ++ inspect(cs[0]) ++ ")"
+}
+
+-- ── algebraic simplification ────────────────────────────────────────
+-- One-pass recursive simplification. Applies identities bottom-up.
+
+pure simplify(Expr) -> Expr = (expr) {
+  match expr
+  | Lit(_) -> expr
+  | Var(_) -> expr
+  | Neg(cs) -> {
+      let inner = simplify(cs[0])
+      match inner
+      | Neg(cs2) -> cs2[0]
+      | Lit(v) -> Lit(-v)
+      | _ -> Neg([inner])
+    }
+  | Inv(cs) -> {
+      let inner = simplify(cs[0])
+      match inner
+      | Inv(cs2) -> cs2[0]
+      | Lit(v) -> Lit(1/v)
+      | _ -> Inv([inner])
+    }
+  | Add(cs) -> {
+      let a = simplify(cs[0])
+      let b = simplify(cs[1])
+      match (a, b)
+      | (Lit(Rational(0, _)), _) -> b
+      | (_, Lit(Rational(0, _))) -> a
+      | (Lit(x), Lit(y)) -> Lit(x + y)
+      | _ -> Add([a, b])
+    }
+  | Mul(cs) -> {
+      let a = simplify(cs[0])
+      let b = simplify(cs[1])
+      match (a, b)
+      | (Lit(Rational(0, _)), _) -> Lit(Rational.zero)
+      | (_, Lit(Rational(0, _))) -> Lit(Rational.zero)
+      | (Lit(Rational(1, 1)), _) -> b
+      | (_, Lit(Rational(1, 1))) -> a
+      | (Lit(x), Lit(y)) -> Lit(x * y)
+      | _ -> Mul([a, b])
+    }
+}

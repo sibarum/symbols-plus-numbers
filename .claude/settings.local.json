@@ -20,7 +20,8 @@
       "Bash(javap -p C:/Users/Owner/IdeaProjects/spn-parent/spn-ast/target/classes/spn/node/SpnNode.class)",
       "Bash(mvn install:*)",
       "Bash(ls /c/Users/Owner/IdeaProjects/spn-parent/spn-ast/src/main/java/spn/node/*.java)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(echo \"EXIT: $?\")"
     ]
   }
 }

@@ -1,0 +1,134 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Prove — Toy equational proof solver
+-- ═══════════════════════════════════════════════════════════════════════
+-- Proves identities over rational expressions by normalizing both sides
+-- via algebraic rewrite rules, then comparing structural equality.
+--
+-- Strategy: leftmost-innermost single-step reduction to a fixed point.
+-- Each reduction is recorded as a named Step for proof inspection.
+
+import algebra.expr
+import numerics.rational
+import Array (append, length)
+
+-- ── proof step ──────────────────────────────────────────────────────
+
+type Step(rule: string, result: Expr)
+
+pure inspect(Step) -> string = (s) {
+  "[" ++ s.rule ++ "] " ++ inspect(s.result)
+}
+
+-- ── structural equality ─────────────────────────────────────────────
+
+pure structEq(Expr, Expr) -> bool = (a, b) {
+  match (a, b)
+  | (Lit(x), Lit(y)) -> x == y
+  | (Var(x), Var(y)) -> x == y
+  | (Add(ca), Add(cb)) -> structEq(ca[0], cb[0]) && structEq(ca[1], cb[1])
+  | (Mul(ca), Mul(cb)) -> structEq(ca[0], cb[0]) && structEq(ca[1], cb[1])
+  | (Neg(ca), Neg(cb)) -> structEq(ca[0], cb[0])
+  | (Inv(ca), Inv(cb)) -> structEq(ca[0], cb[0])
+  | _ -> false
+}
+
+-- ── single-step reduction ───────────────────────────────────────────
+-- Finds the leftmost applicable rewrite rule and applies it once.
+-- Returns (rewritten expr, rule name). Rule = "" means no rule applied.
+
+pure reduce(Expr) -> (Expr, string) = (expr) {
+  match expr
+  | Add(cs) -> {
+      let a = cs[0]
+      let b = cs[1]
+      match (a, b)
+      | (Lit(Rational(0, _)), _) -> (b, "0 + x")
+      | (_, Lit(Rational(0, _))) -> (a, "x + 0")
+      | (Lit(x), Lit(y)) -> (Lit(x + y), "fold +")
+      | _ -> {
+          let (a2, r) = reduce(a)
+          match r == ""
+          | false -> (Add([a2, b]), r)
+          | _ -> {
+              let (b2, r2) = reduce(b)
+              (Add([a, b2]), r2)
+            }
+        }
+    }
+  | Mul(cs) -> {
+      let a = cs[0]
+      let b = cs[1]
+      match (a, b)
+      | (Lit(Rational(0, _)), _) -> (Lit(Rational.zero), "0 * x")
+      | (_, Lit(Rational(0, _))) -> (Lit(Rational.zero), "x * 0")
+      | (Lit(Rational(1, 1)), _) -> (b, "1 * x")
+      | (_, Lit(Rational(1, 1))) -> (a, "x * 1")
+      | (Lit(x), Lit(y)) -> (Lit(x * y), "fold *")
+      | (_, Add(bc)) -> (Add([Mul([a, bc[0]]), Mul([a, bc[1]])]), "dist L")
+      | (Add(ac), _) -> (Add([Mul([ac[0], b]), Mul([ac[1], b])]), "dist R")
+      | _ -> {
+          let (a2, r) = reduce(a)
+          match r == ""
+          | false -> (Mul([a2, b]), r)
+          | _ -> {
+              let (b2, r2) = reduce(b)
+              (Mul([a, b2]), r2)
+            }
+        }
+    }
+  | Neg(cs) -> {
+      let inner = cs[0]
+      match inner
+      | Neg(cs2) -> (cs2[0], "--x")
+      | Lit(v) -> (Lit(-v), "neg lit")
+      | Add(ac) -> (Add([Neg([ac[0]]), Neg([ac[1]])]), "neg sum")
+      | _ -> {
+          let (i2, r) = reduce(inner)
+          (Neg([i2]), r)
+        }
+    }
+  | Inv(cs) -> {
+      let inner = cs[0]
+      match inner
+      | Inv(cs2) -> (cs2[0], "1/(1/x)")
+      | Lit(v) -> (Lit(1/v), "inv lit")
+      | _ -> {
+          let (i2, r) = reduce(inner)
+          (Inv([i2]), r)
+        }
+    }
+  | _ -> (expr, "")
+}
+
+-- ── normalize to fixed point ────────────────────────────────────────
+
+pure normalize(Expr) -> (Expr, Array) = (expr) {
+  let current = expr
+  let steps = []
+  let i = 0
+  let done = 0
+  while {i < 100 && done == 0} do {
+    let (next, rule) = reduce(current)
+    match rule == ""
+    | true -> { done = 1 }
+    | _ -> {
+        steps = append(steps, Step(rule, next))
+        current = next
+      }
+    i = i + 1
+  }
+  (current, steps)
+}
+
+-- ── prove ───────────────────────────────────────────────────────────
+
+pure prove(Expr, Expr) -> bool = (lhs, rhs) {
+  let (lNorm, _) = normalize(lhs)
+  let (rNorm, _) = normalize(rhs)
+  structEq(lNorm, rNorm)
+}
+
+-- Quick numerical check: evaluate both sides against concrete bindings.
+pure check(Expr, Expr, Dict) -> bool = (lhs, rhs, env) {
+  eval(lhs, env) == eval(rhs, env)
+}

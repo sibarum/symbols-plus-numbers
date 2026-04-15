@@ -482,6 +482,40 @@ public class TextArea {
 
             if (startCol < line.length()) {
                 List<Token> tokens = highlightCache.getTokens(row, line);
+
+                // Detect operator-in-declaration: pure/action followed by operator symbol
+                int opDeclStart = -1, opDeclEnd = -1;
+                {
+                    Token prevNonWs = null;
+                    for (Token t : tokens) {
+                        if (t.type() == TokenType.WHITESPACE) continue;
+                        if (prevNonWs != null
+                                && prevNonWs.type() == TokenType.KEYWORD
+                                && t.type() == TokenType.OPERATOR) {
+                            String kwText = line.substring(prevNonWs.startCol(),
+                                    Math.min(prevNonWs.endCol(), line.length()));
+                            if (kwText.equals("pure") || kwText.equals("action")) {
+                                opDeclStart = t.startCol();
+                                opDeclEnd = t.endCol();
+                            }
+                        }
+                        prevNonWs = t;
+                    }
+                }
+                final int operatorDeclStart = opDeclStart;
+
+                // Draw background highlight for operator declaration symbol
+                if (opDeclStart >= 0) {
+                    int bgStart = Math.max(opDeclStart - scrollCol, 0);
+                    int bgEnd = opDeclEnd - scrollCol;
+                    if (bgStart < visibleCols && bgEnd > 0) {
+                        float opX = textX + bgStart * cellWidth - 2f;
+                        float opW = (bgEnd - bgStart) * cellWidth + 4f;
+                        float opY = textY + i * cellHeight + HIGHLIGHT_OFFSET_Y;
+                        font.drawRect(opX, opY, opW, cellHeight, 0.20f, 0.16f, 0.08f);
+                    }
+                }
+
                 ColorSpan[] spans = tokens.stream()
                         .filter(t -> t.type() != TokenType.WHITESPACE)
                         .map(t -> {
@@ -492,6 +526,11 @@ public class TextArea {
                                 if (text.equals("this") || text.equals("true") || text.equals("false")) {
                                     cr = TokenType.KEYWORD.r; cg = TokenType.KEYWORD.g; cb = TokenType.KEYWORD.b;
                                 }
+                            }
+                            // Operator declaration symbol: bright gold
+                            if (operatorDeclStart >= 0 && t.type() == TokenType.OPERATOR
+                                    && t.startCol() == operatorDeclStart) {
+                                cr = 1.0f; cg = 0.82f; cb = 0.35f;
                             }
                             return new ColorSpan(t.startCol(), t.endCol(), cr, cg, cb);
                         })

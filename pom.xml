@@ -24,6 +24,7 @@
         <module>spn-canvas</module>
         <module>spn-fonts</module>
         <module>spn-stdui</module>
+        <module>spn-traction</module>
     </modules>
 
     <properties>

@@ -542,11 +542,10 @@ public class EditorWindow {
     }
 
     /**
-     * Open trace result tabs. The current file always gets a tab (and becomes
-     * active). Every other module file whose events attribute to it via
-     * TraceEvent.sourceFile also gets a tab. Because each TraceSourceTab
-     * filters events by absolute file path, operator overloads and other name
-     * collisions across files are attributed correctly.
+     * Open a single trace tab containing all module files with recorded events.
+     * The current file is always listed first. If multiple files have events,
+     * the tab opens in file-select mode; otherwise it goes straight to the
+     * block summary.
      *
      * @param moduleCtx     module context for the running file, or null for single-file
      * @param currentFile   the path of the running file, or null
@@ -561,30 +560,26 @@ public class EditorWindow {
                                         boolean errorSuffix) {
         String currentPath = currentFile != null ? currentFile.toAbsolutePath().toString() : null;
 
-        // Always open the current file's tab first (it becomes the active tab).
-        TraceSourceTab currentTab = new TraceSourceTab(
-                this, currentSource, events, currentLabel, currentPath);
-        tabView.addTab(currentTab);
+        java.util.List<TraceSourceTab.FileEntry> entries = new java.util.ArrayList<>();
+        entries.add(new TraceSourceTab.FileEntry(currentSource, currentPath, currentLabel));
 
-        if (moduleCtx == null || currentFile == null) return;
-
-        Path currentAbs = currentFile.toAbsolutePath();
-        for (ModuleContext.ModuleFile mf : moduleCtx.getFiles()) {
-            if (mf.absolutePath().equals(currentAbs)) continue; // already handled
-            String mfPath = mf.absolutePath().toString();
-            // Only open a tab if at least one event is attributed to this file.
-            if (!eventsInFile(events, mfPath)) continue;
-            try {
-                String src = java.nio.file.Files.readString(mf.absolutePath());
-                String label = mf.relativePath() + (errorSuffix ? " (error)" : "");
-                tabView.addTab(new TraceSourceTab(this, src, events, label, mfPath));
-            } catch (java.io.IOException ignored) {
-                // Skip unreadable files silently
+        if (moduleCtx != null && currentFile != null) {
+            Path currentAbs = currentFile.toAbsolutePath();
+            for (ModuleContext.ModuleFile mf : moduleCtx.getFiles()) {
+                if (mf.absolutePath().equals(currentAbs)) continue;
+                String mfPath = mf.absolutePath().toString();
+                if (!eventsInFile(events, mfPath)) continue;
+                try {
+                    String src = java.nio.file.Files.readString(mf.absolutePath());
+                    String label = mf.relativePath() + (errorSuffix ? " (error)" : "");
+                    entries.add(new TraceSourceTab.FileEntry(src, mfPath, label));
+                } catch (java.io.IOException ignored) {
+                    // Skip unreadable files silently
+                }
             }
         }
 
-        // Return focus to the current file's tab.
-        tabView.switchTo(currentTab);
+        tabView.addTab(new TraceSourceTab(this, events, entries));
     }
 
     /** True if any CALL event is attributed to the given file path. */

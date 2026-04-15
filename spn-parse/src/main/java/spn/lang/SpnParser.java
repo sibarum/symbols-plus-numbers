@@ -752,14 +752,104 @@ public class SpnParser {
         FieldType targetType = parseFieldType();
         tokens.expect("=");
 
-        // Parse the conversion closure: (param) { body }
-        SpnExpressionNode converter = parseValidatorClosure();
+        // Parse with type-aware closure so destructuring works on sourceType
+        SpnExpressionNode converter = parsePromoteClosure(sourceType);
 
         // The converter is a SpnFunctionRefNode wrapping a CallTarget
         if (converter instanceof SpnFunctionRefNode ref) {
             promotionRegistry.add(new Promotion(
                     sourceType.describe(), targetType.describe(), ref.getCallTarget()));
         }
+    }
+
+    /**
+     * Parse a promote closure: (params) { body }
+     * Like parseValidatorClosure but with type-aware parameter handling so
+     * destructured bindings infer field types from the source type.
+     */
+    private SpnExpressionNode parsePromoteClosure(FieldType sourceType) {
+        tokens.expect("(");
+        List<ParamDecl> params = new ArrayList<>();
+        while (!tokens.check(")")) {
+            if (tokens.check("(")) {
+                // Destructured param: (a, b) — fields of sourceType
+                tokens.advance();
+                List<String> bindings = new ArrayList<>();
+                while (!tokens.check(")")) {
+                    bindings.add(tokens.advance().text());
+                    tokens.match(",");
+                }
+                tokens.expect(")");
+                params.add(ParamDecl.destructured(bindings));
+            } else {
+                params.add(ParamDecl.simple(tokens.advance().text()));
+            }
+            tokens.match(",");
+        }
+        tokens.expect(")");
+
+        pushScope();
+
+        // Promote takes exactly one parameter of sourceType
+        List<FieldType> paramTypes = List.of(sourceType);
+        List<String> paramNames = new ArrayList<>();
+        int[] paramSlots = new int[params.size()];
+        List<spn.node.local.SpnDestructureNode> destructureNodes = new ArrayList<>();
+
+        for (int i = 0; i < params.size(); i++) {
+            ParamDecl p = params.get(i);
+            if (p.isDestructured()) {
+                String hiddenName = "__param_" + i + "__";
+                paramSlots[i] = currentScope.addLocal(hiddenName);
+                paramNames.add(hiddenName);
+
+                SpnStructDescriptor desc = null;
+                if (i < paramTypes.size()) {
+                    desc = structRegistry.get(paramTypes.get(i).describe());
+                }
+
+                int[] bindSlots = new int[p.destructureBindings().size()];
+                for (int j = 0; j < p.destructureBindings().size(); j++) {
+                    String bn = p.destructureBindings().get(j);
+                    if (bn.equals("_")) {
+                        bindSlots[j] = -1;
+                    } else {
+                        FieldType fieldType = (desc != null && j < desc.fieldCount())
+                                ? desc.fieldType(j) : null;
+                        bindSlots[j] = currentScope.addLocal(bn, fieldType);
+                    }
+                }
+                destructureNodes.add(new spn.node.local.SpnDestructureNode(
+                        SpnReadLocalVariableNodeGen.create(paramSlots[i]), bindSlots));
+            } else {
+                FieldType ft = i < paramTypes.size() ? paramTypes.get(i) : null;
+                paramSlots[i] = currentScope.addLocal(p.name(), ft);
+                paramNames.add(p.name());
+            }
+        }
+
+        tokens.expect("{");
+        SpnExpressionNode body = parseBlockBody();
+        tokens.expect("}");
+
+        if (!destructureNodes.isEmpty()) {
+            List<SpnStatementNode> stmts = new ArrayList<>(destructureNodes);
+            stmts.add(body);
+            body = new SpnBlockExprNode(stmts.toArray(new SpnStatementNode[0]));
+        }
+
+        FrameDescriptor frame = popScope().buildFrame();
+
+        SpnFunctionDescriptor.Builder descBuilder = SpnFunctionDescriptor.pure("__promote__");
+        for (int i = 0; i < paramNames.size(); i++) {
+            FieldType ft = i < paramTypes.size() ? paramTypes.get(i) : FieldType.UNTYPED;
+            descBuilder.param(paramNames.get(i), ft);
+        }
+        SpnFunctionDescriptor descriptor = descBuilder.build();
+
+        SpnFunctionRootNode fnRoot = new SpnFunctionRootNode(
+                language, frame, descriptor, paramSlots, body);
+        return new SpnFunctionRefNode(fnRoot.getCallTarget());
     }
 
     private void parseDataDecl() {

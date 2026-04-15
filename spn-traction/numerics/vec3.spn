@@ -1,0 +1,76 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Vec3 — 3D vector over Rational
+-- ═══════════════════════════════════════════════════════════════════════
+-- All arithmetic is exact. No floating point, no transcendentals.
+-- Dot and cross products use qualified operator suffixes (*_dot, *_cross).
+
+import numerics.rational
+import Ordering
+import String (show)
+
+type Vec3(x: Rational, y: Rational, z: Rational)
+
+-- ── constructors ────────────────────────────────────────────────────
+
+pure Vec3(Rational, Rational, Rational) -> Vec3 = (x, y, z) {
+  this(x, y, z)
+}
+
+-- ── arithmetic ──────────────────────────────────────────────────────
+
+pure +(Vec3, Vec3) -> Vec3 = ((x1, y1, z1), (x2, y2, z2)) {
+  Vec3(x1 + x2, y1 + y2, z1 + z2)
+}
+
+pure -(Vec3, Vec3) -> Vec3 = ((x1, y1, z1), (x2, y2, z2)) {
+  Vec3(x1 - x2, y1 - y2, z1 - z2)
+}
+
+pure -(Vec3) -> Vec3 = ((x, y, z)) {
+  Vec3(-x, -y, -z)
+}
+
+-- Scalar multiplication: Rational * Vec3
+pure *(Rational, Vec3) -> Vec3 = (k, (x, y, z)) {
+  Vec3(k * x, k * y, k * z)
+}
+
+-- Dot product: Vec3 *_dot Vec3 -> Rational
+pure *_dot(Vec3, Vec3) -> Rational = ((x1, y1, z1), (x2, y2, z2)) {
+  x1*x2 + y1*y2 + z1*z2
+}
+
+-- Cross product: Vec3 *_cross Vec3 -> Vec3
+pure *_cross(Vec3, Vec3) -> Vec3 = ((x1, y1, z1), (x2, y2, z2)) {
+  Vec3(y1*z2 - z1*y2, z1*x2 - x1*z2, x1*y2 - y1*x2)
+}
+
+-- ── equality & comparison ───────────────────────────────────────────
+
+pure ==(Vec3, Vec3) -> bool = ((x1, y1, z1), (x2, y2, z2)) {
+  x1 == x2 && y1 == y2 && z1 == z2
+}
+
+-- Squared magnitude (avoids square root — stays exact)
+pure Vec3.sqMag() -> Rational = () {
+  this *_dot this
+}
+
+-- ── inspect ─────────────────────────────────────────────────────────
+
+pure inspect(Vec3) -> string = ((x, y, z)) {
+  "(" ++ inspect(x) ++ ", " ++ inspect(y) ++ ", " ++ inspect(z) ++ ")"
+}
+
+pure inspect(Rational) -> string = ((n, d)) {
+  match d
+  | 1 -> show(n)
+  | _ -> show(n) ++ "/" ++ show(d)
+}
+
+-- ── constants ───────────────────────────────────────────────────────
+
+const Vec3.zero = Vec3(0, 0, 0)
+const Vec3.ex = Vec3(1, 0, 0)
+const Vec3.ey = Vec3(0, 1, 0)
+const Vec3.ez = Vec3(0, 0, 1)

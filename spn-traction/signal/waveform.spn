@@ -1,0 +1,58 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Waveform — Discrete rational signal generation
+-- ═══════════════════════════════════════════════════════════════════════
+-- Signals are arrays of Rational samples. All generation is exact —
+-- no floating point.
+
+import numerics.rational
+import Array (append, length)
+
+-- ── generators ──────────────────────────────────────────────────────
+
+-- Constant DC signal: N samples of value k
+pure dc(int, Rational) -> Array = (n, k) {
+  let i = 0
+  let out = []
+  while {i < n} do {
+    out = append(out, k)
+    i = i + 1
+  }
+  out
+}
+
+-- Ramp from 0 to (n-1)/n in n steps
+pure ramp(int) -> Array = (n) {
+  let i = 0
+  let out = []
+  while {i < n} do {
+    out = append(out, Rational(i, n))
+    i = i + 1
+  }
+  out
+}
+
+-- Square wave: period p samples, amplitude a. High for first half, low for second.
+pure square(int, int, Rational) -> Array = (n, period, a) {
+  let i = 0
+  let half = period / 2
+  let out = []
+  while {i < n} do {
+    let phase = i % period
+    let sample = match phase < half | true -> a | _ -> -a
+    out = append(out, sample)
+    i = i + 1
+  }
+  out
+}
+
+-- Step function: zero before changeAt sample, amp after
+pure step(int, int, Rational) -> Array = (n, changeAt, amp) {
+  let i = 0
+  let out = []
+  while {i < n} do {
+    let sample = match i < changeAt | true -> Rational.zero | _ -> amp
+    out = append(out, sample)
+    i = i + 1
+  }
+  out
+}

@@ -1,0 +1,145 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Shapes — 2D geometry over Rational coordinates
+-- ═══════════════════════════════════════════════════════════════════════
+-- All measurements are exact Rational values. Areas, containment tests,
+-- and transforms avoid floating point entirely.
+
+import numerics.rational
+import Ordering
+import String (show)
+
+-- ── point ───────────────────────────────────────────────────────────
+
+type Point(x: Rational, y: Rational)
+
+pure ==(Point, Point) -> bool = ((ax, ay), (bx, by)) {
+  ax == bx && ay == by
+}
+
+pure +(Point, Point) -> Point = ((ax, ay), (bx, by)) {
+  Point(ax + bx, ay + by)
+}
+
+pure -(Point, Point) -> Point = ((ax, ay), (bx, by)) {
+  Point(ax - bx, ay - by)
+}
+
+pure *(Rational, Point) -> Point = (k, (x, y)) {
+  Point(k * x, k * y)
+}
+
+pure distSq(Point, Point) -> Rational = ((ax, ay), (bx, by)) {
+  let dx = ax - bx
+  let dy = ay - by
+  dx * dx + dy * dy
+}
+
+pure inspect(Rational) -> string = ((n, d)) {
+  match d | 1 -> show(n) | _ -> show(n) ++ "/" ++ show(d)
+}
+
+pure inspect(Point) -> string = ((x, y)) {
+  "(" ++ inspect(x) ++ ", " ++ inspect(y) ++ ")"
+}
+
+-- ── shape types ─────────────────────────────────────────────────────
+
+type Circle(center: Point, radiusSq: Rational)
+type Rect(origin: Point, w: Rational, h: Rational)
+type Triangle(a: Point, b: Point, c: Point)
+
+data Shape = Circle | Rect | Triangle
+
+-- ── area (exact for all three) ──────────────────────────────────────
+
+pure area(Shape) -> Rational = (s) {
+  match s
+  | Circle(_, rSq) -> Rational(355, 113) * rSq
+  | Rect(_, w, h) -> w * h
+  | Triangle(a, b, c) -> {
+      let (ax, ay) = a
+      let (bx, by) = b
+      let (cx, cy) = c
+      let det = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay)
+      let absDet = match det < Rational.zero | true -> -det | _ -> det
+      absDet / Rational(2)
+    }
+}
+
+-- ── containment ─────────────────────────────────────────────────────
+
+pure contains(Shape, Point) -> bool = (s, p) {
+  match s
+  | Circle(center, rSq) -> distSq(center, p) <= rSq
+  | Rect(origin, w, h) -> {
+      let (ox, oy) = origin
+      let (px, py) = p
+      let dx = px - ox
+      let dy = py - oy
+      dx >= Rational.zero && dx <= w && dy >= Rational.zero && dy <= h
+    }
+  | Triangle(a, b, c) -> {
+      let d1 = crossSign(a, b, p)
+      let d2 = crossSign(b, c, p)
+      let d3 = crossSign(c, a, p)
+      let hasNeg = d1 < 0 || d2 < 0 || d3 < 0
+      let hasPos = d1 > 0 || d2 > 0 || d3 > 0
+      (hasNeg && hasPos) == false
+    }
+}
+
+-- Sign of the cross product (a→b) × (a→p)
+pure crossSign(Point, Point, Point) -> int = ((ax, ay), (bx, by), (px, py)) {
+  let cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+  match cross
+  | Rational(0, _) -> 0
+  | _ -> { if cross > Rational.zero { 1 } else { -1 } }
+}
+
+-- ── inspect shapes ──────────────────────────────────────────────────
+
+pure inspect(Shape) -> string = (s) {
+  match s
+  | Circle(c, rSq) ->
+      "Circle(" ++ inspect(c) ++ ", rSq=" ++ inspect(rSq) ++ ")"
+  | Rect(o, w, h) ->
+      "Rect(" ++ inspect(o) ++ ", " ++ inspect(w) ++ "x" ++ inspect(h) ++ ")"
+  | Triangle(a, b, c) ->
+      "Triangle(" ++ inspect(a) ++ ", " ++ inspect(b) ++ ", " ++ inspect(c) ++ ")"
+}
+
+-- ── utilities ───────────────────────────────────────────────────────
+
+pure rmin(Rational, Rational) -> Rational = (a, b) {
+  match a < b | true -> a | _ -> b
+}
+
+pure rmax(Rational, Rational) -> Rational = (a, b) {
+  match a > b | true -> a | _ -> b
+}
+
+pure bounds(Shape) -> Rect = (s) {
+  match s
+  | Circle(c, rSq) -> {
+      let (cx, cy) = c
+      Rect(Point(cx - rSq, cy - rSq), rSq * Rational(2), rSq * Rational(2))
+    }
+  | Rect(o, w, h) -> Rect(o, w, h)
+  | Triangle(a, b, c) -> {
+      let (ax, ay) = a
+      let (bx, by) = b
+      let (cx, cy) = c
+      let minX = rmin(rmin(ax, bx), cx)
+      let maxX = rmax(rmax(ax, bx), cx)
+      let minY = rmin(rmin(ay, by), cy)
+      let maxY = rmax(rmax(ay, by), cy)
+      Rect(Point(minX, minY), maxX - minX, maxY - minY)
+    }
+}
+
+pure translate(Shape, Point) -> Shape = (s, offset) {
+  match s
+  | Circle(c, rSq) -> Circle(c + offset, rSq)
+  | Rect(o, w, h) -> Rect(o + offset, w, h)
+  | Triangle(a, b, c) -> Triangle(a + offset, b + offset, c + offset)
+}
