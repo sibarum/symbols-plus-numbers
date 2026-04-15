@@ -43,9 +43,10 @@ pure niceStep(float) -> float = (range) {
         p = p / 10.0
     }
     -- snap to 1, 2, or 5
-    if rough < 1.5 { 1.0 * p }
-    else if rough < 3.5 { 2.0 * p }
-    else { 5.0 * p }
+    match
+      | rough < 1.5 -> 1.0 * p
+      | rough < 3.5 -> 2.0 * p
+      | _ -> 5.0 * p
 }
 
 -- ═══════════════════════════════════════════════════════════════════════
@@ -63,13 +64,15 @@ pure drawAxes2D(float, float, float, float, float, float, float, float, string, 
 
     -- Clamp axis positions to viewport
     let axisY = zeroY
-    if axisY < top { axisY = top }
-    else if axisY > top + h { axisY = top + h }
-    else { 0 }
+    match
+      | axisY < top -> { axisY = top }
+      | axisY > top + h -> { axisY = top + h }
+      | _ -> 0
     let axisX = zeroX
-    if axisX < left { axisX = left }
-    else if axisX > left + w { axisX = left + w }
-    else { 0 }
+    match
+      | axisX < left -> { axisX = left }
+      | axisX > left + w -> { axisX = left + w }
+      | _ -> 0
 
     -- Axis lines
     cmds = concat(cmds, [
@@ -163,7 +166,9 @@ pure plotFnAuto(plotCallback, float, float, float, float, string) = (f, w, h, xM
     }
     -- Add 10% padding
     let yPad = (yMax - yMin) * 0.1
-    if yPad < 0.01 { yPad = 0.5 } else { 0 }
+    match
+      | yPad < 0.01 -> { yPad = 0.5 }
+      | _ -> 0
     yMin = yMin - yPad
     yMax = yMax + yPad
 

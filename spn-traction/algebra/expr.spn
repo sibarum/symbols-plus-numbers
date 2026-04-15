@@ -40,7 +40,9 @@ pure inv(Expr) -> Expr = (a) { Inv([a]) }
 pure eval(Expr, Dict) -> Rational = (expr, env) {
   match expr
   | Lit(v) -> v
-  | Var(name) -> { if hasKey(env, name) { env[name] } else { Rational.omega } }
+  | Var(name) -> match
+      | hasKey(env, name) -> env[name]
+      | _ -> Rational.omega
   | Add(cs) -> eval(cs[0], env) + eval(cs[1], env)
   | Mul(cs) -> eval(cs[0], env) * eval(cs[1], env)
   | Neg(cs) -> -eval(cs[0], env)

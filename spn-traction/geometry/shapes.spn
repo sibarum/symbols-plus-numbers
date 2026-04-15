@@ -85,7 +85,9 @@ pure crossSign(Point, Point, Point) -> int = ((ax, ay), (bx, by), (px, py)) {
   let cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
   match cross
   | Rational(0, _) -> 0
-  | _ -> { if cross > Rational.zero { 1 } else { -1 } }
+  | _ -> match
+      | cross > Rational.zero -> 1
+      | _ -> -1
 }
 
 -- ── utilities ───────────────────────────────────────────────────────

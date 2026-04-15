@@ -1155,6 +1155,82 @@ x + y
         }
     }
 
+    // ── Subject-less guard match ───────────────────────────────────────────
+
+    @Nested
+    class GuardMatch {
+        // Syntax: `match | cond -> expr | cond -> expr | _ -> default`
+        // First true guard wins. The `| _ -> ...` arm is required for totality.
+
+        @Test
+        void twoArmBoolean() {
+            assertEquals("positive", run("""
+                let x = 3
+                match
+                  | x > 0 -> "positive"
+                  | _ -> "nonpositive"
+                """));
+        }
+
+        @Test
+        void chainOfGuards() {
+            assertEquals("mid", run("""
+                let x = 5
+                match
+                  | x < 0 -> "neg"
+                  | x < 3 -> "low"
+                  | x < 10 -> "mid"
+                  | _ -> "high"
+                """));
+        }
+
+        @Test
+        void firstMatchingGuardWins() {
+            // Both x < 10 and x < 100 are true for x=5; the first one should win.
+            assertEquals("under10", run("""
+                let x = 5
+                match
+                  | x < 10 -> "under10"
+                  | x < 100 -> "under100"
+                  | _ -> "huge"
+                """));
+        }
+
+        @Test
+        void falsesAllFallToWildcard() {
+            assertEquals("default", run("""
+                let x = 5
+                match
+                  | x < 0 -> "neg"
+                  | x > 100 -> "big"
+                  | _ -> "default"
+                """));
+        }
+
+        @Test
+        void missingWildcardRejected() {
+            assertThrows(SpnParseException.class, () -> run("""
+                let x = 5
+                match
+                  | x < 0 -> "neg"
+                  | x > 100 -> "big"
+                """));
+        }
+
+        @Test
+        void guardCanUseBlock() {
+            assertEquals(42L, run("""
+                let x = 3
+                match
+                  | x > 0 -> {
+                      let y = 14
+                      y * x
+                    }
+                  | _ -> 0
+                """));
+        }
+    }
+
     // ── Named pattern destructuring ────────────────────────────────────────
 
     @Nested

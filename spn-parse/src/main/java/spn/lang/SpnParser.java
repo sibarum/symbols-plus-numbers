@@ -12,7 +12,6 @@ import spn.node.SpnRootNode;
 import spn.node.SpnStatementNode;
 import spn.node.array.SpnArrayAccessNodeGen;
 import spn.node.array.SpnArrayLiteralNode;
-import spn.node.ctrl.SpnIfNode;
 import spn.node.ctrl.SpnWhileNode;
 import spn.node.dict.SpnDictionaryLiteralNode;
 import spn.node.expr.*;
@@ -267,7 +266,6 @@ public class SpnParser {
             case "let" -> parseLetBinding();
             case "const" -> { parseConstDecl(); yield null; }
             case "while" -> parseWhileStatement();
-            case "if" -> parseIfStatement();
             case "yield" -> parseYieldStatement();
             case "return" -> parseYieldStatement(); // return is syntactic sugar for yield
             case "macro" -> { parseMacroDecl(); yield null; }
@@ -1725,37 +1723,6 @@ public class SpnParser {
         return new SpnWhileNode(condition, body);
     }
 
-    // ── If ─────────────────────────────────────────────────────────────────
-
-    private SpnStatementNode parseIfStatement() {
-        tokens.expect("if");
-        SpnExpressionNode condition = parseExpression();
-        tokens.expect("{");
-        SpnExpressionNode thenBranch = parseBlockBody();
-        tokens.expect("}");
-
-        SpnStatementNode elseBranch = null;
-        if (tokens.match("else")) {
-            if (tokens.check("if")) {
-                elseBranch = parseIfStatement();
-            } else {
-                tokens.expect("{");
-                elseBranch = parseBlockBody();
-                tokens.expect("}");
-            }
-        }
-
-        SpnStatementNode ifNode = new SpnIfNode(condition, thenBranch, elseBranch);
-        // Infer result type from branches (union if different)
-        if (elseBranch instanceof SpnExpressionNode elseExpr) {
-            FieldType unified = unifyTypes(inferType(thenBranch), inferType(elseExpr));
-            if (unified != null && ifNode instanceof SpnExpressionNode ifExpr) {
-                trackType(ifExpr, unified);
-            }
-        }
-        return ifNode;
-    }
-
     // ── Yield / Return ─────────────────────────────────────────────────────
 
     private SpnExpressionNode parseYieldStatement() {
@@ -1780,7 +1747,6 @@ public class SpnParser {
             SpnStatementNode stmt = switch (tok.text()) {
                 case "let" -> parseLetBinding();
                 case "while" -> parseWhileStatement();
-                case "if" -> parseIfStatement();
                 case "yield" -> parseYieldStatement();
                 case "return" -> parseYieldStatement();
                 default -> parseExpressionStatement();
@@ -2928,6 +2894,17 @@ public class SpnParser {
 
     private SpnExpressionNode parseMatchExpression() {
         SpnParseToken matchTok = tokens.expect("match");
+
+        // Subject-less guard form: `match | cond -> expr | _ -> default`.
+        // Each arm's condition is evaluated in order; the first true one wins,
+        // and the required wildcard `| _ -> ...` arm acts as the default.
+        // Compiled to a SpnMatchNode with `true` as a synthetic subject, each
+        // non-wildcard arm being (Wildcard, guard=cond), and the wildcard arm
+        // having no guard.
+        if (tokens.check("|")) {
+            return parseGuardMatch(matchTok);
+        }
+
         SpnExpressionNode subject = parseExpression();
         FieldType subjectType = inferType(subject);
 
@@ -2971,6 +2948,72 @@ public class SpnParser {
 
         SpnExpressionNode matchNode = new SpnMatchNode(subject,
                 branches.toArray(new SpnMatchBranchNode[0]));
+        if (resultType != null) trackType(matchNode, resultType);
+        return matchNode;
+    }
+
+    /**
+     * Parse the subject-less guard form of match: {@code match | cond -> expr
+     * | cond -> expr | _ -> default}. Each non-wildcard arm must be
+     * {@code cond -> body} where {@code cond} is a boolean expression. The final
+     * {@code | _ -> default} arm is required for totality.
+     *
+     * <p>Compiled as a plain {@link SpnMatchNode} with a synthetic {@code true}
+     * subject. Each guard arm is {@code Wildcard + guard=cond}, which matches
+     * iff the guard is true; the final wildcard arm has no guard and matches
+     * unconditionally. The existing tryMatch semantics — first arm whose
+     * pattern matches and whose guard (if any) is true wins — is exactly what
+     * guard-match needs.
+     */
+    private SpnExpressionNode parseGuardMatch(SpnParseToken matchTok) {
+        List<SpnMatchBranchNode> branches = new ArrayList<>();
+        FieldType resultType = null;
+        boolean sawWildcard = false;
+
+        while (tokens.match("|")) {
+            SpnExpressionNode guard;
+            boolean thisArmIsWildcard = false;
+
+            // Recognize `_ ->` as the unconditional default. We peek for the
+            // arrow so an identifier that happens to be `_` inside a larger
+            // expression doesn't get misinterpreted.
+            SpnParseToken first = tokens.peek();
+            SpnParseToken second = tokens.peek(1);
+            if (first != null && "_".equals(first.text())
+                    && second != null && "->".equals(second.text())) {
+                tokens.advance(); // consume _
+                thisArmIsWildcard = true;
+                guard = null;
+            } else {
+                guard = parseExpression();
+            }
+
+            tokens.expect("->");
+            SpnExpressionNode body = parseExpression();
+
+            branches.add(new SpnMatchBranchNode(
+                    new MatchPattern.Wildcard(), new int[0], guard, body));
+            resultType = unifyTypes(resultType, inferType(body));
+
+            if (thisArmIsWildcard) {
+                sawWildcard = true;
+                // A wildcard arm is unconditional — any later arms are dead.
+                // Stop parsing further `|` arms so we don't consume them.
+                break;
+            }
+        }
+
+        if (branches.isEmpty()) {
+            throw tokens.error("Guard-match needs at least one '| cond -> body' arm", matchTok);
+        }
+        if (!sawWildcard) {
+            throw tokens.error(
+                    "Guard-match must end with '| _ -> default' for totality", matchTok);
+        }
+
+        SpnExpressionNode subject = new spn.node.expr.SpnBooleanLiteralNode(true);
+        SpnExpressionNode matchNode = new SpnMatchNode(
+                subject, branches.toArray(new SpnMatchBranchNode[0]));
         if (resultType != null) trackType(matchNode, resultType);
         return matchNode;
     }

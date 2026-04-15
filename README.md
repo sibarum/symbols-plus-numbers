@@ -221,6 +221,16 @@ match z
 ```
 Positional and named forms cannot be mixed in the same pattern.
 
+**Subject-less guard match** replaces the conventional `if/else` chain. There is no `if` keyword in SPN — conditional expressions are written as guard arms of a match:
+```
+let category = match
+  | x < 0      -> "negative"
+  | x < 10     -> "small"
+  | x < 100    -> "medium"
+  | _          -> "huge"
+```
+Each condition is evaluated in order; the first `true` guard wins. The final `| _ -> default` arm is required for totality (a parse error otherwise).
+
 ### Tuple Types & Destructuring
 
 Tuples are first-class with type annotations, return types, and positional destructuring.
