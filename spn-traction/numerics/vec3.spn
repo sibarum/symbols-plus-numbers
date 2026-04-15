@@ -26,8 +26,11 @@ pure -(Vec3, Vec3) -> Vec3 = ((x1, y1, z1), (x2, y2, z2)) {
   Vec3(x1 - x2, y1 - y2, z1 - z2)
 }
 
-pure -(Vec3) -> Vec3 = ((x, y, z)) {
-  Vec3(-x, -y, -z)
+-- Unary negation as a method (mutex rule: operator is binary OR unary).
+-- `-v` expressions fall back to this via the parser.
+pure Vec3.neg() -> Vec3 = () {
+  let (x, y, z) = this
+  Vec3(x.neg(), y.neg(), z.neg())
 }
 
 -- Scalar multiplication: Rational * Vec3
@@ -54,18 +57,6 @@ pure ==(Vec3, Vec3) -> bool = ((x1, y1, z1), (x2, y2, z2)) {
 -- Squared magnitude (avoids square root — stays exact)
 pure Vec3.sqMag() -> Rational = () {
   this *_dot this
-}
-
--- ── inspect ─────────────────────────────────────────────────────────
-
-pure inspect(Vec3) -> string = ((x, y, z)) {
-  "(" ++ inspect(x) ++ ", " ++ inspect(y) ++ ", " ++ inspect(z) ++ ")"
-}
-
-pure inspect(Rational) -> string = ((n, d)) {
-  match d
-  | 1 -> show(n)
-  | _ -> show(n) ++ "/" ++ show(d)
 }
 
 -- ── constants ───────────────────────────────────────────────────────

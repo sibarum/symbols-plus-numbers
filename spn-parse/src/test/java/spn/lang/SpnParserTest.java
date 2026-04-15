@@ -1074,4 +1074,183 @@ x + y
             assertInstanceOf(SpnTupleValue.class, result);
         }
     }
+
+    // ── Operator arity mutex ──────────────────────────────────────────────
+
+    @Nested
+    class OperatorArityMutex {
+        // Rule: for a given operator and first-parameter type, you may define
+        // EITHER a unary OR a binary overload — not both. The alternative form
+        // is expressed as a .neg()/.inv() method, and the parser falls back to
+        // that method when the unary operator overload is absent.
+
+        @Test
+        void unaryThenBinaryOnSameTypeIsRejected() {
+            assertThrows(SpnParseException.class, () -> run("""
+                type Box(int)
+                pure -(Box) -> int = (b) { -(b.0) }
+                pure -(Box, Box) -> int = (a, b) { a.0 - b.0 }
+                0
+                """));
+        }
+
+        @Test
+        void binaryThenUnaryOnSameTypeIsRejected() {
+            assertThrows(SpnParseException.class, () -> run("""
+                type Box(int)
+                pure /(Box, Box) -> int = (a, b) { a.0 / b.0 }
+                pure /(Box) -> int = (b) { b.0 }
+                0
+                """));
+        }
+
+        @Test
+        void binaryOnlyIsAllowed() {
+            // Defining just the binary form is fine — no conflict.
+            assertEquals(2L, run("""
+                type Box(int)
+                pure -(Box, Box) -> int = (a, b) { a.0 - b.0 }
+                let a = Box(5)
+                let b = Box(3)
+                a - b
+                """));
+        }
+
+        @Test
+        void unaryOnlyIsAllowed() {
+            // Defining just the unary form is fine too.
+            assertEquals(-7L, run("""
+                type Box(int)
+                pure -(Box) -> int = (b) { -(b.0) }
+                let w = Box(7)
+                -w
+                """));
+        }
+
+        @Test
+        void negMethodFallbackWhenUnaryOpAbsent() {
+            // With the binary form defined and a .neg() method instead of the
+            // unary operator, `-box` should resolve to box.neg() at parse time.
+            assertEquals(-5L, run("""
+                type Box(int)
+                pure -(Box, Box) -> Box = (a, b) { Box(a.0 - b.0) }
+                pure Box.neg() -> Box = () { Box(-(this.0)) }
+                let w = Box(5)
+                (-w).0
+                """));
+        }
+
+        @Test
+        void differentTypesDoNotConflict() {
+            // Unary -(Box) and binary -(Crate, Crate) are on different types,
+            // so no conflict. (The existing stdlib/traction code relies on this.)
+            assertEquals(-9L, run("""
+                type Box(int)
+                type Crate(int)
+                pure -(Box) -> int = (b) { -(b.0) }
+                pure -(Crate, Crate) -> int = (a, b) { a.0 - b.0 }
+                let w = Box(9)
+                -w
+                """));
+        }
+    }
+
+    // ── Named pattern destructuring ────────────────────────────────────────
+
+    @Nested
+    class NamedPatternDestructuring {
+        // Grammar: Type(field = pattern, field = pattern, ...)
+        // Fields may appear in any order, unspecified fields default to Wildcard,
+        // and duplicate field names are an error. Positional form still works.
+
+        @Test
+        void namedFieldBinding() {
+            // Rational(num=n, denom=d) → binds n, d to the named fields
+            assertEquals(3L, run("""
+                type Rational(num: int, denom: int)
+                let r = Rational(3, 4)
+                match r
+                  | Rational(num = n, denom = d) -> n
+                """));
+        }
+
+        @Test
+        void namedFieldOrderDoesNotMatter() {
+            // Denom first, num second — still binds correctly.
+            assertEquals(7L, run("""
+                type Rational(num: int, denom: int)
+                let r = Rational(3, 4)
+                match r
+                  | Rational(denom = d, num = n) -> n + d
+                """));
+        }
+
+        @Test
+        void unspecifiedFieldsDefaultToWildcard() {
+            // Only bind num; denom is unspecified → wildcard (still matches).
+            assertEquals(3L, run("""
+                type Rational(num: int, denom: int)
+                let r = Rational(3, 4)
+                match r
+                  | Rational(num = n) -> n
+                """));
+        }
+
+        @Test
+        void namedFieldWithNestedPattern() {
+            // Mix named-top with a literal pattern inside.
+            assertEquals("zero", run("""
+                type Rational(num: int, denom: int)
+                let r = Rational(0, 7)
+                match r
+                  | Rational(num = 0) -> "zero"
+                  | _ -> "nonzero"
+                """));
+        }
+
+        @Test
+        void unknownFieldNameRejected() {
+            assertThrows(SpnParseException.class, () -> run("""
+                type Rational(num: int, denom: int)
+                let r = Rational(3, 4)
+                match r
+                  | Rational(numerator = n) -> n
+                """));
+        }
+
+        @Test
+        void duplicateFieldNameRejected() {
+            assertThrows(SpnParseException.class, () -> run("""
+                type Rational(num: int, denom: int)
+                let r = Rational(3, 4)
+                match r
+                  | Rational(num = a, num = b) -> a
+                """));
+        }
+
+        @Test
+        void positionalStillWorks() {
+            // Regression: after adding named, positional must still parse.
+            assertEquals(3L, run("""
+                type Rational(num: int, denom: int)
+                let r = Rational(3, 4)
+                match r
+                  | Rational(n, d) -> n
+                """));
+        }
+
+        @Test
+        void namedCapturesGetFieldType() {
+            // Binding `s` to `TComplex.scale` should pick up the Rational type,
+            // so method dispatch on s resolves at parse time.
+            assertEquals(true, run("""
+                type Rational(n: int, d: int)
+                pure Rational.isZero() -> bool = () { this.0 == 0 }
+                type TComplex(scale: Rational, tangent: Rational)
+                let z = TComplex(Rational(0, 1), Rational(1, 1))
+                match z
+                  | TComplex(scale = s) -> s.isZero()
+                """));
+        }
+    }
 }

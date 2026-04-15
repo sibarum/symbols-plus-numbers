@@ -4,45 +4,54 @@ import Math (toFloat)
 
 type Rational (int, int)
 
+-- Canonical form: every Rational has a single representation per value.
+--   (0, 0)       → (1, 1)    -- 0/0 = 1  (wheel-theoretic same-direction limit)
+--   (0, d), d≠0  → (0, 1)    -- canonical zero
+--   (n, 0), n≠0  → (1, 0)    -- canonical omega (single point at infinity)
+--   (n, d) else  → reduce by gcd, sign carried in the numerator
+-- This lets == be pure structural equality, so Dict keys, structEq, and
+-- hashing all agree with ==.
 pure Rational(int, int) -> Rational = (n, d) {
-  let g = gcd(abs(n), abs(d))
-  match (n, d, g)
-  | (0, 0, _) -> { this(1, 1) }
-  | (0, _, _) -> { this(0, d) }
-  | (_, 0, _) -> { this(n, 0) }
-  | (_, _, 0) -> { this(n, 0) }
-  | _ -> { this(sign(d) * n / g, abs(d) / g) }
+  match (n, d)
+  | (0, 0) -> { this(1, 1) }
+  | (0, _) -> { this(0, 1) }
+  | (_, 0) -> { this(1, 0) }
+  | _ -> {
+      let g = gcd(abs(n), abs(d))
+      this(sign(d) * n / g, abs(d) / g)
+    }
 }
 
 pure Rational(int) -> Rational = (n) {
   this(n, 1)
 }
 
+-- Multiplicative inverse: (n, d).inv() = (d, n). The constructor takes care
+-- of sign migration and the (0,1)→ω, (1,0)→0 wheel endpoints automatically.
 pure Rational.inv() -> Rational = () {
-  Rational(sign(this.0)*this.1, abs(this.0))
+  Rational(this.1, this.0)
 }
 
 pure Rational.neg() -> Rational = () {
   Rational(-this.0, this.1)
 }
 
+-- Structural equality. Safe because the constructor canonicalizes every
+-- representation: (0,_) → (0,1), (_,0) → (1,0), (0,0) → (1,1), other
+-- forms gcd-reduced with sign in the numerator.
 pure ==(Rational, Rational) -> bool = (r1, r2) {
-  match (r1, r2)
-  | ((0, _), (0, _)) -> { true }
-  | ((_, 0), (_, 0)) -> { true }
-  | _ -> { r1.0 == r2.0 && r1.1 == r2.1 }
+  r1.0 == r2.0 && r1.1 == r2.1
 }
 
 pure +(Rational, Rational) -> Rational = ((q1n, q1d), (q2n, q2d)) {
   Rational(q1n*q2d + q2n*q1d, q1d*q2d)
 }
 
+-- Binary subtraction only. Unary negation goes through the .neg() method
+-- (per the operator mutex rule — an operator is unary OR binary, not both).
+-- `-rat` expressions automatically fall back to `rat.neg()` at parse time.
 pure -(Rational, Rational) -> Rational = (q1, q2) {
   q1 + q2.neg()
-}
-
-pure -(Rational) -> Rational = (q) {
-  q.neg()
 }
 
 pure *(Rational, Rational) -> Rational = ((q1n, q1d), (q2n, q2d)) {
@@ -53,12 +62,9 @@ pure *(Rational, int) -> Rational = ((n, d), i) {
   Rational(n*i, d)
 }
 
-pure /(Rational) -> Rational = (q) {
-  Rational(sign(q.0)*q.1, abs(q.0))
-}
-
+-- Binary division only. Multiplicative inverse goes through .inv().
 pure /(Rational, Rational) -> Rational = (q1, q2) {
-  q1 * ( 1/q2 )
+  q1 * q2.inv()
 }
 
 pure compare(Rational, Rational) -> int = (q1, q2) {

@@ -25,7 +25,6 @@ A programming language where numeric types carry their own algebraic rules, patt
   - [Pure Functions & Pattern Matching](#pure-functions--pattern-matching)
   - [Tuple Types & Destructuring](#tuple-types--destructuring)
   - [Closures & Streaming](#closures--streaming)
-  - [Developer Tooling — `inspect`](#developer-tooling--inspect)
   - [Built-in OpenGL Graphics](#built-in-opengl-graphics)
   - [Built-in Mini-IDE](#built-in-mini-ide)
   - [Trace Mode (Debugger)](#trace-mode-debugger)
@@ -155,16 +154,21 @@ Macros support multiple parameters, emit multiple declarations, and can be defin
 
 ### Unary Operator Dispatch
 
-Unary operators dispatch through the same overload system as binary operators.
+Unary operators dispatch through the same overload system as binary operators, **but an operator may be defined as unary OR binary on a given type — never both.** The alternative form lives as a method (`.neg()` for additive inverse, `.inv()` for multiplicative inverse), and `-x` falls back to `x.neg()` at parse time when no unary `-(T)` overload is registered.
 
 ```
--- Additive inverse: -x dispatches to -(T) -> T
-pure -(Rational) -> Rational = ((n, d)) { Rational(-n, d) }
--myRational  -- calls the overload
+-- Option A: type has no subtraction, so unary - defines additive inverse.
+pure -(SmallBox) -> SmallBox = ((n)) { SmallBox(-n) }
+-mySmallBox  -- calls the unary overload directly
 
--- Multiplicative inverse: 1/x dispatches to /(T) -> T
-pure /(Rational) -> Rational = ((n, d)) { Rational(d, n) }
-1/myRational  -- calls the overload (only literal 1 triggers this)
+-- Option B: type has binary subtraction, so unary negation is a method.
+pure -(Rational, Rational) -> Rational = (q1, q2) { q1 + q2.neg() }
+pure Rational.neg() -> Rational = () { Rational(-this.0, this.1) }
+-myRational  -- parser falls back to myRational.neg()
+
+-- Attempting both forms on the same type is a compile error:
+--   Cannot define both unary and binary '-' for Rational — pick one;
+--   use a .neg()/.inv() method for the other form.
 ```
 
 ### Pure Functions & Pattern Matching
@@ -204,6 +208,19 @@ match r
   | Rational(n, d) -> ...   -- OK: nominal destructuring
 ```
 
+**Named field patterns** let you destructure by field name instead of position. Useful when field order would otherwise be implicit:
+```
+type TComplex(scale: Rational, tangent: Rational)
+match z
+  | TComplex(scale = s) -> s.isZero()          -- bind only `scale`; tangent is wildcard
+  | TComplex(tangent = t, scale = s) -> ...    -- any order, any subset
+
+-- Rejected at parse time:
+--   TComplex(foo = x)        → unknown field 'foo' on TComplex
+--   TComplex(scale = a, scale = b)  → duplicate field 'scale'
+```
+Positional and named forms cannot be mixed in the same pattern.
+
 ### Tuple Types & Destructuring
 
 Tuples are first-class with type annotations, return types, and positional destructuring.
@@ -240,15 +257,6 @@ pure range(int, int) = (start, end) {
     i = i + 1
   }
 }
-```
-
-### Developer Tooling — `inspect`
-
-The `inspect` prefix operator provides developer-facing string formatting for any struct type. Registered on the struct descriptor at parse time, used automatically by Trace Mode.
-
-```
-pure inspect(Rational) -> string = (r) { r.0 ++ "/" ++ r.1 }
-inspect myRational   -- "3/4"
 ```
 
 ### Built-in OpenGL Graphics

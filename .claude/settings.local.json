@@ -21,7 +21,12 @@
       "Bash(mvn install:*)",
       "Bash(ls /c/Users/Owner/IdeaProjects/spn-parent/spn-ast/src/main/java/spn/node/*.java)",
       "Bash(python:*)",
-      "Bash(echo \"EXIT: $?\")"
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(wc -l spn-parse/src/main/java/spn/lang/SpnParser.java spn-gui/src/main/java/spn/gui/*.java)",
+      "Bash(mvn -pl spn-ast,spn-parse,spn-stdlib,spn-traction compile -am)",
+      "Bash(grep -E \"^\\\\[INFO\\\\] Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$\")",
+      "Bash(mvn -pl spn-parse compile)",
+      "Bash(grep -E \"^\\\\[INFO\\\\] Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$|BUILD\")"
     ]
   }
 }

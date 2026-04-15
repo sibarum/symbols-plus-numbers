@@ -47,22 +47,6 @@ pure eval(Expr, Dict) -> Rational = (expr, env) {
   | Inv(cs) -> 1/eval(cs[0], env)
 }
 
--- ── pretty-printing ─────────────────────────────────────────────────
-
-pure inspect(Rational) -> string = ((n, d)) {
-  match d | 1 -> show(n) | _ -> show(n) ++ "/" ++ show(d)
-}
-
-pure inspect(Expr) -> string = (expr) {
-  match expr
-  | Lit(v) -> inspect(v)
-  | Var(name) -> show(name)
-  | Add(cs) -> "(" ++ inspect(cs[0]) ++ " + " ++ inspect(cs[1]) ++ ")"
-  | Mul(cs) -> "(" ++ inspect(cs[0]) ++ " * " ++ inspect(cs[1]) ++ ")"
-  | Neg(cs) -> "-" ++ inspect(cs[0])
-  | Inv(cs) -> "(1/" ++ inspect(cs[0]) ++ ")"
-}
-
 -- ── algebraic simplification ────────────────────────────────────────
 -- One-pass recursive simplification. Applies identities bottom-up.
 

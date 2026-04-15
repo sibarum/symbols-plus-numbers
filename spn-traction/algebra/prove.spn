@@ -15,10 +15,6 @@ import Array (append, length)
 
 type Step(rule: string, result: Expr)
 
-pure inspect(Step) -> string = (s) {
-  "[" ++ s.rule ++ "] " ++ inspect(s.result)
-}
-
 -- ── structural equality ─────────────────────────────────────────────
 
 pure structEq(Expr, Expr) -> bool = (a, b) {

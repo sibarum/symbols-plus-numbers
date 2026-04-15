@@ -597,9 +597,7 @@ public class EditorWindow {
         if (tab.getModuleContext() != null && tab.getModuleContext().contains(filePath)) return;
         ModuleContext ctx = ModuleContext.detect(filePath);
         tab.setModuleContext(ctx);
-        if (ctx != null) {
-            flash("Module: " + ctx.getNamespace(), false);
-        }
+        // Module identity surfaces in the HUD via EditorTab.hudText() — no flash needed.
     }
 
     /**

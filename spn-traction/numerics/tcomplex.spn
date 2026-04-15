@@ -26,8 +26,10 @@ pure /(TComplex, TComplex) -> TComplex = ((s1, t1), (s2, t2)) {
   TComplex(scl, tan)
 }
 
-pure -(TComplex) -> TComplex = ((s, t)) {
-  TComplex(-s, t)
+-- Unary negation as a method (mutex rule). `-(tc)` falls back to this.
+pure TComplex.neg() -> TComplex = () {
+  let (s, t) = this
+  TComplex(s.neg(), t)
 }
 
 pure ==(TComplex, TComplex) -> bool = (z1, z2) {
@@ -75,7 +77,7 @@ pure *(Rational, TComplex) -> TComplex = (k, (s, t)) {
 }
 
 pure -(TComplex, TComplex) -> TComplex = (c1, c2) {
-  c1 + (-c2)
+  c1 + c2.neg()
 }
 
 pure TComplex.toCartesian() -> (Rational, Rational) = () {

@@ -130,30 +130,6 @@ class Vec3Test {
     }
 
     @Nested
-    class Inspect {
-        @Test void inspectVec3() {
-            assertEquals("(1, 2, 3)", run("""
-                import numerics.vec3
-                inspect Vec3(Rational(1,1), Rational(2,1), Rational(3,1))
-                """));
-        }
-
-        @Test void inspectRational() {
-            assertEquals("3/4", run("""
-                import numerics.vec3
-                inspect Rational(3,4)
-                """));
-        }
-
-        @Test void inspectWholeNumber() {
-            assertEquals("7", run("""
-                import numerics.vec3
-                inspect Rational(7,1)
-                """));
-        }
-    }
-
-    @Nested
     class Constants {
         @Test void zeroVector() {
             assertEquals(true, run("""

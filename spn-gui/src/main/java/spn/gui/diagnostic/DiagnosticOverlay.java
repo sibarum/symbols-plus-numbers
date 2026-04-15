@@ -49,6 +49,21 @@ public class DiagnosticOverlay {
         return null;
     }
 
+    /** Find an active diagnostic whose span covers the given (row, col), or null.
+     *  Column range is [startCol, endCol] inclusive so the cursor at the boundary
+     *  still picks up the error. endCol == -1 means end-of-line. */
+    public DiagnosticMark findAt(int row, int col) {
+        for (DiagnosticMark m : marks) {
+            if (!m.isActive() || m.row() != row) continue;
+            int startCol = m.diagnostic().startCol();
+            int endCol = m.diagnostic().endCol();
+            if (endCol < 0) endCol = Integer.MAX_VALUE;
+            if (endCol <= startCol) endCol = startCol + 1;
+            if (col >= startCol && col <= endCol) return m;
+        }
+        return null;
+    }
+
     public boolean isEmpty() { return marks.isEmpty(); }
 
     /**

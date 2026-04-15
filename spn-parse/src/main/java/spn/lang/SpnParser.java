@@ -42,6 +42,9 @@ import java.util.*;
 public class SpnParser {
 
     private final SpnTokenizer tokens;
+
+    /** Pattern-parsing is delegated to this helper (created in the constructor). */
+    private final PatternParser patternParser;
     private final SpnLanguage language;
     private final SpnSymbolTable symbolTable;
 
@@ -112,6 +115,18 @@ public class SpnParser {
         if (sourceName != null) {
             this.tokens.setSourceName(sourceName);
         }
+        // Pattern parser holds tokens, struct registry, symbol table, and an
+        // adapter that routes addLocal() through the currently active Scope.
+        this.patternParser = new PatternParser(
+                tokens, structRegistry, symbolTable,
+                new PatternParser.ScopeProvider() {
+                    @Override public int addLocal(String name) {
+                        return currentScope.addLocal(name);
+                    }
+                    @Override public int addLocal(String name, FieldType expected) {
+                        return currentScope.addLocal(name, expected);
+                    }
+                });
     }
 
     public Map<String, spn.node.BuiltinFactory> getBuiltinRegistry() {
@@ -1050,23 +1065,32 @@ public class SpnParser {
         if (isOperator && !paramTypes.isEmpty()) {
             CallTarget ct = functionRegistry.get(name);
             if (ct != null) {
+                // Mutex: an operator may be defined as EITHER unary OR binary on
+                // a given first-parameter type, never both. The alternative form
+                // goes on the type as a .neg() / .inv() method, which the
+                // parser falls back to when the unary overload is absent.
+                FieldType firstType = paramTypes.get(0);
+                int newArity = paramTypes.size();
+                List<OperatorOverload> existing = operatorRegistry.get(name);
+                if (existing != null) {
+                    for (OperatorOverload ov : existing) {
+                        if (ov.paramTypes().length != newArity
+                                && ov.paramTypes().length > 0
+                                && typesMatch(ov.paramTypes()[0], firstType)) {
+                            String other = ov.paramTypes().length == 1 ? "unary" : "binary";
+                            String self  = newArity == 1 ? "unary" : "binary";
+                            throw tokens.error("Cannot define both " + other + " and " + self
+                                    + " '" + name + "' for " + firstType.describe()
+                                    + " — pick one; use a .neg()/.inv() method for the other form");
+                        }
+                    }
+                }
                 operatorRegistry.computeIfAbsent(name, k -> new ArrayList<>())
                         .add(new OperatorOverload(
                                 paramTypes.toArray(new FieldType[0]), returnType, ct));
             }
         }
 
-        // Register inspect function on the struct descriptor
-        if (name.equals("inspect") && paramTypes.size() == 1) {
-            CallTarget ct = functionRegistry.get(name);
-            if (ct != null) {
-                String typeName = paramTypes.get(0).describe();
-                SpnStructDescriptor desc = structRegistry.get(typeName);
-                if (desc != null) {
-                    desc.setInspectTarget(ct);
-                }
-            }
-        }
         return null;
     }
 
@@ -2249,15 +2273,22 @@ public class SpnParser {
                         }
                     }
                 }
+                // Fall back to a .neg() method on the operand's type. This is the
+                // path used when the type follows the mutex rule and keeps only the
+                // binary -(T, T) overload, delegating unary negation to a method.
+                MethodEntry negMethod = resolveMethod(operandType, "neg");
+                if (negMethod != null) {
+                    SpnExpressionNode result = new spn.node.func.SpnMethodInvokeNode(
+                            negMethod.callTarget(), operand, new SpnExpressionNode[0]);
+                    if (negMethod.descriptor() != null && negMethod.descriptor().hasTypedReturn()) {
+                        trackType(result, negMethod.descriptor().getReturnType());
+                    }
+                    return result;
+                }
                 throw tokens.error("No negation defined for " + operandType.describe()
-                        + " — define -(T) -> T");
+                        + " — define -(T) -> T or a T.neg() method");
             }
             return at(SpnNegateNodeGen.create(operand));
-        }
-        if (tokens.check("inspect")) {
-            tokens.advance();
-            SpnExpressionNode operand = parseUnary();
-            return new spn.node.SpnInspectNode(operand);
         }
         return parsePostfix();
     }
@@ -3048,7 +3079,7 @@ public class SpnParser {
     }
 
     private SpnMatchBranchNode parseMatchBranch() {
-        ParsedPattern pp = parsePattern();
+        PatternParser.ParsedPattern pp = patternParser.parsePattern();
         // Optional guard: | x | x > 0 -> ...
         SpnExpressionNode guard = null;
         if (tokens.check("|")) {
@@ -3059,297 +3090,13 @@ public class SpnParser {
         tokens.expect("->");
         SpnExpressionNode body = parseExpression();
 
-        return new SpnMatchBranchNode(pp.pattern, pp.bindingSlots, guard, body);
+        return new SpnMatchBranchNode(pp.pattern(), pp.bindingSlots(), guard, body);
     }
 
-    private record ParsedPattern(MatchPattern pattern, int[] bindingSlots) {}
-
-    private ParsedPattern parsePattern() {
-        SpnParseToken tok = tokens.peek();
-        if (tok == null) throw tokens.error("Expected pattern, but reached end of input");
-
-        // Wildcard: _
-        if (tok.text().equals("_")) {
-            tokens.advance();
-            return new ParsedPattern(new MatchPattern.Wildcard(), new int[0]);
-        }
-
-        // Tuple pattern: (pattern, pattern, ...)
-        if (tok.text().equals("(")) {
-            tokens.advance(); // consume '('
-            List<MatchPattern> elements = new ArrayList<>();
-            while (!tokens.check(")")) {
-                elements.add(parseNestedPattern());
-                tokens.match(",");
-            }
-            tokens.expect(")");
-            return new ParsedPattern(
-                    new MatchPattern.TupleElements(
-                            elements.toArray(MatchPattern[]::new), elements.size()),
-                    new int[0]);
-        }
-
-        // Empty collection: []
-        if (tok.text().equals("[")) {
-            tokens.advance();
-            if (tokens.check("]")) {
-                tokens.advance();
-                return new ParsedPattern(new MatchPattern.EmptyArray(), new int[0]);
-            }
-
-            // [contains :red, :blue]
-            if (tokens.check("contains")) {
-                tokens.advance();
-                List<Object> required = new ArrayList<>();
-                while (!tokens.check("]")) {
-                    if (tokens.checkType(TokenType.SYMBOL)) {
-                        SpnParseToken s = tokens.advance();
-                        required.add(symbolTable.intern(s.text().substring(1)));
-                    } else {
-                        required.add(parseLiteralValue());
-                    }
-                    tokens.match(",");
-                }
-                tokens.expect("]");
-                return new ParsedPattern(
-                        new MatchPattern.SetContaining(required.toArray()),
-                        new int[0]);
-            }
-
-            // [h | t] — head/tail
-            SpnParseToken first = tokens.peek();
-            if (first == null) throw tokens.error("Expected pattern element after '['");
-            SpnParseToken second = tokens.peek(1);
-            if (second != null && second.text().equals("|")) {
-                String headName = tokens.advance().text();
-                tokens.advance(); // consume |
-                String tailName = tokens.advance().text();
-                tokens.expect("]");
-
-                int headSlot = currentScope.addLocal(headName);
-                int tailSlot = currentScope.addLocal(tailName);
-                return new ParsedPattern(new MatchPattern.ArrayHeadTail(),
-                        new int[]{headSlot, tailSlot});
-            }
-
-            // [a, b, c] — exact length with bindings
-            // [:key val, ...] — dict keys pattern
-            if (first.type() == TokenType.SYMBOL) {
-                // Dict keys pattern: [:name n, :age a]
-                List<SpnSymbol> keys = new ArrayList<>();
-                List<Integer> slots = new ArrayList<>();
-                while (!tokens.check("]")) {
-                    SpnParseToken symTok = tokens.expectType(TokenType.SYMBOL);
-                    keys.add(symbolTable.intern(symTok.text().substring(1)));
-                    String bindName = tokens.expectType(TokenType.IDENTIFIER).text();
-                    slots.add(currentScope.addLocal(bindName));
-                    tokens.match(",");
-                }
-                tokens.expect("]");
-                return new ParsedPattern(
-                        new MatchPattern.DictionaryKeys(keys.toArray(new SpnSymbol[0])),
-                        slots.stream().mapToInt(Integer::intValue).toArray());
-            }
-
-            // [a, b, c] exact-length array pattern
-            List<String> names = new ArrayList<>();
-            names.add(tokens.advance().text());
-            while (tokens.match(",")) {
-                names.add(tokens.advance().text());
-            }
-            tokens.expect("]");
-
-            int[] slots = new int[names.size()];
-            for (int i = 0; i < names.size(); i++) {
-                slots[i] = currentScope.addLocal(names.get(i));
-            }
-            return new ParsedPattern(new MatchPattern.ArrayExactLength(names.size()), slots);
-        }
-
-        // String prefix pattern: "http://" ++ rest
-        if (tok.type() == TokenType.STRING) {
-            tokens.advance();
-            String prefix = unescapeString(tok.text());
-            if (tokens.match("++")) {
-                String bindName = tokens.expectType(TokenType.IDENTIFIER).text();
-                int slot = currentScope.addLocal(bindName);
-                return new ParsedPattern(new MatchPattern.StringPrefix(prefix), new int[]{slot});
-            }
-            // Literal string pattern
-            return new ParsedPattern(new MatchPattern.Literal(prefix), new int[0]);
-        }
-
-        // Regex pattern: /regex/(bindings)
-        if (tok.type() == TokenType.REGEX) {
-            tokens.advance();
-            String regex = tok.text().substring(1, tok.text().length() - 1);
-            if (tokens.check("(")) {
-                tokens.advance();
-                List<Integer> slots = new ArrayList<>();
-                while (!tokens.check(")")) {
-                    String bindName = tokens.advance().text();
-                    if (bindName.equals("_")) {
-                        slots.add(-1);
-                    } else {
-                        slots.add(currentScope.addLocal(bindName));
-                    }
-                    tokens.match(",");
-                }
-                tokens.expect(")");
-                return new ParsedPattern(new MatchPattern.StringRegex(regex),
-                        slots.stream().mapToInt(Integer::intValue).toArray());
-            }
-            return new ParsedPattern(new MatchPattern.StringRegex(regex), new int[0]);
-        }
-
-        // Symbol literal: :north
-        if (tok.type() == TokenType.SYMBOL) {
-            tokens.advance();
-            SpnSymbol sym = symbolTable.intern(tok.text().substring(1));
-            return new ParsedPattern(new MatchPattern.Literal(sym), new int[0]);
-        }
-
-        // Number literal
-        if (tok.type() == TokenType.NUMBER) {
-            tokens.advance();
-            // Explicit casts to avoid ternary numeric promotion (long -> double)
-            Object val = tok.text().contains(".")
-                    ? (Object) Double.parseDouble(tok.text())
-                    : (Object) Long.parseLong(tok.text());
-            return new ParsedPattern(new MatchPattern.Literal(val), new int[0]);
-        }
-
-        // Struct pattern: TypeName or TypeName(pattern, pattern, ...)
-        if (tok.type() == TokenType.TYPE_NAME) {
-            tokens.advance();
-            String typeName = tok.text();
-            SpnStructDescriptor desc = structRegistry.get(typeName);
-
-            if (tokens.check("(")) {
-                tokens.advance();
-                List<MatchPattern> fieldPatterns = new ArrayList<>();
-                while (!tokens.check(")")) {
-                    fieldPatterns.add(parseNestedPattern());
-                    tokens.match(",");
-                }
-                tokens.expect(")");
-
-                if (desc != null) {
-                    return new ParsedPattern(
-                            new MatchPattern.StructDestructure(
-                                    desc, fieldPatterns.toArray(MatchPattern[]::new)),
-                            new int[0]);
-                }
-                // Fall through for unknown types
-            }
-
-            if (desc != null) {
-                return new ParsedPattern(new MatchPattern.Struct(desc), new int[0]);
-            }
-            throw tokens.error("Unknown type in pattern: " + typeName, tok);
-        }
-
-        // Identifier — binds the whole value to a variable
-        if (tok.type() == TokenType.IDENTIFIER) {
-            tokens.advance();
-            int slot = currentScope.addLocal(tok.text());
-            return new ParsedPattern(new MatchPattern.Wildcard(), new int[]{slot});
-        }
-
-        throw tokens.error("Expected pattern, got: " + tok.text(), tok);
-    }
-
-    /**
-     * Parse a pattern inside a composite context (tuple element, struct field).
-     * Returns a MatchPattern directly — variable bindings use Capture with
-     * embedded frame slots, so no external bindingSlots array is needed.
-     */
-    private MatchPattern parseNestedPattern() {
-        SpnParseToken tok = tokens.peek();
-        if (tok == null) throw tokens.error("Expected pattern element");
-
-        // Wildcard: _
-        if (tok.text().equals("_")) {
-            tokens.advance();
-            return new MatchPattern.Wildcard();
-        }
-
-        // Boolean literals: true / false
-        // (must come before the IDENTIFIER fallback or they'd be treated as captures)
-        if (tok.text().equals("true") && tok.type() == TokenType.IDENTIFIER) {
-            tokens.advance();
-            return new MatchPattern.Literal(Boolean.TRUE);
-        }
-        if (tok.text().equals("false") && tok.type() == TokenType.IDENTIFIER) {
-            tokens.advance();
-            return new MatchPattern.Literal(Boolean.FALSE);
-        }
-
-        // Number literal
-        if (tok.type() == TokenType.NUMBER) {
-            tokens.advance();
-            Object val = tok.text().contains(".")
-                    ? (Object) Double.parseDouble(tok.text())
-                    : (Object) Long.parseLong(tok.text());
-            return new MatchPattern.Literal(val);
-        }
-
-        // String literal
-        if (tok.type() == TokenType.STRING) {
-            tokens.advance();
-            return new MatchPattern.Literal(unescapeString(tok.text()));
-        }
-
-        // Symbol literal
-        if (tok.type() == TokenType.SYMBOL) {
-            tokens.advance();
-            return new MatchPattern.Literal(symbolTable.intern(tok.text().substring(1)));
-        }
-
-        // Nested tuple: (pattern, pattern, ...)
-        if (tok.text().equals("(")) {
-            tokens.advance();
-            List<MatchPattern> elements = new ArrayList<>();
-            while (!tokens.check(")")) {
-                elements.add(parseNestedPattern());
-                tokens.match(",");
-            }
-            tokens.expect(")");
-            return new MatchPattern.TupleElements(
-                    elements.toArray(MatchPattern[]::new), elements.size());
-        }
-
-        // Struct deconstruction: TypeName(pattern, pattern, ...) or bare TypeName
-        if (tok.type() == TokenType.TYPE_NAME) {
-            tokens.advance();
-            String typeName = tok.text();
-            SpnStructDescriptor desc = structRegistry.get(typeName);
-            if (desc == null) throw tokens.error("Unknown type in pattern: " + typeName, tok);
-
-            if (tokens.check("(")) {
-                tokens.advance();
-                List<MatchPattern> fieldPatterns = new ArrayList<>();
-                while (!tokens.check(")")) {
-                    fieldPatterns.add(parseNestedPattern());
-                    tokens.match(",");
-                }
-                tokens.expect(")");
-                return new MatchPattern.StructDestructure(
-                        desc, fieldPatterns.toArray(MatchPattern[]::new));
-            }
-            return new MatchPattern.Struct(desc);
-        }
-
-        // Identifier — variable capture
-        if (tok.type() == TokenType.IDENTIFIER) {
-            tokens.advance();
-            int slot = currentScope.addLocal(tok.text());
-            return new MatchPattern.Capture(slot);
-        }
-
-        throw tokens.error("Unexpected token in pattern: " + tok.text(), tok);
-    }
-
+    // Pattern parsing lives in {@link PatternParser} (wired up in the
+    // constructor). The parsePattern / parseNestedPattern / parseLiteralValue
+    // methods moved there intact; currentScope.addLocal() is routed through a
+    // ScopeProvider adapter so PatternParser never sees the Scope class.
     // ── Field type parsing ─────────────────────────────────────────────────
 
     private static final Set<String> PRIMITIVE_TYPE_KEYWORDS =
@@ -3506,19 +3253,6 @@ public class SpnParser {
     private SpnSymbol parseSymbolValue() {
         SpnParseToken tok = tokens.expectType(TokenType.SYMBOL);
         return symbolTable.intern(tok.text().substring(1));
-    }
-
-    private Object parseLiteralValue() {
-        SpnParseToken tok = tokens.advance();
-        if (tok.type() == TokenType.NUMBER) {
-            return tok.text().contains(".")
-                    ? (Object) Double.parseDouble(tok.text())
-                    : (Object) Long.parseLong(tok.text());
-        }
-        if (tok.type() == TokenType.STRING) {
-            return unescapeString(tok.text());
-        }
-        throw tokens.error("Expected literal value, got: " + tok.text(), tok);
     }
 
     private String unescapeString(String raw) {

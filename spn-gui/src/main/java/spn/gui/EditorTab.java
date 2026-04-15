@@ -17,7 +17,7 @@ import static org.lwjgl.glfw.GLFW.*;
 public class EditorTab extends ScrollableTab {
 
     static final String BASE_SHORTCUTS =
-            "F5 Run | Ctrl+N New | Ctrl+O Open | Ctrl+S Save | Ctrl+G Logs | Ctrl+/ Help";
+            "F5 Run | Ctrl+N New | Ctrl+O Open | Ctrl+G Logs | Ctrl+/ Help";
 
     private Path filePath;
     private String savedContent = "";
@@ -323,7 +323,26 @@ public class EditorTab extends ScrollableTab {
                 if (!sb.isEmpty()) sb.append(" | ");
                 sb.append(errorCount).append(" error").append(errorCount > 1 ? "s" : "");
             }
-            sb.append(" | Ctrl+S Save | ");
+            sb.append(" | ");
+        }
+
+        // Save hint: show only when the buffer needs saving — either it's
+        // dirty relative to disk, or it hasn't been saved to a file yet.
+        boolean needsSave = isDirty() || filePath == null
+                || !java.nio.file.Files.exists(filePath);
+        if (needsSave) {
+            sb.append("Ctrl+S Save | ");
+        }
+
+        // If the cursor is inside an active error region, surface its message.
+        if (errorCount > 0) {
+            DiagnosticMark atCursor = diagnosticOverlay.findAt(
+                    textArea.getCursorRow(), textArea.getCursorCol());
+            if (atCursor != null) {
+                // Sanitise: HUD splits segments on " | ", so collapse any pipes.
+                String msg = atCursor.diagnostic().message().replace('|', '/');
+                sb.append("Error: ").append(msg).append(" | ");
+            }
         }
 
         // Hints
@@ -331,7 +350,7 @@ public class EditorTab extends ScrollableTab {
             sb.append("*Ctrl+N New | ");
         }
         if (moduleContext != null) {
-            sb.append("*Ctrl+M Module | ");
+            sb.append("*Ctrl+M Module ").append(moduleContext.getNamespace()).append(" | ");
         }
 
         // Undo branch info (compact)

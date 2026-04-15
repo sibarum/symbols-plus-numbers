@@ -34,14 +34,6 @@ pure distSq(Point, Point) -> Rational = ((ax, ay), (bx, by)) {
   dx * dx + dy * dy
 }
 
-pure inspect(Rational) -> string = ((n, d)) {
-  match d | 1 -> show(n) | _ -> show(n) ++ "/" ++ show(d)
-}
-
-pure inspect(Point) -> string = ((x, y)) {
-  "(" ++ inspect(x) ++ ", " ++ inspect(y) ++ ")"
-}
-
 -- ── shape types ─────────────────────────────────────────────────────
 
 type Circle(center: Point, radiusSq: Rational)
@@ -94,18 +86,6 @@ pure crossSign(Point, Point, Point) -> int = ((ax, ay), (bx, by), (px, py)) {
   match cross
   | Rational(0, _) -> 0
   | _ -> { if cross > Rational.zero { 1 } else { -1 } }
-}
-
--- ── inspect shapes ──────────────────────────────────────────────────
-
-pure inspect(Shape) -> string = (s) {
-  match s
-  | Circle(c, rSq) ->
-      "Circle(" ++ inspect(c) ++ ", rSq=" ++ inspect(rSq) ++ ")"
-  | Rect(o, w, h) ->
-      "Rect(" ++ inspect(o) ++ ", " ++ inspect(w) ++ "x" ++ inspect(h) ++ ")"
-  | Triangle(a, b, c) ->
-      "Triangle(" ++ inspect(a) ++ ", " ++ inspect(b) ++ ", " ++ inspect(c) ++ ")"
 }
 
 -- ── utilities ───────────────────────────────────────────────────────
