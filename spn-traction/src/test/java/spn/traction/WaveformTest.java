@@ -1,5 +1,7 @@
 package spn.traction;
 
+import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Engine;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -23,6 +25,8 @@ class WaveformTest {
 
     @BeforeEach
     void setUp() {
+        Engine engine = Engine.newBuilder().build();
+        Context context = Context.newBuilder().engine(engine).build();
         symbolTable = new SpnSymbolTable();
         registry = new SpnModuleRegistry();
         spn.stdlib.gen.StdlibModuleLoader.registerAll(registry);

@@ -30,9 +30,11 @@ public final class SpnLanguage extends TruffleLanguage<SpnContext> {
     /**
      * Parses SPN source code into an executable CallTarget via the Polyglot API.
      *
-     * Note: The editor (spn-gui) drives parsing directly through {@code SpnParser},
-     * bypassing this entry point. This method exists for GraalVM polyglot embedding
-     * and is not yet wired up.
+     * <p>Not yet wired — the editor (spn-gui) and tests drive parsing directly
+     * through {@code SpnParser}, bypassing this entry point. Wiring this
+     * requires resolving the spn-ast → spn-parse dependency direction (parser
+     * depends on AST types, not vice versa). A callback or service-loader
+     * pattern would work.
      */
     @Override
     protected CallTarget parse(ParsingRequest request) {

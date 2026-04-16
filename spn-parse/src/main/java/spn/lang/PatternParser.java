@@ -63,6 +63,17 @@ final class PatternParser {
             return new ParsedPattern(new MatchPattern.Wildcard(), new int[0]);
         }
 
+        // Boolean literals: true / false
+        // Must come before IDENTIFIER fallback or they'd be treated as variable bindings.
+        if (tok.text().equals("true") && tok.type() == TokenType.IDENTIFIER) {
+            tokens.advance();
+            return new ParsedPattern(new MatchPattern.Literal(Boolean.TRUE), new int[0]);
+        }
+        if (tok.text().equals("false") && tok.type() == TokenType.IDENTIFIER) {
+            tokens.advance();
+            return new ParsedPattern(new MatchPattern.Literal(Boolean.FALSE), new int[0]);
+        }
+
         // Tuple pattern: (pattern, pattern, ...)
         if (tok.text().equals("(")) {
             tokens.advance(); // consume '('

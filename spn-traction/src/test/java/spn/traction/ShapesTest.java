@@ -1,5 +1,7 @@
 package spn.traction;
 
+import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Engine;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -22,6 +24,8 @@ class ShapesTest {
 
     @BeforeEach
     void setUp() {
+        Engine engine = Engine.newBuilder().build();
+        Context context = Context.newBuilder().engine(engine).build();
         symbolTable = new SpnSymbolTable();
         registry = new SpnModuleRegistry();
         spn.stdlib.gen.StdlibModuleLoader.registerAll(registry);
@@ -37,6 +41,104 @@ class ShapesTest {
         SpnParser parser = new SpnParser(source, null, null, symbolTable, registry);
         SpnRootNode root = parser.parse();
         return root.getCallTarget().call();
+    }
+
+    @Test
+    void matchOnBoolWorks() {
+        // Sanity check: does match on a boolean work AT ALL?
+        assertEquals("no", run("""
+            import geometry.shapes
+            match false | true -> "yes" | _ -> "no"
+            """));
+    }
+
+    @Test
+    void matchOnComparisonResult() {
+        // Does match on a comparison result work?
+        assertEquals("no", run("""
+            import geometry.shapes
+            let x = Rational(12, 1)
+            let cmp = x < Rational.zero
+            match cmp | true -> "yes" | _ -> "no"
+            """));
+    }
+
+    @Test
+    void compareAndLessThanThroughModule() {
+        // Verify both compare and < work through the module
+        Object cmp = run("""
+            import geometry.shapes
+            compare(Rational(12, 1), Rational(0, 1))
+            """);
+        assertTrue((long) cmp > 0, "compare(12, 0) should be positive, got: " + cmp);
+
+        Object lt = run("""
+            import geometry.shapes
+            Rational(12, 1) < Rational.zero
+            """);
+        assertEquals(false, lt, "12 < 0 should be false");
+
+        // Now test the EXACT area pattern: match ... | true -> ... | _ -> ...
+        Object area = run("""
+            import geometry.shapes
+            let det = Rational(12, 1)
+            match det < Rational.zero
+              | true -> det.neg()
+              | _ -> det
+            """);
+        assertEquals("Rational(12, 1)", area.toString(), "absDet should be 12, got: " + area);
+    }
+
+    @Test
+    void detIsPositiveForCCW() {
+        // Direct check: the determinant for our test triangle should be positive
+        Object result = run("""
+            import geometry.shapes
+            let a = Point(Rational(0,1), Rational(0,1))
+            let b = Point(Rational(4,1), Rational(0,1))
+            let c = Point(Rational(0,1), Rational(3,1))
+            let (ax, ay) = a
+            let (bx, by) = b
+            let (cx, cy) = c
+            let det = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay)
+            det > Rational.zero
+            """);
+        assertEquals(true, result, "det should be positive (12 > 0)");
+    }
+
+    @Test
+    void lessThanOnRational() {
+        // Specifically test < on Rational (not >, which rationalOrderingWorks uses)
+        assertEquals(false, run("""
+            import geometry.shapes
+            Rational(12, 1) < Rational.zero
+            """), "12 < 0 should be false");
+    }
+
+    @Test
+    void areaReturnsRawValue() {
+        // Get the raw area value to see what we're dealing with
+        Object result = run("""
+            import geometry.shapes
+            let t = Triangle(
+                Point(Rational(0,1), Rational(0,1)),
+                Point(Rational(4,1), Rational(0,1)),
+                Point(Rational(0,1), Rational(3,1)))
+            area(t)
+            """);
+        // If -6: compare is inverted in module. If 6: fixed.
+        assertEquals("Rational(6, 1)", result.toString(), "area returned: " + result);
+    }
+
+    @Test void absDetWorks() {
+        // Check the absolute value logic matches
+        Object result = run("""
+            import geometry.shapes
+            let det = Rational(12, 1)
+            let absDet = match det < Rational.zero | true -> det.neg() | _ -> det
+            absDet == Rational(12, 1)
+            """);
+        assertEquals(true, result, "absDet of 12 should be 12");
     }
 
     @Test
@@ -61,7 +163,6 @@ class ShapesTest {
         }
 
         @Test
-        @org.junit.jupiter.api.Disabled("Passes in isolation, fails in full suite — test-ordering isolation issue")
         void triangleArea() {
             // Triangle (0,0), (4,0), (0,3) → area = |4*3|/2 = 6
             assertEquals(true, run("""
@@ -98,7 +199,8 @@ class ShapesTest {
 
     @Nested
     class Transform {
-        @Test void translateRect() {
+        @Test
+        void translateRect() {
             assertEquals(true, run("""
                 import geometry.shapes
                 let r = Rect(Point(Rational(1,1), Rational(2,1)), Rational(3,1), Rational(4,1))
@@ -114,7 +216,6 @@ class ShapesTest {
     @Nested
     class Bounds {
         @Test
-        @org.junit.jupiter.api.Disabled("Same isolation issue as triangleArea")
         void triangleBounds() {
             assertEquals(true, run("""
                 import geometry.shapes
