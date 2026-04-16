@@ -31,7 +31,7 @@ A programming language where numeric types carry their own algebraic rules, patt
 - [Standard Library](#standard-library)
 - [Architecture](#architecture)
   - [Type System](#type-system)
-  - [Parse-Time Type Inference](#parse-time-type-inference)
+  - [Compile-Time Type Resolution](#compile-time-type-resolution)
   - [Design Principles](#design-principles)
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
@@ -59,9 +59,9 @@ pure +(Rational, Rational) -> Rational = ((n1, d1), (n2, d2)) {
   Rational(n1*d2 + d1*n2, d1*d2)
 }
 
--- Unary inverse operators
-pure -(Rational) -> Rational = ((n, d)) { Rational(-n, d) }
-pure /(Rational) -> Rational = ((n, d)) { Rational(d, n) }
+-- Unary inverses as methods (operator mutex: unary OR binary, not both)
+pure Rational.neg() -> Rational = () { Rational(-this.0, this.1) }
+pure Rational.inv() -> Rational = () { Rational(this.1, this.0) }
 
 -- Derive ordering from a single comparator
 import Ordering
@@ -294,6 +294,7 @@ An OpenGL-based editor with:
 
 - **Syntax highlighting** with incremental lexing
 - **Real-time diagnostics** — parse errors appear as you type (0.6s debounce)
+- **Ctrl+T** — type info: shows resolved operator dispatches for the current line (e.g. `+(Rational, Rational)`)
 - **Ctrl+F / Ctrl+H** — find and replace with live highlighting
 - **Ctrl+P** — command palette (action menu)
 - **Ctrl+/** — help browser
@@ -339,7 +340,7 @@ Canvas functions (`canvas`, `show`, `clear`, `fill`, `stroke`, `strokeWeight`, `
 ```
 spn-parent/
   spn-ast/        Core AST nodes, type system, trace recorder, runtime
-  spn-parse/      Hand-written recursive descent parser, lexer, macro expander
+  spn-parse/      Parser (Pratt precedence), TypeResolver, PatternParser, TypeParser, TypeGraph
   spn-stdlib/     Standard library (Java builtins + SPN-source modules in src/main/spn/)
   spn-canvas/     OpenGL 2D drawing API + plotting library (spn.canvas.draw, spn.canvas.plot)
   spn-fonts/      SDF font rendering via STB/LWJGL (per-context VAO, shared atlas)
@@ -364,18 +365,21 @@ SPN uses nominal typing throughout. The type hierarchy includes:
 - **Collections** -- Array, Set, Dictionary (unified `[]` syntax)
 - **Function types** -- typed callable references
 
-### Parse-Time Type Inference
+### Compile-Time Type Resolution
 
-The parser tracks expression types through the full precedence chain. This enables:
+The `TypeResolver` (separate from the parser) tracks expression types and resolves every dispatch decision before execution. Every operator, method call, and promotion is resolved at compile time with certainty — no runtime dispatch. This enables:
 
-- **Operator dispatch** at parse time (not runtime) with promotion chains
+- **Operator dispatch** at compile time (not runtime) with promotion chains
 - **Method resolution** on inferred receiver types
 - **Categorical pattern checking** (tuple patterns can't match structs, etc.)
-- **Missing overload detection** ("No overload for +(Foo, Bar)" at parse time)
+- **Missing overload detection** ("No overload for +(Foo, Bar)" at compile time)
 - **Exhaustiveness checking** on union/variant subjects
-- **Block/if/match type unification** (branch types merge into unions)
+- **Match type unification** (branch types merge into unions)
 - **Implicit argument promotion** via user-defined `promote` rules at function call sites
 - **Implicit Long-to-Double widening** at function boundaries
+- **IDE dispatch annotations** (Ctrl+T shows resolved overloads per line)
+
+The `TypeGraph` records every declaration (types, functions, operators, promotions) with source positions, enabling go-to-definition, find-usages, and incremental re-inference on edit.
 
 ### Design Principles
 
@@ -387,6 +391,7 @@ The parser tracks expression types through the full precedence chain. This enabl
 - **Nominal typing.** Structs, tuples, and algebraic types are categorically distinct. No cross-type structural matching in pattern matching.
 - **Newlines are statement boundaries.** No semicolons. Operators on a new line start a new expression (same-line rule for function calls, binary minus, and parenthesized expressions).
 - **Definition order matters.** Each line can use everything above it. Unary operators before binary operators that use them. Types before functions that reference them. The file reads as a dependency chain.
+- **No `if` keyword.** Conditionals are subject-less guard matches: `match | cond -> a | _ -> b`. One canonical form for all branching.
 - **Macros are code templates.** Compile-time textual substitution with function-invocation semantics. Output is normal SPN code, debuggable and inspectable.
 
 ## Getting Started
@@ -420,6 +425,7 @@ This launches the SPN editor. The IDE opens with an empty editor tab. From there
 | Open file | Ctrl+O |
 | Save | Ctrl+S |
 | Find / Replace | Ctrl+F / Ctrl+H |
+| Type Info | Ctrl+T |
 | Command palette | Ctrl+P |
 | Help | Ctrl+/ |
 | Import browser | Ctrl+I |
@@ -435,6 +441,8 @@ mvn test
 
 ## Future Directions
 
+- **TypeGraph-driven IDE features** -- go-to-definition, find-usages, and dependency visualization powered by the unified declaration graph
+- **Incremental type inference** -- exploit definition-order for sub-millisecond re-inference on edits (invalidate from edit line onward, cache above)
 - **Macro evolution** -- `emit { }` blocks with logic, `Type` as a first-class type, compile-time evaluation, macro composition via splicing
 - **AND-types (interfaces)** -- globally namespaced interfaces that can be dynamically attached to any type at compile time, enabling omnidirectional dependency injection
 - **`=?` three-way comparator** -- single `compareTo` dispatch replacing individual `<`, `>`, `<=`, `>=` overloads, returning `:lt | :eq | :gt`
