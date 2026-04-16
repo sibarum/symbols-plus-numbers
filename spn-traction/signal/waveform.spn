@@ -6,6 +6,7 @@
 
 import numerics.rational
 import Array (append, length)
+import numerics.tcomplex
 
 -- ── generators ──────────────────────────────────────────────────────
 

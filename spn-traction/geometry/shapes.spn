@@ -60,6 +60,16 @@ pure area(Shape) -> Rational = (s) {
 
 -- ── containment ─────────────────────────────────────────────────────
 
+-- Sign of the cross product (a→b) × (a→p) — must precede contains()
+pure crossSign(Point, Point, Point) -> int = ((ax, ay), (bx, by), (px, py)) {
+  let cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+  match cross
+  | Rational(0, _) -> 0
+  | _ -> match
+      | cross > Rational.zero -> 1
+      | _ -> -1
+}
+
 pure contains(Shape, Point) -> bool = (s, p) {
   match s
   | Circle(center, rSq) -> distSq(center, p) <= rSq
@@ -78,16 +88,6 @@ pure contains(Shape, Point) -> bool = (s, p) {
       let hasPos = d1 > 0 || d2 > 0 || d3 > 0
       (hasNeg && hasPos) == false
     }
-}
-
--- Sign of the cross product (a→b) × (a→p)
-pure crossSign(Point, Point, Point) -> int = ((ax, ay), (bx, by), (px, py)) {
-  let cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
-  match cross
-  | Rational(0, _) -> 0
-  | _ -> match
-      | cross > Rational.zero -> 1
-      | _ -> -1
 }
 
 -- ── utilities ───────────────────────────────────────────────────────

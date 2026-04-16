@@ -1092,7 +1092,7 @@ public class SpnParser {
     private SpnStatementNode parseMethodDecl(boolean isPure, SpnParseToken nameTok) {
         String typeName = tokens.advance().text(); // consume TypeName
         tokens.advance(); // consume '.'
-        String methodName = tokens.expectType(TokenType.IDENTIFIER).text();
+        String methodName = expectIdentifier().text();
 
         List<FieldType> paramTypes = parseParamTypeList();
         FieldType returnType = parseOptionalReturnType();
@@ -1158,7 +1158,7 @@ public class SpnParser {
     /** Parse a regular function or operator overload declaration. */
     private SpnStatementNode parseOperatorOrFuncDecl(boolean isPure, boolean isOperator) {
         String name = isOperator ? tokens.advance().text()
-                : tokens.expectType(TokenType.IDENTIFIER).text();
+                : expectIdentifier().text();
 
         List<FieldType> paramTypes = parseParamTypeList();
         FieldType returnType = parseOptionalReturnType();
@@ -1311,6 +1311,7 @@ public class SpnParser {
 
         // Parse body — function name is visible for recursion via deferred lookup
         deferredFunctionName = name;
+        deferredReturnType = returnType;
         containsYield = false;
         boolean outerPurity = currentFunctionIsPure;
         currentFunctionIsPure = isPure;
@@ -1319,6 +1320,7 @@ public class SpnParser {
         SpnExpressionNode body = parseBlockBody();
         tokens.expect("}");
         deferredFunctionName = null;
+        deferredReturnType = null;
         currentFunctionIsPure = outerPurity;
         boolean isProducer = containsYield;
 
@@ -1386,6 +1388,7 @@ public class SpnParser {
 
     // Support for recursive function references, yield detection, purity tracking, and factories
     private String deferredFunctionName;
+    private FieldType deferredReturnType; // return type of the function being defined (for self-call type tracking)
     private boolean containsYield;
     private boolean currentFunctionIsPure;
     private String currentFactoryTypeName; // non-null when inside a factory body
@@ -1437,7 +1440,7 @@ public class SpnParser {
             return SpnWriteLocalVariableNodeGen.create(value, slot);
         }
 
-        String name = tokens.expectType(TokenType.IDENTIFIER).text();
+        String name = expectIdentifier().text();
 
         // Optional type annotation
         FieldType annotatedType = null;
@@ -1647,6 +1650,19 @@ public class SpnParser {
                         + " of '" + calleeName + "' (expected " + paramTypes[i].describe() + ")", callTok);
             }
         }
+    }
+
+    /**
+     * Expect an identifier token, also accepting PATTERN_KW tokens (contains,
+     * length, etc.) which are contextual keywords — valid as identifiers
+     * outside of pattern context.
+     */
+    private SpnParseToken expectIdentifier() {
+        SpnParseToken tok = tokens.peek();
+        if (tok != null && (tok.type() == TokenType.IDENTIFIER || tok.type() == TokenType.PATTERN_KW)) {
+            return tokens.advance();
+        }
+        return tokens.expectType(TokenType.IDENTIFIER); // will throw with a good message
     }
 
     /** Attach source span from the last consumed token (start = end = that token). */
@@ -2357,11 +2373,15 @@ public class SpnParser {
                 return builtin.create(args.toArray(new SpnExpressionNode[0]));
             }
 
-            // Self-recursive call — the function is being defined right now
+            // Self-recursive call — the function is being defined right now.
+            // Track the declared return type so downstream operators can dispatch.
             if (name.equals(deferredFunctionName)) {
                 SpnDeferredInvokeNode deferred = new SpnDeferredInvokeNode(
                         name, args.toArray(new SpnExpressionNode[0]));
                 deferredCalls.add(deferred);
+                if (deferredReturnType != null) {
+                    trackType(deferred, deferredReturnType);
+                }
                 return deferred;
             }
 
