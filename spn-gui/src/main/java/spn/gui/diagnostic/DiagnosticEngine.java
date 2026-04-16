@@ -30,6 +30,9 @@ public class DiagnosticEngine {
     private double lastEditTime = -1;
     private boolean dirty;
 
+    /** Dispatch annotations from the last successful parse. */
+    private java.util.List<spn.lang.IncrementalParser.DispatchAnnotation> dispatches = java.util.List.of();
+
     private final SpnSymbolTable symbolTable;
     private final SpnModuleRegistry registry;
 
@@ -74,6 +77,11 @@ public class DiagnosticEngine {
 
         IncrementalParser.Result result = incrementalParser.parse(source, fileName);
 
+        // Cache dispatch annotations for IDE display
+        if (result.dispatches() != null && !result.dispatches().isEmpty()) {
+            dispatches = result.dispatches();
+        }
+
         // Convert parse errors to diagnostic marks
         List<DiagnosticMark> newMarks = new ArrayList<>();
         for (IncrementalParser.ParseError err : result.errors()) {
@@ -110,6 +118,22 @@ public class DiagnosticEngine {
         // For now: mark dirty so the next update triggers a full re-parse.
         dirty = true;
         lastEditTime = 0; // bypass debounce — re-parse immediately
+    }
+
+    /**
+     * Collect all dispatch annotations on the given line, formatted as a
+     * HUD-ready string. Returns null if no dispatches on this line.
+     * Example: "-(Rational, Rational) | /(Rational, Rational) | +(Rational, Rational)"
+     */
+    public String dispatchesOnLine(int line) {
+        var sb = new StringBuilder();
+        for (var d : dispatches) {
+            if (d.line() < line) continue;
+            if (d.line() > line) break;
+            if (!sb.isEmpty()) sb.append("  ");
+            sb.append(d.description().replace('|', '/'));
+        }
+        return sb.isEmpty() ? null : sb.toString();
     }
 
     /** Get the incremental parser for inspection (e.g., cached spans for diffing). */

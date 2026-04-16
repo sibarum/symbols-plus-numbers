@@ -155,6 +155,7 @@ public class EditorWindow {
             if (ctx != null) pushLegacyMode(new ModuleMode(this, ctx));
             else flash("No module loaded \u2014 cannot find module.spn", true);
         });
+        actionRegistry.register("Type Info",     "View",   "Ctrl+T",       "Show resolved operator dispatches for the current line. Displays which overloads are called (e.g. +(Rational, Rational)). Dismissed by any keystroke.", () -> {});
         actionRegistry.register("Help",          "Help",   "Ctrl+/",       "Open the help search. Search commands, shortcuts, and API reference.", () -> pushLegacyMode(new HelpMode(this, actionRegistry)));
     }
 

@@ -35,6 +35,10 @@ public class EditorTab extends ScrollableTab {
     private final StringBuilder findQuery = new StringBuilder();
     private final StringBuilder replaceQuery = new StringBuilder();
 
+    // Type-info HUD mode: Ctrl+T shows dispatch info for the current line.
+    // Dismissed by any subsequent keystroke.
+    private boolean typeInfoActive;
+
     EditorTab(EditorWindow window) {
         super(window);
 
@@ -148,6 +152,17 @@ public class EditorTab extends ScrollableTab {
             }
             // Swallow all other keys while in find mode (except pure modifier presses)
             return true;
+        }
+
+        // Ctrl+T: type-info HUD (shows dispatch for current line)
+        if (ctrl && key == GLFW_KEY_T && action == GLFW_PRESS) {
+            typeInfoActive = true;
+            return true;
+        }
+        // Any other key dismisses type-info mode
+        if (typeInfoActive) {
+            typeInfoActive = false;
+            // Don't consume — let the key propagate to its normal handler
         }
 
         // Ctrl+F opens find mode
@@ -307,6 +322,15 @@ public class EditorTab extends ScrollableTab {
     public String hudText() {
         // Find/replace mode takes over the HUD
         if (findActive) return findHudText();
+
+        // Type-info mode: Ctrl+T shows all dispatches on the current line
+        if (typeInfoActive) {
+            String info = diagnosticEngine.dispatchesOnLine(textArea.getCursorRow());
+            if (info != null) {
+                return "Types: " + info;
+            }
+            return "Types: (no dispatches on this line)";
+        }
 
         StringBuilder sb = new StringBuilder();
 

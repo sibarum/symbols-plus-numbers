@@ -1788,6 +1788,11 @@ public class SpnParser {
         SpnParseToken opTok = tokens.lastConsumed();
         SpnExpressionNode dispatched = fallback == BinaryFallback.NO_DISPATCH
                 ? null : tryOperatorDispatch(symbol, left, right);
+        if (dispatched != null) {
+            // Tag the resolved node with the operator's source position so the
+            // IDE can show dispatch annotations at the right location.
+            at(dispatched, opTok);
+        }
         if (dispatched == null) {
             dispatched = switch (fallback) {
                 case ARITHMETIC -> {
@@ -1908,6 +1913,7 @@ public class SpnParser {
                 SpnExpressionNode dispatched = tryOperatorDispatch("/", left, right);
                 if (dispatched == null) dispatched = tryUnaryInverse(left, right);
                 if (dispatched != null) {
+                    at(dispatched, tokens.lastConsumed());
                     if (op.resultType() != null) trackType(dispatched, op.resultType());
                     left = dispatched;
                     continue;
@@ -1920,6 +1926,7 @@ public class SpnParser {
                 if (dispatched == null) {
                     throw tokens.error("No overload found for qualified operator: " + resolved);
                 }
+                at(dispatched, tokens.lastConsumed());
                 left = dispatched;
                 continue;
             }
@@ -1948,10 +1955,11 @@ public class SpnParser {
 
     private SpnExpressionNode parseUnary() {
         if (tokens.match("-")) {
+            SpnParseToken minusTok = tokens.lastConsumed();
             SpnExpressionNode operand = parseUnary();
             // Try compile-time dispatch: unary overload or .neg() method
             SpnExpressionNode dispatched = resolver.tryUnaryDispatch("-", operand);
-            if (dispatched != null) return dispatched;
+            if (dispatched != null) return at(dispatched, minusTok);
             // Primitive negation (int/float)
             return at(SpnNegateNodeGen.create(operand));
         }

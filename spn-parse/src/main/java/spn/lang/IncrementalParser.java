@@ -37,9 +37,13 @@ public final class IncrementalParser {
     /** A parse error with location info. */
     public record ParseError(int line, int col, String message) {}
 
+    /** A compile-time dispatch annotation for IDE display. */
+    public record DispatchAnnotation(int line, int col, String description) {}
+
     /** Result of an incremental parse. */
     public record Result(
             List<ParseError> errors,
+            List<DispatchAnnotation> dispatches, // resolved overloads for IDE display
             boolean fullReparse,   // true if a full reparse was needed
             int totalSpans,        // total declaration spans
             int invalidatedSpans   // spans that needed re-parsing
@@ -55,7 +59,7 @@ public final class IncrementalParser {
     public Result parse(String source, String fileName) {
         if (source.isBlank()) {
             cache.invalidateAll();
-            return new Result(List.of(), false, 0, 0);
+            return new Result(List.of(), List.of(), false, 0, 0);
         }
 
         // Scan into declaration spans
@@ -70,9 +74,10 @@ public final class IncrementalParser {
             if (!cs.valid()) invalidated++;
         }
 
-        // If nothing changed, return cached errors
+        // If nothing changed, return cached errors with last dispatch data
         if (invalidated == 0) {
-            return new Result(collectCachedErrors(cachedSpans, spans), false, spans.size(), 0);
+            return new Result(collectCachedErrors(cachedSpans, spans),
+                    lastDispatches, false, spans.size(), 0);
         }
 
         // Something changed — do a full parse (for correctness with cross-references)
@@ -86,6 +91,8 @@ public final class IncrementalParser {
             for (int i = 0; i < cachedSpans.size(); i++) {
                 cache.markValid(i);
             }
+            // Extract dispatch annotations from the resolver
+            lastDispatches = extractDispatches(parser.getResolver());
         } catch (SpnParseException pe) {
             int errorLine = pe.getLine() > 0 ? pe.getLine() - 1 : Math.max(0, spans.size() - 1);
             int errorCol = pe.getCol() > 0 ? pe.getCol() - 1 : 0;
@@ -110,7 +117,33 @@ public final class IncrementalParser {
             errors.add(new ParseError(lastLine, 0, msg));
         }
 
-        return new Result(errors, true, spans.size(), invalidated);
+        return new Result(errors, lastDispatches, true, spans.size(), invalidated);
+    }
+
+    /** Cached dispatch annotations from the last successful parse. */
+    private List<DispatchAnnotation> lastDispatches = List.of();
+
+    /** Extract dispatch annotations from a resolver into position-indexed records. */
+    private List<DispatchAnnotation> extractDispatches(TypeResolver resolver) {
+        if (resolver == null) return List.of();
+        var dispatches = resolver.allDispatches();
+        if (dispatches.isEmpty()) return List.of();
+        List<DispatchAnnotation> result = new ArrayList<>();
+        for (var entry : dispatches.entrySet()) {
+            var node = entry.getKey();
+            var record = entry.getValue();
+            if (node.hasSourcePosition()) {
+                // Convert from 1-based parser lines to 0-based editor lines
+                result.add(new DispatchAnnotation(
+                        node.getSourceLine() - 1, node.getSourceCol(),
+                        record.resolvedTarget()));
+            }
+        }
+        // Sort by line then col for binary search in the GUI
+        result.sort((a, b) -> a.line() != b.line()
+                ? Integer.compare(a.line(), b.line())
+                : Integer.compare(a.col(), b.col()));
+        return List.copyOf(result);
     }
 
     /** Get the current declaration spans (for diff/inspection). */
