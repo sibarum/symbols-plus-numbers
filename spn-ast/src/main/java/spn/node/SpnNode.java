@@ -23,11 +23,13 @@ import spn.type.SpnTypes;
 @NodeInfo(language = "SPN", description = "The abstract base node for all SPN nodes")
 public abstract class SpnNode extends Node {
 
-    // ── Source location (set by parser, read by SpnException) ───────────────
+    // ── Source location (set by parser, read by SpnException and IDE) ──────
 
     private String sourceFile;
     private int sourceLine = -1;
     private int sourceCol = -1;
+    private int sourceEndLine = -1;
+    private int sourceEndCol = -1;
 
     public void setSourcePosition(String file, int line, int col) {
         this.sourceFile = file;
@@ -35,8 +37,19 @@ public abstract class SpnNode extends Node {
         this.sourceCol = col;
     }
 
+    public void setSourceSpan(String file, int line, int col, int endLine, int endCol) {
+        this.sourceFile = file;
+        this.sourceLine = line;
+        this.sourceCol = col;
+        this.sourceEndLine = endLine;
+        this.sourceEndCol = endCol;
+    }
+
     public String getSourceFile() { return sourceFile; }
     public int getSourceLine() { return sourceLine; }
     public int getSourceCol() { return sourceCol; }
+    public int getSourceEndLine() { return sourceEndLine; }
+    public int getSourceEndCol() { return sourceEndCol; }
     public boolean hasSourcePosition() { return sourceLine >= 0; }
+    public boolean hasSourceSpan() { return sourceEndLine >= 0; }
 }

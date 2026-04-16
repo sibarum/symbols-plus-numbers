@@ -200,6 +200,39 @@ public class SpnParser {
         }
     }
 
+    // ── Error recovery ──────────────────────────────────────────────────────
+
+    /** Keywords that start a new top-level declaration — safe to resume after. */
+    private static final Set<String> SYNC_KEYWORDS = Set.of(
+            "type", "data", "struct", "pure", "action", "let", "const",
+            "import", "module", "version", "require", "macro", "promote"
+    );
+
+    /**
+     * Skip tokens until we reach a declaration-boundary keyword. This puts the
+     * parser at a point where {@link #parseTopLevel()} can resume cleanly.
+     * Skips at most to EOF.
+     */
+    private void synchronize() {
+        while (tokens.hasMore()) {
+            SpnParseToken tok = tokens.peek();
+            if (tok == null) break;
+            // A keyword that starts a declaration is a safe resume point
+            if (tok.type() == TokenType.KEYWORD && SYNC_KEYWORDS.contains(tok.text())) {
+                return; // don't consume — let parseTopLevel() handle it
+            }
+            // A TYPE_NAME at the start of a line might be a macro invocation
+            // or constructor — also a safe resume point
+            if (tok.type() == TokenType.TYPE_NAME) {
+                SpnParseToken prev = tokens.lastConsumed();
+                if (prev == null || tok.line() > prev.line()) {
+                    return;
+                }
+            }
+            tokens.advance(); // skip this token
+        }
+    }
+
     private void pushScope() {
         currentScope = new Scope(currentScope);
     }
@@ -212,19 +245,43 @@ public class SpnParser {
 
     // ── Public API ─────────────────────────────────────────────────────────
 
+    /** Errors collected during recovery-mode parsing. */
+    private final List<SpnParseException> collectedErrors = new ArrayList<>();
+
+    /** If true, collect errors instead of throwing (recovery mode). */
+    private boolean recoveryMode = false;
+
+    /** Returns all errors collected during parsing (empty if no errors). */
+    public List<SpnParseException> getErrors() {
+        return collectedErrors;
+    }
+
     /**
      * Parses the full source into an SpnRootNode ready for execution.
      * Type/struct/function declarations are registered; top-level statements
      * are collected into a block.
+     *
+     * <p>Error recovery: when a declaration fails to parse, the error is
+     * recorded and the parser skips to the next declaration boundary keyword.
+     * This allows multiple errors to be reported from a single parse, and
+     * lets the IDE show diagnostics for the whole file, not just the first
+     * broken line. After recovery, the parser continues with clean state for
+     * the next declaration.
      */
     public SpnRootNode parse() {
+        recoveryMode = true;
         pushScope();
         List<SpnStatementNode> statements = new ArrayList<>();
 
         while (tokens.hasMore()) {
-            SpnStatementNode stmt = parseTopLevel();
-            if (stmt != null) {
-                statements.add(stmt);
+            try {
+                SpnStatementNode stmt = parseTopLevel();
+                if (stmt != null) {
+                    statements.add(stmt);
+                }
+            } catch (SpnParseException e) {
+                collectedErrors.add(e);
+                synchronize();
             }
         }
 
@@ -238,7 +295,14 @@ public class SpnParser {
         }
 
         Scope scope = popScope();
-        return new SpnRootNode(language, scope.buildFrame(), body, "<main>");
+        SpnRootNode root = new SpnRootNode(language, scope.buildFrame(), body, "<main>");
+
+        // After recovery, throw the first error so callers that expect execution
+        // still get a failure. All errors remain accessible via getErrors().
+        if (!collectedErrors.isEmpty()) {
+            throw collectedErrors.getFirst();
+        }
+        return root;
     }
 
     /** Accessors for registries (used by tests and the module system). */
@@ -1585,19 +1649,27 @@ public class SpnParser {
         }
     }
 
-    /** Attach source position from the last consumed token to a node. */
+    /** Attach source span from the last consumed token (start = end = that token). */
     private <T extends SpnExpressionNode> T at(T node) {
         SpnParseToken tok = tokens.lastConsumed();
         if (tok != null) {
-            node.setSourcePosition(sourceName, tok.line(), tok.col());
+            node.setSourceSpan(sourceName, tok.line(), tok.col(), tok.line(), tok.endCol());
         }
         return node;
     }
 
-    /** Attach source position from a specific token to a node. */
+    /**
+     * Attach source span: starts at {@code tok}, ends at the last consumed token.
+     * This captures the full expression span for binary ops, function calls, etc.
+     */
     private <T extends SpnExpressionNode> T at(T node, SpnParseToken tok) {
         if (tok != null) {
-            node.setSourcePosition(sourceName, tok.line(), tok.col());
+            SpnParseToken end = tokens.lastConsumed();
+            if (end != null) {
+                node.setSourceSpan(sourceName, tok.line(), tok.col(), end.line(), end.endCol());
+            } else {
+                node.setSourceSpan(sourceName, tok.line(), tok.col(), tok.line(), tok.endCol());
+            }
         }
         return node;
     }

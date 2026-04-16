@@ -37,6 +37,43 @@ class SpnParserTest {
         return new SpnParser(source, null, symbolTable);
     }
 
+    // ── Error recovery ─────────────────────────────────────────────────────
+
+    @Nested
+    class ErrorRecovery {
+        @Test
+        void multipleErrorsCollected() {
+            // Two broken declarations — both should be reported.
+            SpnParser p = parser("""
+                type Good(int)
+                let x = @@@
+                type AlsoGood(int)
+                let y = @@@
+                """);
+            assertThrows(SpnParseException.class, p::parse);
+            // Both errors collected, not just the first
+            assertTrue(p.getErrors().size() >= 2,
+                    "Expected at least 2 errors, got " + p.getErrors().size());
+        }
+
+        @Test
+        void validDeclarationsAfterErrorStillRegister() {
+            // The type after the broken let should still be registered.
+            SpnParser p = parser("""
+                type Before(int)
+                let x = @@@
+                type After(int)
+                let good = After(42)
+                """);
+            assertThrows(SpnParseException.class, p::parse);
+            // 'Before' and 'After' should both be in the struct registry
+            assertNotNull(p.getStructRegistry().get("Before"),
+                    "Before should be registered despite later error");
+            assertNotNull(p.getStructRegistry().get("After"),
+                    "After should be registered — recovery skipped past the broken let");
+        }
+    }
+
     // ── Literals ───────────────────────────────────────────────────────────
 
     @Nested

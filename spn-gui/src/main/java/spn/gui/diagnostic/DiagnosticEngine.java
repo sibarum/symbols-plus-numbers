@@ -123,17 +123,33 @@ public class DiagnosticEngine {
     /**
      * Collect all dispatch annotations on the given line, formatted as a
      * HUD-ready string. Returns null if no dispatches on this line.
-     * Example: "-(Rational, Rational) | /(Rational, Rational) | +(Rational, Rational)"
+     * Example: "-(Rational, Rational)  /(Rational, Rational)  +(Rational, Rational)"
      */
     public String dispatchesOnLine(int line) {
         var sb = new StringBuilder();
         for (var d : dispatches) {
             if (d.line() < line) continue;
+            if (d.line() > line && d.endLine() < line) continue;
             if (d.line() > line) break;
             if (!sb.isEmpty()) sb.append("  ");
             sb.append(d.description().replace('|', '/'));
         }
         return sb.isEmpty() ? null : sb.toString();
+    }
+
+    /**
+     * Find the dispatch annotation whose span contains the cursor position.
+     * Returns the resolved target string or null.
+     */
+    public String dispatchAtCursor(int line, int col) {
+        for (var d : dispatches) {
+            if (d.line() > line) break;
+            // Check if cursor is within this dispatch's span
+            boolean afterStart = d.line() < line || (d.line() == line && d.col() <= col);
+            boolean beforeEnd = d.endLine() > line || (d.endLine() == line && d.endCol() >= col);
+            if (afterStart && beforeEnd) return d.description();
+        }
+        return null;
     }
 
     /** Get the incremental parser for inspection (e.g., cached spans for diffing). */

@@ -4,7 +4,9 @@ import spn.language.SpnModuleRegistry;
 import spn.type.SpnSymbolTable;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Incremental parsing wrapper. Uses DeclarationScanner + DeclarationCache to
@@ -38,7 +40,7 @@ public final class IncrementalParser {
     public record ParseError(int line, int col, String message) {}
 
     /** A compile-time dispatch annotation for IDE display. */
-    public record DispatchAnnotation(int line, int col, String description) {}
+    public record DispatchAnnotation(int line, int col, int endLine, int endCol, String description) {}
 
     /** Result of an incremental parse. */
     public record Result(
@@ -80,42 +82,56 @@ public final class IncrementalParser {
                     lastDispatches, false, spans.size(), 0);
         }
 
-        // Something changed — do a full parse (for correctness with cross-references)
-        // but only report diagnostics from changed regions
+        // Something changed — do a full parse with error recovery.
+        // The parser now collects ALL errors instead of throwing on the first one.
         List<ParseError> errors = new ArrayList<>();
 
+        SpnParser parser = new SpnParser(source, fileName, null, symbolTable, registry);
+
+        // Invalidate TypeGraph from the first changed span onward
+        int firstChangedLine = 0;
+        for (int i = 0; i < cachedSpans.size(); i++) {
+            if (!cachedSpans.get(i).valid()) {
+                firstChangedLine = i < spans.size() ? spans.get(i).startLine() : 0;
+                break;
+            }
+        }
+        parser.getTypeGraph().invalidateFrom(fileName, firstChangedLine);
+
         try {
-            SpnParser parser = new SpnParser(source, fileName, null, symbolTable, registry);
             parser.parse();
-            // Parse succeeded — mark all spans as valid, no errors
-            for (int i = 0; i < cachedSpans.size(); i++) {
-                cache.markValid(i);
-            }
-            // Extract dispatch annotations from the resolver
-            lastDispatches = extractDispatches(parser.getResolver());
-        } catch (SpnParseException pe) {
-            int errorLine = pe.getLine() > 0 ? pe.getLine() - 1 : Math.max(0, spans.size() - 1);
-            int errorCol = pe.getCol() > 0 ? pe.getCol() - 1 : 0;
-
-            // Find which span contains this error
-            int errorSpanIndex = findSpanForLine(spans, errorLine);
-
-            // Record the error on the span
-            if (errorSpanIndex >= 0) {
-                cache.markError(errorSpanIndex, pe.getMessage());
-            }
-
-            errors.add(new ParseError(errorLine, errorCol, pe.getMessage()));
-
-            // Mark non-error spans as valid
-            for (int i = 0; i < cachedSpans.size(); i++) {
-                if (i != errorSpanIndex) cache.markValid(i);
-            }
+        } catch (SpnParseException ignored) {
+            // parse() throws the first error for execution callers, but we
+            // read ALL collected errors below via getErrors().
         } catch (Exception e) {
+            // Truly catastrophic — record and move on
             int lastLine = Math.max(0, (int) source.lines().count() - 1);
             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             errors.add(new ParseError(lastLine, 0, msg));
         }
+
+        // Collect all errors from recovery-mode parsing
+        Set<Integer> errorSpanIndices = new HashSet<>();
+        for (SpnParseException pe : parser.getErrors()) {
+            int errorLine = pe.getLine() > 0 ? pe.getLine() - 1 : Math.max(0, spans.size() - 1);
+            int errorCol = pe.getCol() > 0 ? pe.getCol() - 1 : 0;
+            errors.add(new ParseError(errorLine, errorCol, pe.getMessage()));
+
+            int errorSpanIndex = findSpanForLine(spans, errorLine);
+            if (errorSpanIndex >= 0) {
+                cache.markError(errorSpanIndex, pe.getMessage());
+                errorSpanIndices.add(errorSpanIndex);
+            }
+        }
+
+        // Mark non-error spans as valid
+        for (int i = 0; i < cachedSpans.size(); i++) {
+            if (!errorSpanIndices.contains(i)) cache.markValid(i);
+        }
+
+        // Extract dispatch annotations — declarations parsed before any error
+        // still have valid dispatch info.
+        lastDispatches = extractDispatches(parser.getResolver());
 
         return new Result(errors, lastDispatches, true, spans.size(), invalidated);
     }
@@ -134,8 +150,12 @@ public final class IncrementalParser {
             var record = entry.getValue();
             if (node.hasSourcePosition()) {
                 // Convert from 1-based parser lines to 0-based editor lines
+                int line = node.getSourceLine() - 1;
+                int col = node.getSourceCol();
+                int endLine = node.hasSourceSpan() ? node.getSourceEndLine() - 1 : line;
+                int endCol = node.hasSourceSpan() ? node.getSourceEndCol() : col + 1;
                 result.add(new DispatchAnnotation(
-                        node.getSourceLine() - 1, node.getSourceCol(),
+                        line, col, endLine, endCol,
                         record.resolvedTarget()));
             }
         }
