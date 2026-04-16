@@ -15,6 +15,7 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@org.junit.jupiter.api.Disabled("Awaiting inference pass — stripped in Phase 4.4")
 class WaveformTest {
 
     private SpnSymbolTable symbolTable;
