@@ -44,6 +44,9 @@ public class SpnParser {
 
     /** Pattern-parsing is delegated to this helper (created in the constructor). */
     private final PatternParser patternParser;
+
+    /** Type-expression parsing is delegated to this helper (created in the constructor). */
+    private final TypeParser typeParser;
     private final SpnLanguage language;
     private final SpnSymbolTable symbolTable;
 
@@ -126,6 +129,10 @@ public class SpnParser {
                         return currentScope.addLocal(name, expected);
                     }
                 });
+        // Type parser holds tokens plus the four type-lookup registries.
+        this.typeParser = new TypeParser(
+                tokens, structRegistry, typeRegistry, variantRegistry,
+                functionDescriptorRegistry);
     }
 
     public Map<String, spn.node.BuiltinFactory> getBuiltinRegistry() {
@@ -1789,48 +1796,40 @@ public class SpnParser {
         return expr;
     }
 
-    // ── Expression parsing (precedence climbing) ───────────────────────────
+    // ── Expression parsing (Pratt precedence climbing) ─────────────────────
+    //
+    // Single loop + table. Each binary operator has a precedence (higher = tighter
+    // binding) and a fallback strategy for when no user-defined overload matches.
+    // Qualified infixes (e.g., `*_dot`, `+_proj`) inherit the precedence of their
+    // base operator. Two special cases are handled inline:
+    //   - `-` may be unary (isUnaryMinus detects this and breaks the binary loop)
+    //   - `1 / x` tries the multiplicative-inverse method fallback first
+    //
+    // Adding a new binary operator is a single INFIX_OPS entry.
 
-    private SpnExpressionNode parseExpression() {
-        return parseOr();
-    }
-
-    private SpnExpressionNode parseOr() {
-        SpnExpressionNode left = parseAnd();
-        while (tokens.match("||")) {
-            SpnExpressionNode right = parseAnd();
-            left = new SpnOrNode(left, right);
-            trackType(left, FieldType.BOOLEAN);
-        }
-        return left;
-    }
-
-    private SpnExpressionNode parseAnd() {
-        SpnExpressionNode left = parseEquality();
-        while (tokens.match("&&")) {
-            SpnExpressionNode right = parseEquality();
-            left = new SpnAndNode(left, right);
-            trackType(left, FieldType.BOOLEAN);
-        }
-        return left;
-    }
+    private static final int PREC_OR   = 1;  // ||
+    private static final int PREC_AND  = 2;  // &&
+    private static final int PREC_EQ   = 3;  // == !=
+    private static final int PREC_CMP  = 4;  // < > <= >=
+    private static final int PREC_CAT  = 5;  // ++
+    private static final int PREC_ADD  = 6;  // + -
+    private static final int PREC_MUL  = 7;  // * / %
 
     // ── Binary operator infrastructure ─────────────────────────────────────
     //
-    // Each precedence level follows the same pattern: try user-defined dispatch,
-    // fall back to a built-in node, track the result type. The variations are:
-    //   ARITHMETIC     — trackArithmeticType (rejects non-primitives, infers result)
-    //   REQUIRE_PRIM   — requirePrimitiveOperand on both sides before built-in
-    //   ALLOW_ANY      — no check (equality works on any type)
+    // Each operator's fallback describes what happens when no user overload matches:
+    //   ARITHMETIC       — trackArithmeticType (rejects non-primitives, infers result)
+    //   REQUIRE_PRIMITIVE — requirePrimitiveOperand on both sides before built-in
+    //   ALLOW_ANY        — no check (equality works on any type)
+    //   NO_DISPATCH      — skip user-overload lookup entirely (for || and &&,
+    //                      which have fixed boolean semantics)
 
     @FunctionalInterface
     private interface BinaryNodeFactory {
         SpnExpressionNode create(SpnExpressionNode left, SpnExpressionNode right);
     }
 
-    private record BinaryOp(String symbol, BinaryNodeFactory factory) {}
-
-    private enum BinaryFallback { ARITHMETIC, REQUIRE_PRIMITIVE, ALLOW_ANY }
+    private enum BinaryFallback { ARITHMETIC, REQUIRE_PRIMITIVE, ALLOW_ANY, NO_DISPATCH }
 
     /**
      * Core dispatch for a single binary operator application. Tries user-defined
@@ -1840,7 +1839,8 @@ public class SpnParser {
             SpnExpressionNode left, SpnExpressionNode right,
             BinaryNodeFactory factory, BinaryFallback fallback, FieldType resultType) {
         SpnParseToken opTok = tokens.lastConsumed();
-        SpnExpressionNode dispatched = tryOperatorDispatch(symbol, left, right);
+        SpnExpressionNode dispatched = fallback == BinaryFallback.NO_DISPATCH
+                ? null : tryOperatorDispatch(symbol, left, right);
         if (dispatched == null) {
             dispatched = switch (fallback) {
                 case ARITHMETIC -> trackArithmeticType(
@@ -1850,153 +1850,131 @@ public class SpnParser {
                     requirePrimitiveOperand(right, "'" + symbol + "'");
                     yield at(factory.create(left, right), opTok);
                 }
-                case ALLOW_ANY -> at(factory.create(left, right), opTok);
+                case ALLOW_ANY, NO_DISPATCH -> at(factory.create(left, right), opTok);
             };
         }
         if (resultType != null) trackType(dispatched, resultType);
         return dispatched;
     }
 
+    /** One infix operator's precedence-table entry. */
+    private record InfixOp(int prec, BinaryFallback fallback,
+                           FieldType resultType, BinaryNodeFactory factory) {}
+
     /**
-     * Parse a precedence level with multiple binary operators sharing the same
-     * fallback strategy and result type. Handles qualified operators automatically.
+     * Precedence/dispatch table for all binary operators. Qualified variants
+     * (e.g. {@code *_dot}) inherit the precedence of their base; look them up
+     * via {@link #infixOpForBase(String)}.
      */
-    private SpnExpressionNode parseBinaryLevel(
-            java.util.function.Supplier<SpnExpressionNode> nextLevel,
-            BinaryFallback fallback, FieldType resultType, BinaryOp... ops) {
-        SpnExpressionNode left = nextLevel.get();
-        String[] bases = new String[ops.length];
-        for (int i = 0; i < ops.length; i++) bases[i] = ops[i].symbol();
-        while (true) {
-            boolean matched = false;
-            for (BinaryOp op : ops) {
-                if (tokens.match(op.symbol())) {
-                    SpnExpressionNode right = nextLevel.get();
-                    left = dispatchBinaryOp(op.symbol(), left, right,
-                            op.factory(), fallback, resultType);
-                    matched = true;
-                    break;
-                }
-            }
-            if (matched) continue;
-            SpnExpressionNode qualified = tryQualifiedInfix(left, nextLevel, bases);
-            if (qualified != null) { left = qualified; continue; }
-            break;
-        }
-        return left;
-    }
+    private static final java.util.Map<String, InfixOp> INFIX_OPS = java.util.Map.ofEntries(
+            java.util.Map.entry("||", new InfixOp(PREC_OR,  BinaryFallback.NO_DISPATCH,      FieldType.BOOLEAN, SpnOrNode::new)),
+            java.util.Map.entry("&&", new InfixOp(PREC_AND, BinaryFallback.NO_DISPATCH,      FieldType.BOOLEAN, SpnAndNode::new)),
+            java.util.Map.entry("==", new InfixOp(PREC_EQ,  BinaryFallback.ALLOW_ANY,        FieldType.BOOLEAN, SpnEqualNodeGen::create)),
+            java.util.Map.entry("!=", new InfixOp(PREC_EQ,  BinaryFallback.ALLOW_ANY,        FieldType.BOOLEAN, SpnNotEqualNodeGen::create)),
+            java.util.Map.entry("<",  new InfixOp(PREC_CMP, BinaryFallback.REQUIRE_PRIMITIVE, FieldType.BOOLEAN, SpnLessThanNodeGen::create)),
+            java.util.Map.entry(">",  new InfixOp(PREC_CMP, BinaryFallback.REQUIRE_PRIMITIVE, FieldType.BOOLEAN, SpnGreaterThanNodeGen::create)),
+            java.util.Map.entry("<=", new InfixOp(PREC_CMP, BinaryFallback.REQUIRE_PRIMITIVE, FieldType.BOOLEAN, SpnLessEqualNodeGen::create)),
+            java.util.Map.entry(">=", new InfixOp(PREC_CMP, BinaryFallback.REQUIRE_PRIMITIVE, FieldType.BOOLEAN, SpnGreaterEqualNodeGen::create)),
+            java.util.Map.entry("++", new InfixOp(PREC_CAT, BinaryFallback.REQUIRE_PRIMITIVE, FieldType.STRING,  SpnStringConcatNodeGen::create)),
+            java.util.Map.entry("+",  new InfixOp(PREC_ADD, BinaryFallback.ARITHMETIC,        null,              SpnAddNodeGen::create)),
+            java.util.Map.entry("-",  new InfixOp(PREC_ADD, BinaryFallback.ARITHMETIC,        null,              SpnSubtractNodeGen::create)),
+            java.util.Map.entry("*",  new InfixOp(PREC_MUL, BinaryFallback.ARITHMETIC,        null,              SpnMultiplyNodeGen::create)),
+            java.util.Map.entry("/",  new InfixOp(PREC_MUL, BinaryFallback.ARITHMETIC,        null,              SpnDivideNodeGen::create)),
+            java.util.Map.entry("%",  new InfixOp(PREC_MUL, BinaryFallback.ARITHMETIC,        null,              SpnModuloNodeGen::create))
+    );
 
-    // ── Precedence levels using the shared infrastructure ──────────────────
-
-    private SpnExpressionNode parseEquality() {
-        return parseBinaryLevel(this::parseComparison, BinaryFallback.ALLOW_ANY, FieldType.BOOLEAN,
-                new BinaryOp("==", SpnEqualNodeGen::create),
-                new BinaryOp("!=", SpnNotEqualNodeGen::create));
-    }
-
-    private SpnExpressionNode parseComparison() {
-        return parseBinaryLevel(this::parseConcatenation, BinaryFallback.REQUIRE_PRIMITIVE, FieldType.BOOLEAN,
-                new BinaryOp("<",  SpnLessThanNodeGen::create),
-                new BinaryOp(">",  SpnGreaterThanNodeGen::create),
-                new BinaryOp("<=", SpnLessEqualNodeGen::create),
-                new BinaryOp(">=", SpnGreaterEqualNodeGen::create));
-    }
-
-    private SpnExpressionNode parseConcatenation() {
-        return parseBinaryLevel(this::parseAddSub, BinaryFallback.REQUIRE_PRIMITIVE, FieldType.STRING,
-                new BinaryOp("++", SpnStringConcatNodeGen::create));
-    }
-
-    // parseAddSub and parseMulDiv have special-case branches (unary minus,
-    // multiplicative inverse) so they use dispatchBinaryOp per-branch rather
-    // than the fully generic parseBinaryLevel.
-
-    private SpnExpressionNode parseAddSub() {
-        SpnExpressionNode left = parseMulDiv();
-        while (true) {
-            if (tokens.match("+")) {
-                SpnExpressionNode right = parseMulDiv();
-                left = dispatchBinaryOp("+", left, right,
-                        SpnAddNodeGen::create, BinaryFallback.ARITHMETIC, null);
-            } else if (tokens.check("-") && !isUnaryMinus()) {
-                tokens.advance();
-                SpnExpressionNode right = parseMulDiv();
-                left = dispatchBinaryOp("-", left, right,
-                        SpnSubtractNodeGen::create, BinaryFallback.ARITHMETIC, null);
-            } else {
-                SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseMulDiv, "+", "-");
-                if (qualified != null) { left = qualified; continue; }
-                break;
-            }
-        }
-        return left;
-    }
-
-    private SpnExpressionNode parseMulDiv() {
-        SpnExpressionNode left = parseUnary();
-        while (true) {
-            if (tokens.match("*")) {
-                SpnExpressionNode right = parseUnary();
-                left = dispatchBinaryOp("*", left, right,
-                        SpnMultiplyNodeGen::create, BinaryFallback.ARITHMETIC, null);
-            } else if (tokens.match("/")) {
-                SpnExpressionNode right = parseUnary();
-                // Try user-defined binary dispatch first
-                SpnExpressionNode dispatched = tryOperatorDispatch("/", left, right);
-                if (dispatched == null) {
-                    // 1/x → multiplicative inverse (only literal 1 triggers this)
-                    dispatched = tryUnaryInverse(left, right);
-                }
-                SpnParseToken opTok = tokens.lastConsumed();
-                left = dispatched != null ? dispatched
-                        : trackArithmeticType(at(SpnDivideNodeGen.create(left, right), opTok), left, right);
-            } else if (tokens.match("%")) {
-                SpnExpressionNode right = parseUnary();
-                left = dispatchBinaryOp("%", left, right,
-                        SpnModuloNodeGen::create, BinaryFallback.ARITHMETIC, null);
-            } else {
-                SpnExpressionNode qualified = tryQualifiedInfix(left, this::parseUnary, "*", "/", "%");
-                if (qualified != null) { left = qualified; continue; }
-                break;
-            }
-        }
-        return left;
+    /** Look up the InfixOp for a base symbol, or null if not an infix operator. */
+    private static InfixOp infixOpForBase(String sym) {
+        return INFIX_OPS.get(sym);
     }
 
     /**
-     * Check if the current token is a qualified operator (e.g., *_dot, +_cross)
-     * whose base matches one of the given prefixes. Returns the full operator
-     * name if matched, null otherwise. Does NOT consume the token.
+     * If the peeked token is a qualified infix (e.g., {@code *_dot}), returns
+     * the full operator text. Otherwise null. Does NOT consume the token.
      */
-    private String peekQualifiedOp(String... bases) {
+    private String peekQualifiedInfix() {
         SpnParseToken tok = tokens.peek();
         if (tok == null || tok.type() != TokenType.OPERATOR) return null;
         String text = tok.text();
         int underscore = text.indexOf('_');
-        if (underscore <= 0) return null; // not qualified
+        if (underscore <= 0) return null;
         String base = text.substring(0, underscore);
-        for (String b : bases) {
-            if (base.equals(b)) return text;
-        }
-        return null;
+        return INFIX_OPS.containsKey(base) ? text : null;
+    }
+
+    private SpnExpressionNode parseExpression() {
+        return parseExpr(0);
     }
 
     /**
-     * Try to parse and dispatch a qualified infix operator. If the current
-     * token is a qualified operator matching any of the given bases, consume
-     * it and return a dispatch node. Returns null if no match.
+     * Pratt-style precedence climbing: parse a unary expression, then consume
+     * left-associative infix operators whose precedence is at least
+     * {@code minPrec}, combining into the left expression.
      */
-    private SpnExpressionNode tryQualifiedInfix(SpnExpressionNode left,
-                                                  java.util.function.Supplier<SpnExpressionNode> parseRight,
-                                                  String... bases) {
-        String op = peekQualifiedOp(bases);
-        if (op == null) return null;
-        SpnParseToken opTok = tokens.advance(); // consume the qualified operator
-        SpnExpressionNode right = parseRight.get();
-        SpnExpressionNode dispatched = tryOperatorDispatch(op, left, right);
-        if (dispatched != null) return at(dispatched, opTok);
-        throw tokens.error("No overload found for qualified operator: " + op);
+    private SpnExpressionNode parseExpr(int minPrec) {
+        SpnExpressionNode left = parseUnary();
+
+        while (true) {
+            SpnParseToken tok = tokens.peek();
+            if (tok == null) break;
+
+            String opText = tok.text();
+            String resolved = opText;
+            InfixOp op = INFIX_OPS.get(opText);
+
+            // Qualified infix: *_dot borrows precedence+dispatch from *.
+            if (op == null) {
+                String qual = peekQualifiedInfix();
+                if (qual == null) break;
+                resolved = qual;
+                op = INFIX_OPS.get(qual.substring(0, qual.indexOf('_')));
+                if (op == null) break;
+            }
+
+            // `-` at start of a new line is unary (isUnaryMinus), break out so
+            // the outer caller can re-enter parseExpr for the next statement.
+            if (opText.equals("-") && isUnaryMinus()) break;
+
+            if (op.prec() < minPrec) break;
+            tokens.advance(); // consume the operator
+
+            // Left-associative: RHS binds one precedence higher.
+            SpnExpressionNode right = parseExpr(op.prec() + 1);
+
+            // Special: `1 / x` → try multiplicative-inverse method fallback.
+            // Only the literal integer 1 on the LHS triggers this path.
+            if (resolved.equals("/")) {
+                SpnExpressionNode dispatched = tryOperatorDispatch("/", left, right);
+                if (dispatched == null) dispatched = tryUnaryInverse(left, right);
+                if (dispatched != null) {
+                    if (op.resultType() != null) trackType(dispatched, op.resultType());
+                    left = dispatched;
+                    continue;
+                }
+                // else: fall through to built-in division
+                SpnParseToken opTok = tokens.lastConsumed();
+                left = trackArithmeticType(
+                        at(SpnDivideNodeGen.create(left, right), opTok), left, right);
+                continue;
+            }
+
+            // Qualified infixes must dispatch to a user overload — no built-in.
+            if (!resolved.equals(opText)) {
+                SpnExpressionNode dispatched = tryOperatorDispatch(resolved, left, right);
+                if (dispatched == null) {
+                    throw tokens.error("No overload found for qualified operator: " + resolved);
+                }
+                left = dispatched;
+                continue;
+            }
+
+            left = dispatchBinaryOp(resolved, left, right,
+                    op.factory(), op.fallback(), op.resultType());
+        }
+
+        return left;
     }
+
 
     /**
      * Try to resolve a binary operator to a registered overload at compile time.
@@ -3140,155 +3118,15 @@ public class SpnParser {
     // constructor). The parsePattern / parseNestedPattern / parseLiteralValue
     // methods moved there intact; currentScope.addLocal() is routed through a
     // ScopeProvider adapter so PatternParser never sees the Scope class.
-    // ── Field type parsing ─────────────────────────────────────────────────
+    // Type-expression parsing lives in {@link TypeParser}. Thin delegates below
+    // keep existing call sites unchanged; the real grammar is in that class.
 
-    private static final Set<String> PRIMITIVE_TYPE_KEYWORDS =
-            Set.of("int", "float", "string", "bool");
-
-    /**
-     * Parse a type expression, including anonymous union types: {@code Circle | Rectangle}.
-     * Delegates to {@link #parseSingleFieldType()} for each component.
-     */
     private FieldType parseFieldType() {
-        FieldType first = parseSingleFieldType();
-
-        if (!tokens.check("|")) return first;
-
-        // Union type: Type | Type | ...
-        List<SpnStructDescriptor> variants = new ArrayList<>();
-        collectUnionMembers(variants, first);
-        while (tokens.match("|")) {
-            collectUnionMembers(variants, parseSingleFieldType());
-        }
-
-        // Sort for order-independence: Circle | Rectangle == Rectangle | Circle
-        variants.sort(java.util.Comparator.comparing(SpnStructDescriptor::getName));
-        // Deduplicate (after sorting, duplicates are adjacent)
-        for (int i = variants.size() - 1; i > 0; i--) {
-            if (variants.get(i) == variants.get(i - 1)) variants.remove(i);
-        }
-
-        if (variants.size() == 1) {
-            return FieldType.ofStruct(variants.get(0));
-        }
-
-        String name = variants.stream()
-                .map(SpnStructDescriptor::getName)
-                .collect(java.util.stream.Collectors.joining(" | "));
-        return FieldType.ofVariant(new SpnVariantSet(name,
-                variants.toArray(new SpnStructDescriptor[0])));
+        return typeParser.parseFieldType();
     }
 
-    /** Extract struct descriptors from a FieldType for union construction. */
     private void collectUnionMembers(List<SpnStructDescriptor> variants, FieldType type) {
-        if (type instanceof FieldType.OfStruct os) {
-            variants.add(os.descriptor());
-        } else if (type instanceof FieldType.OfVariant ov) {
-            java.util.Collections.addAll(variants, ov.variantSet().getVariants());
-        } else if (type instanceof FieldType.OfConstrainedType oct) {
-            SpnStructDescriptor sd = structRegistry.get(oct.descriptor().getName());
-            if (sd != null) { variants.add(sd); return; }
-            throw tokens.error("Cannot use type '" + oct.descriptor().getName() + "' in union");
-        } else if (type instanceof FieldType.OfProduct op) {
-            SpnStructDescriptor sd = structRegistry.get(op.descriptor().getName());
-            if (sd != null) { variants.add(sd); return; }
-            throw tokens.error("Cannot use type '" + op.descriptor().getName() + "' in union");
-        } else {
-            throw tokens.error("Union types can only combine struct/data types, got: " + type.describe());
-        }
-    }
-
-    /** Parse a single (non-union) type expression. */
-    private FieldType parseSingleFieldType() {
-        SpnParseToken tok = tokens.peek();
-        if (tok == null) throw tokens.error("Expected type, but reached end of input");
-
-        // Primitive type keywords (int, float, string, bool)
-        if (tok.type() == TokenType.KEYWORD && PRIMITIVE_TYPE_KEYWORDS.contains(tok.text())) {
-            tokens.advance();
-            return switch (tok.text()) {
-                case "int" -> FieldType.LONG;
-                case "float" -> FieldType.DOUBLE;
-                case "string" -> FieldType.STRING;
-                case "bool" -> FieldType.BOOLEAN;
-                default -> FieldType.UNTYPED;
-            };
-        }
-
-        if (tok.type() == TokenType.TYPE_NAME) {
-            tokens.advance();
-            String name = tok.text();
-
-            // Check for generic parameters: Collection<Long>
-            if (tokens.match("<")) {
-                FieldType inner = parseFieldType();
-                tokens.expect(">");
-                return switch (name) {
-                    case "Array", "Collection" -> FieldType.ofArray(inner);
-                    case "Set" -> FieldType.ofSet(inner);
-                    case "Dict" -> FieldType.ofDictionary(inner);
-                    default -> FieldType.UNTYPED;
-                };
-            }
-
-            return switch (name) {
-                case "int", "Long" -> FieldType.LONG;
-                case "float", "Double" -> FieldType.DOUBLE;
-                case "string", "String" -> FieldType.STRING;
-                case "bool", "Boolean" -> FieldType.BOOLEAN;
-                case "Symbol" -> FieldType.SYMBOL;
-                case "Array", "Collection" -> FieldType.ofArray(FieldType.UNTYPED);
-                case "Set" -> FieldType.ofSet(FieldType.UNTYPED);
-                case "Dict" -> FieldType.ofDictionary(FieldType.UNTYPED);
-                case "Tuple" -> FieldType.ofTuple(SpnTupleDescriptor.untyped(0));
-                default -> {
-                    // Check registries
-                    SpnStructDescriptor sd = structRegistry.get(name);
-                    if (sd != null) yield FieldType.ofStruct(sd);
-                    SpnTypeDescriptor td = typeRegistry.get(name);
-                    if (td != null) yield td.isProduct()
-                            ? FieldType.ofProduct(td) : FieldType.ofConstrainedType(td);
-                    SpnVariantSet vs = variantRegistry.get(name);
-                    if (vs != null) yield FieldType.ofVariant(vs);
-                    throw tokens.error("Unknown type: " + name, tok);
-                }
-            };
-        }
-
-        // Tuple type: (Type, Type, ...)
-        if (tok.text().equals("(")) {
-            tokens.advance();
-            List<FieldType> elementTypes = new ArrayList<>();
-            while (!tokens.check(")")) {
-                elementTypes.add(parseFieldType());
-                tokens.match(",");
-            }
-            tokens.expect(")");
-            return FieldType.ofTuple(new SpnTupleDescriptor(
-                    elementTypes.toArray(FieldType[]::new)));
-        }
-
-        if (tok.text().equals("_")) {
-            tokens.advance();
-            return FieldType.UNTYPED;
-        }
-
-        // Function name as type: uses the named function's signature structurally.
-        // e.g., pure apply(myFunc, int) = ... where myFunc was declared as (int, int) -> int
-        if (tok.type() == TokenType.IDENTIFIER) {
-            SpnFunctionDescriptor fnDesc = functionDescriptorRegistry.get(tok.text());
-            if (fnDesc != null) {
-                tokens.advance();
-                FieldDescriptor[] params = fnDesc.getParams();
-                FieldType[] paramTypes = new FieldType[params.length];
-                for (int i = 0; i < params.length; i++) {
-                    paramTypes[i] = params[i].type();
-                }
-                return FieldType.ofFunction(paramTypes, fnDesc.getReturnType());
-            }
-        }
-
-        throw tokens.error("Expected type name, got: " + tok.text(), tok);
+        typeParser.collectUnionMembers(variants, type);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

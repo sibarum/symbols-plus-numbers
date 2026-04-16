@@ -26,7 +26,9 @@
       "Bash(mvn -pl spn-ast,spn-parse,spn-stdlib,spn-traction compile -am)",
       "Bash(grep -E \"^\\\\[INFO\\\\] Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$\")",
       "Bash(mvn -pl spn-parse compile)",
-      "Bash(grep -E \"^\\\\[INFO\\\\] Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$|BUILD\")"
+      "Bash(grep -E \"^\\\\[INFO\\\\] Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$|BUILD\")",
+      "Bash(grep -E \"FAIL|^\\\\[INFO\\\\] Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$|BUILD|ERROR.*assert\")",
+      "Bash(grep -nE \"private.*\\(SpnExpressionNode|SpnStatementNode|FieldType|int\\\\[\\\\]|void|boolean|String\\)\\\\s+\\\\w+\\\\s*\\\\\\([^\\)]{80,}\" spn-parse/src/main/java/spn/lang/SpnParser.java)"
     ]
   }
 }
