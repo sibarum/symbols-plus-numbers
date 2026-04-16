@@ -180,7 +180,7 @@ class RationalTest {
         }
 
         @Test
-        @org.junit.jupiter.api.Disabled("Awaiting inference pass — arithmetic dispatch stripped in Phase 4.4")
+        
         void structuralEqAcrossArithmetic() {
             // Arithmetic that should produce zero must produce canonical (0, 1).
             // Rational(3,4) - Rational(3,4) → (0, 1) structurally.
@@ -211,7 +211,7 @@ class RationalTest {
         }
 
         @Test
-        @org.junit.jupiter.api.Disabled("Awaiting inference pass — unary dispatch stripped in Phase 4.4")
+        
         void negOfOmega() {
             // -ω = ω (unsigned infinity)
             assertEquals(true, run("""

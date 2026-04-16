@@ -47,6 +47,12 @@ public class SpnParser {
 
     /** Type-expression parsing is delegated to this helper (created in the constructor). */
     private final TypeParser typeParser;
+
+    /** Compile-time type resolver — operator dispatch, promotion, method/field resolution. */
+    private final TypeResolver resolver;
+
+    /** Unified declaration graph — populated alongside the old registries. */
+    private final TypeGraph typeGraph = new TypeGraph();
     private final SpnLanguage language;
     private final SpnSymbolTable symbolTable;
 
@@ -131,7 +137,16 @@ public class SpnParser {
         this.typeParser = new TypeParser(
                 tokens, structRegistry, typeRegistry, variantRegistry,
                 functionDescriptorRegistry);
+        // Type resolver handles compile-time dispatch decisions.
+        this.resolver = new TypeResolver(
+                operatorRegistry, promotionRegistry, methodRegistry,
+                structRegistry, typeRegistry, variantRegistry,
+                functionDescriptorRegistry);
     }
+
+    /** The compile-time resolver, exposed for the diagnostic engine and GUI. */
+    public TypeResolver getResolver() { return resolver; }
+    public TypeGraph getTypeGraph() { return typeGraph; }
 
     public Map<String, spn.node.BuiltinFactory> getBuiltinRegistry() {
         return builtinRegistry;
@@ -654,8 +669,9 @@ public class SpnParser {
     // ── Type declarations ──────────────────────────────────────────────────
 
     private void parseTypeDecl() {
-        tokens.expect("type");
-        String name = tokens.expectType(TokenType.TYPE_NAME).text();
+        SpnParseToken typeTok = tokens.expect("type");
+        SpnParseToken nameTok = tokens.expectType(TokenType.TYPE_NAME);
+        String name = nameTok.text();
 
         // type Name = BaseType [where validatorClosure]
         if (tokens.match("=")) {
@@ -665,7 +681,11 @@ public class SpnParser {
             if (tokens.match("where")) {
                 builder.validatorExpr(parseValidatorClosure());
             }
-            typeRegistry.put(name, builder.build());
+            SpnTypeDescriptor td = builder.build();
+            typeRegistry.put(name, td);
+            typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.TYPE)
+                    .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                    .typeDescriptor(td).build());
             return;
         }
 
@@ -677,7 +697,11 @@ public class SpnParser {
                 String elemName = tokens.expectType(TokenType.TYPE_NAME).text();
                 builder.element(new SpnDistinguishedElement(elemName));
             }
-            typeRegistry.put(name, builder.build());
+            SpnTypeDescriptor td = builder.build();
+            typeRegistry.put(name, td);
+            typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.TYPE)
+                    .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                    .typeDescriptor(td).build());
             return;
         }
 
@@ -708,8 +732,13 @@ public class SpnParser {
             if (tokens.match("where")) {
                 builder.validatorExpr(parseValidatorClosure());
             }
-            typeRegistry.put(name, builder.build());
-            structRegistry.put(name, structBuilder.build());
+            SpnTypeDescriptor td = builder.build();
+            SpnStructDescriptor sd = structBuilder.build();
+            typeRegistry.put(name, td);
+            structRegistry.put(name, sd);
+            typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.TYPE)
+                    .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                    .typeDescriptor(td).structDescriptor(sd).build());
             return;
         }
 
@@ -777,6 +806,12 @@ public class SpnParser {
         if (converter instanceof SpnFunctionRefNode ref) {
             promotionRegistry.add(new Promotion(
                     sourceType.describe(), targetType.describe(), ref.getCallTarget()));
+            typeGraph.add(TypeGraph.Node.builder(
+                    "promote " + sourceType.describe() + " -> " + targetType.describe(),
+                    TypeGraph.Kind.PROMOTION)
+                    .file(sourceName).callTarget(ref.getCallTarget())
+                    .paramTypes(sourceType).returnType(targetType)
+                    .build());
         }
     }
 
@@ -872,7 +907,8 @@ public class SpnParser {
 
     private void parseDataDecl() {
         tokens.expect("data");
-        String name = tokens.expectType(TokenType.TYPE_NAME).text();
+        SpnParseToken nameTok = tokens.expectType(TokenType.TYPE_NAME);
+        String name = nameTok.text();
         tokens.match("="); // optional — data blocks can use just pipes
 
         // Data declarations group existing types into a tagged union.
@@ -892,7 +928,11 @@ public class SpnParser {
             variants.add(desc);
         } while (tokens.match("|"));
 
-        variantRegistry.put(name, new SpnVariantSet(name, variants.toArray(new SpnStructDescriptor[0])));
+        SpnVariantSet vs = new SpnVariantSet(name, variants.toArray(new SpnStructDescriptor[0]));
+        variantRegistry.put(name, vs);
+        typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.VARIANT)
+                .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                .variantSet(vs).build());
     }
 
     /**
@@ -1064,14 +1104,33 @@ public class SpnParser {
 
         parseFunctionBody(name, paramTypes, returnType, isPure, false);
 
-        // Register operator overload so the future inference pass can dispatch.
-        // The unary/binary mutex check is deferred to that pass.
+        // Register operator overload + enforce the unary/binary mutex.
         if (isOperator && !paramTypes.isEmpty()) {
             CallTarget ct = functionRegistry.get(name);
             if (ct != null) {
+                FieldType firstType = paramTypes.get(0);
+                int newArity = paramTypes.size();
+                List<OperatorOverload> existing = operatorRegistry.get(name);
+                if (existing != null) {
+                    for (OperatorOverload ov : existing) {
+                        if (ov.paramTypes().length != newArity
+                                && ov.paramTypes().length > 0
+                                && typesMatch(ov.paramTypes()[0], firstType)) {
+                            String other = ov.paramTypes().length == 1 ? "unary" : "binary";
+                            String self  = newArity == 1 ? "unary" : "binary";
+                            throw tokens.error("Cannot define both " + other + " and " + self
+                                    + " '" + name + "' for " + firstType.describe()
+                                    + " — pick one; use a .neg()/.inv() method for the other form");
+                        }
+                    }
+                }
+                FieldType[] pts = paramTypes.toArray(new FieldType[0]);
                 operatorRegistry.computeIfAbsent(name, k -> new ArrayList<>())
-                        .add(new OperatorOverload(
-                                paramTypes.toArray(new FieldType[0]), returnType, ct));
+                        .add(new OperatorOverload(pts, returnType, ct));
+                typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.OPERATOR)
+                        .file(sourceName).callTarget(ct)
+                        .paramTypes(pts).returnType(returnType).pure(isPure)
+                        .build());
             }
         }
 
@@ -1244,6 +1303,15 @@ public class SpnParser {
             functionRegistry.put(name, callTarget);
         }
         functionDescriptorRegistry.put(name, descriptor);
+
+        // Record in TypeGraph
+        TypeGraph.Kind gKind = isMethod ? TypeGraph.Kind.METHOD : TypeGraph.Kind.FUNCTION;
+        TypeGraph.Node.Builder gb = TypeGraph.Node.builder(name, gKind)
+                .file(sourceName).pure(isPure).callTarget(callTarget)
+                .functionDescriptor(descriptor).returnType(returnType)
+                .paramTypes(paramTypes.toArray(new FieldType[0]));
+        if (bodyTok != null) gb.line(bodyTok.line()).col(bodyTok.col());
+        typeGraph.add(gb.build());
 
         // Patch any deferred self-calls
         patchDeferredCalls(name, callTarget);
@@ -1433,30 +1501,59 @@ public class SpnParser {
     // The parser will now happily accept ill-typed programs that used to be
     // rejected; the inference pass will re-enforce those rules when it arrives.
 
-    private FieldType inferType(SpnExpressionNode expr) { return null; }
+    // ── Resolver delegates ────────────────────────────────────────────────
+    // Thin wrappers around the TypeResolver so existing parser call sites
+    // don't need to change. Each forwards to the resolver.
 
-    private SpnExpressionNode trackArithmeticType(SpnExpressionNode result,
-                                                    SpnExpressionNode left,
-                                                    SpnExpressionNode right) {
-        return result;
+    private FieldType inferType(SpnExpressionNode expr) { return resolver.inferType(expr); }
+
+    private void trackType(SpnExpressionNode expr, FieldType type) { resolver.trackType(expr, type); }
+
+    private FieldType unifyTypes(FieldType a, FieldType b) { return resolver.unifyTypes(a, b); }
+
+    private boolean isDefinitelyNonPrimitive(FieldType t) { return resolver.isDefinitelyNonPrimitive(t); }
+
+    private boolean isPrimitive(FieldType type) { return resolver.isPrimitive(type); }
+
+    private boolean typesMatch(FieldType declared, FieldType inferred) { return resolver.typesMatch(declared, inferred); }
+
+    private String describeTypeOrUnknown(FieldType t) { return t != null ? t.describe() : "?"; }
+
+    private String patternCategoryMismatch(MatchPattern pat, FieldType subjectType) {
+        return resolver.patternCategoryMismatch(pat, subjectType);
     }
 
-    private boolean isDefinitelyNonPrimitive(FieldType t) { return false; }
-
-    private String describeTypeOrUnknown(FieldType t) {
-        return t != null ? t.describe() : "?";
+    private void requireTyped(SpnExpressionNode expr, String operation) {
+        FieldType type = inferType(expr);
+        if (type instanceof FieldType.Untyped) {
+            throw tokens.error("Untyped (_) value cannot be used in " + operation);
+        }
     }
 
-    private void trackType(SpnExpressionNode expr, FieldType type) { /* no-op */ }
+    private void requirePrimitiveOperand(SpnExpressionNode expr, String operation) {
+        FieldType type = inferType(expr);
+        if (type instanceof FieldType.Untyped) {
+            throw tokens.error("Untyped (_) value cannot be used in " + operation);
+        }
+        if (isDefinitelyNonPrimitive(type)) {
+            throw tokens.error("No overload of " + operation
+                    + " for " + type.describe()
+                    + " — define " + operation + " for this type");
+        }
+    }
 
-    private FieldType unifyTypes(FieldType a, FieldType b) { return null; }
-
-    private void requireTyped(SpnExpressionNode expr, String operation) { /* no-op */ }
-
-    private void requirePrimitiveOperand(SpnExpressionNode expr, String operation) { /* no-op */ }
-
-    /** Deferred to the inference pass. */
-    private void checkUntypedArgs(List<SpnExpressionNode> args, String funcName, SpnParseToken callTok) { /* no-op */ }
+    private void checkUntypedArgs(List<SpnExpressionNode> args, String funcName, SpnParseToken callTok) {
+        SpnFunctionDescriptor desc = functionDescriptorRegistry.get(funcName);
+        if (desc == null) return;
+        FieldDescriptor[] params = desc.getParams();
+        for (int i = 0; i < args.size() && i < params.length; i++) {
+            FieldType argType = inferType(args.get(i));
+            if (argType instanceof FieldType.Untyped && !(params[i].type() instanceof FieldType.Untyped)) {
+                throw tokens.error("Cannot pass untyped (_) value to typed parameter '"
+                        + params[i].name() + "' (expected " + params[i].type().describe() + ")", callTok);
+            }
+        }
+    }
 
     /**
      * Check that a pure function does not call an action function.
@@ -1476,9 +1573,17 @@ public class SpnParser {
         }
     }
 
-    /** Deferred to the inference pass. */
     private void checkIndirectCallArgs(List<SpnExpressionNode> args, FieldType.OfFunction fnType,
-                                        String calleeName, SpnParseToken callTok) { /* no-op */ }
+                                        String calleeName, SpnParseToken callTok) {
+        FieldType[] paramTypes = fnType.paramTypes();
+        for (int i = 0; i < args.size() && i < paramTypes.length; i++) {
+            FieldType argType = inferType(args.get(i));
+            if (argType instanceof FieldType.Untyped && !(paramTypes[i] instanceof FieldType.Untyped)) {
+                throw tokens.error("Cannot pass untyped (_) value to parameter " + (i + 1)
+                        + " of '" + calleeName + "' (expected " + paramTypes[i].describe() + ")", callTok);
+            }
+        }
+    }
 
     /** Attach source position from the last consumed token to a node. */
     private <T extends SpnExpressionNode> T at(T node) {
@@ -1673,15 +1778,45 @@ public class SpnParser {
     private enum BinaryFallback { ARITHMETIC, REQUIRE_PRIMITIVE, ALLOW_ANY, NO_DISPATCH }
 
     /**
-     * Emit a binary-op AST node. Always produces the primitive node; operator-
-     * overload dispatch, promotion insertion, and type tracking belong to the
-     * future inference pass that runs over this tree.
+     * Dispatch a binary operator. Tries user-defined overload (via TypeResolver)
+     * first, then falls back to the built-in primitive node. Records the dispatch
+     * decision for IDE display.
      */
     private SpnExpressionNode dispatchBinaryOp(String symbol,
             SpnExpressionNode left, SpnExpressionNode right,
             BinaryNodeFactory factory, BinaryFallback fallback, FieldType resultType) {
         SpnParseToken opTok = tokens.lastConsumed();
-        return at(factory.create(left, right), opTok);
+        SpnExpressionNode dispatched = fallback == BinaryFallback.NO_DISPATCH
+                ? null : tryOperatorDispatch(symbol, left, right);
+        if (dispatched == null) {
+            dispatched = switch (fallback) {
+                case ARITHMETIC -> {
+                    FieldType lt = inferType(left), rt = inferType(right);
+                    if (lt instanceof FieldType.Untyped || rt instanceof FieldType.Untyped) {
+                        throw tokens.error("Untyped (_) value cannot be used in arithmetic");
+                    }
+                    if (isDefinitelyNonPrimitive(lt) || isDefinitelyNonPrimitive(rt)) {
+                        throw tokens.error("No overload for " + symbol + "("
+                                + describeTypeOrUnknown(lt) + ", " + describeTypeOrUnknown(rt) + ")");
+                    }
+                    SpnExpressionNode node = at(factory.create(left, right), opTok);
+                    // Track arithmetic result type
+                    if (lt != null && rt != null && lt == rt) trackType(node, lt);
+                    else if ((lt == FieldType.LONG && rt == FieldType.DOUBLE)
+                          || (lt == FieldType.DOUBLE && rt == FieldType.LONG))
+                        trackType(node, FieldType.DOUBLE);
+                    yield node;
+                }
+                case REQUIRE_PRIMITIVE -> {
+                    requirePrimitiveOperand(left, "'" + symbol + "'");
+                    requirePrimitiveOperand(right, "'" + symbol + "'");
+                    yield at(factory.create(left, right), opTok);
+                }
+                case ALLOW_ANY, NO_DISPATCH -> at(factory.create(left, right), opTok);
+            };
+        }
+        if (resultType != null) trackType(dispatched, resultType);
+        return dispatched;
     }
 
     /** One infix operator's precedence-table entry. */
@@ -1746,8 +1881,17 @@ public class SpnParser {
             if (tok == null) break;
 
             String opText = tok.text();
+            String resolved = opText;
             InfixOp op = INFIX_OPS.get(opText);
-            if (op == null) break;
+
+            // Qualified infix: *_dot borrows precedence from *.
+            if (op == null) {
+                String qual = peekQualifiedInfix();
+                if (qual == null) break;
+                resolved = qual;
+                op = INFIX_OPS.get(qual.substring(0, qual.indexOf('_')));
+                if (op == null) break;
+            }
 
             // `-` at start of a new line is unary (isUnaryMinus); break so the
             // outer caller can re-enter parseExpr for the next statement.
@@ -1759,7 +1903,28 @@ public class SpnParser {
             // Left-associative: RHS binds one precedence higher.
             SpnExpressionNode right = parseExpr(op.prec() + 1);
 
-            left = dispatchBinaryOp(opText, left, right,
+            // Special: `1 / x` → try multiplicative-inverse dispatch.
+            if (resolved.equals("/")) {
+                SpnExpressionNode dispatched = tryOperatorDispatch("/", left, right);
+                if (dispatched == null) dispatched = tryUnaryInverse(left, right);
+                if (dispatched != null) {
+                    if (op.resultType() != null) trackType(dispatched, op.resultType());
+                    left = dispatched;
+                    continue;
+                }
+            }
+
+            // Qualified infixes must dispatch to a user overload — no built-in.
+            if (!resolved.equals(opText)) {
+                SpnExpressionNode dispatched = tryOperatorDispatch(resolved, left, right);
+                if (dispatched == null) {
+                    throw tokens.error("No overload found for qualified operator: " + resolved);
+                }
+                left = dispatched;
+                continue;
+            }
+
+            left = dispatchBinaryOp(resolved, left, right,
                     op.factory(), op.fallback(), op.resultType());
         }
 
@@ -1767,31 +1932,27 @@ public class SpnParser {
     }
 
 
-    // ── Dispatch/promotion/match stubs (deferred to the inference pass) ───
-
     private SpnExpressionNode tryOperatorDispatch(String op,
                                                     SpnExpressionNode left,
                                                     SpnExpressionNode right) {
-        return null;
+        return resolver.tryOperatorDispatch(op, left, right);
     }
 
     private SpnExpressionNode tryUnaryInverse(SpnExpressionNode left, SpnExpressionNode right) {
-        return null;
+        return resolver.tryUnaryInverse(left, right);
     }
 
-    private void promoteArgs(List<SpnExpressionNode> args, String funcName) { /* no-op */ }
-
-    private boolean isPrimitive(FieldType type) { return true; }
-
-    /** Optimistic: always returns true. The real check belongs to the inference pass. */
-    private boolean typesMatch(FieldType declared, FieldType inferred) { return true; }
+    private void promoteArgs(List<SpnExpressionNode> args, String funcName) {
+        resolver.promoteArgs(args, funcName);
+    }
 
     private SpnExpressionNode parseUnary() {
         if (tokens.match("-")) {
             SpnExpressionNode operand = parseUnary();
-            // Always emit the primitive negate. The inference pass will lift
-            // this to a unary overload or .neg() method call when the operand
-            // type turns out to be a struct.
+            // Try compile-time dispatch: unary overload or .neg() method
+            SpnExpressionNode dispatched = resolver.tryUnaryDispatch("-", operand);
+            if (dispatched != null) return dispatched;
+            // Primitive negation (int/float)
             return at(SpnNegateNodeGen.create(operand));
         }
         return parsePostfix();
@@ -1873,47 +2034,57 @@ public class SpnParser {
 
     // ── Type dispatch helpers ─────────────────────────────────────────────
 
-    // Structural helpers kept, but inference-dependent ones stubbed.
+    // ── Structural + resolver-backed helpers ──────────────────────────────
 
-    private SpnStructDescriptor resolveStructDescriptor(FieldType type) { return null; }
+    private SpnStructDescriptor resolveStructDescriptor(FieldType type) {
+        return resolver.resolveStructDescriptor(type);
+    }
 
-    private String resolveTypeName(FieldType type) { return null; }
+    private String resolveTypeName(FieldType type) { return resolver.resolveTypeName(type); }
 
-    /**
-     * Positional access {@code expr.0}. Without type info we can't tell tuple
-     * from struct; assume struct-style field-access-by-index. The inference
-     * pass will rewrite to tuple-element access when appropriate.
-     */
     private SpnExpressionNode createPositionalAccess(SpnExpressionNode expr, int index,
                                                       FieldType receiverType, SpnParseToken tok) {
+        if (receiverType instanceof FieldType.OfTuple ot) {
+            SpnExpressionNode node = spn.node.struct.SpnTupleElementAccessNodeGen.create(expr, index);
+            var desc = ot.descriptor();
+            if (index < desc.arity()) {
+                FieldType elemType = desc.elementType(index);
+                if (elemType != null) trackType(node, elemType);
+            }
+            return node;
+        }
+        SpnStructDescriptor sd = resolveStructDescriptor(receiverType);
+        if (sd != null) {
+            if (index >= sd.fieldCount()) {
+                throw tokens.error("Positional index " + index + " out of bounds for "
+                        + sd.getName() + " (has " + sd.fieldCount() + " fields)", tok);
+            }
+            SpnExpressionNode node = spn.node.struct.SpnFieldAccessNodeGen.create(expr, index);
+            FieldType ft = sd.fieldType(index);
+            if (ft != null) trackType(node, ft);
+            return node;
+        }
+        // Fallback: generic field access by index
         return spn.node.struct.SpnFieldAccessNodeGen.create(expr, index);
     }
 
-    /**
-     * Resolve a field index without inference. We don't know the receiver's
-     * descriptor, so we emit -1 as a sentinel; the runtime node will fail,
-     * which is fine until the inference pass rewrites these.
-     */
     private int resolveFieldIndex(SpnExpressionNode expr, String fieldName) {
-        return -1;
+        FieldType type = inferType(expr);
+        int idx = resolver.resolveFieldIndex(type, fieldName);
+        if (idx >= 0) return idx;
+        throw tokens.error("Cannot resolve field '" + fieldName + "'"
+                + (type != null ? " on type " + type.describe() : " (unknown type)"));
     }
 
-    private void trackFieldType(SpnExpressionNode accessNode, String fieldName, FieldType receiverType) { /* no-op */ }
+    private void trackFieldType(SpnExpressionNode accessNode, String fieldName, FieldType receiverType) {
+        FieldType ft = resolver.resolveFieldType(receiverType, fieldName);
+        if (ft != null) trackType(accessNode, ft);
+    }
 
-    /**
-     * Look up a method by name only — we have no receiver type. Returns the
-     * first registered {@code *.methodName} entry we find. The inference pass
-     * will disambiguate by receiver type.
-     */
     private MethodEntry resolveMethod(FieldType receiverType, String methodName) {
-        String suffix = "." + methodName;
-        for (Map.Entry<String, MethodEntry> e : methodRegistry.entrySet()) {
-            if (e.getKey().endsWith(suffix)) return e.getValue();
-        }
-        return null;
+        return resolver.resolveMethod(receiverType, methodName);
     }
 
-    /** Resolve a type name via the type/struct registries (structural, no inference). */
     private FieldType resolveTypeByName(String typeName) {
         SpnStructDescriptor sd = structRegistry.get(typeName);
         if (sd != null) return FieldType.ofStruct(sd);
@@ -2378,20 +2549,51 @@ public class SpnParser {
         }
 
         SpnExpressionNode subject = parseExpression();
+        FieldType subjectType = inferType(subject);
 
         List<SpnMatchBranchNode> branches = new ArrayList<>();
+        FieldType resultType = null;
         while (tokens.match("|")) {
-            branches.add(parseMatchBranch());
+            SpnMatchBranchNode branch = parseMatchBranch();
+            branches.add(branch);
+            resultType = unifyTypes(resultType, inferType(branch.getBody()));
+            // Categorical check: reject patterns that can't match the subject
+            if (subjectType != null) {
+                String mismatch = patternCategoryMismatch(branch.getPattern(), subjectType);
+                if (mismatch != null) {
+                    throw tokens.error("Pattern cannot match subject of type "
+                            + subjectType.describe() + ": " + mismatch, matchTok);
+                }
+            }
         }
 
         if (branches.isEmpty()) {
             throw tokens.error("Match expression must have at least one branch");
         }
 
-        // Categorical pattern checks and variant exhaustiveness are deferred to
-        // the inference pass — they require knowing the subject's type.
-        return new SpnMatchNode(subject,
+        // Exhaustiveness check on union/variant subjects
+        if (subjectType instanceof FieldType.OfVariant ov) {
+            MatchPattern[] patterns = new MatchPattern[branches.size()];
+            for (int i = 0; i < branches.size(); i++) {
+                patterns[i] = branches.get(i).getPattern();
+            }
+            SpnVariantSet vs = ov.variantSet();
+            if (!vs.isCoveredBy(patterns)) {
+                SpnStructDescriptor[] missing = vs.uncoveredVariants(patterns);
+                var names = new StringBuilder();
+                for (int i = 0; i < missing.length; i++) {
+                    if (i > 0) names.append(", ");
+                    names.append(missing[i].getName());
+                }
+                throw tokens.error("Non-exhaustive match on " + vs.getName()
+                        + ": missing pattern(s) for " + names, matchTok);
+            }
+        }
+
+        SpnExpressionNode matchNode = new SpnMatchNode(subject,
                 branches.toArray(new SpnMatchBranchNode[0]));
+        if (resultType != null) trackType(matchNode, resultType);
+        return matchNode;
     }
 
     /**

@@ -15,7 +15,7 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@org.junit.jupiter.api.Disabled("Awaiting inference pass — user-defined operator dispatch stripped in Phase 4.4")
+
 class Vec3Test {
 
     private SpnSymbolTable symbolTable;
@@ -61,7 +61,7 @@ class Vec3Test {
         }
 
         @Test
-        @org.junit.jupiter.api.Disabled("Awaiting inference pass — unary dispatch stripped in Phase 4.4")
+        
         void unaryNegation() {
             assertEquals(true, run("""
                 import numerics.vec3
@@ -102,7 +102,7 @@ class Vec3Test {
         }
 
         @Test
-        @org.junit.jupiter.api.Disabled("Awaiting inference pass — unary dispatch stripped in Phase 4.4")
+        
         void crossProductAnticommutative() {
             // a × b == -(b × a)
             assertEquals(true, run("""

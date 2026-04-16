@@ -176,7 +176,6 @@ class SpnParserTest {
         }
 
         @Test
-        @org.junit.jupiter.api.Disabled("Awaiting inference pass — untyped-arg check stripped in Phase 4.4")
         void untypedArithmeticRejected() {
             assertThrows(SpnParseException.class, () -> run("""
                 pure add(_, _) = (a, b) { a + b }
@@ -185,7 +184,7 @@ class SpnParserTest {
         }
 
         @Test
-        @org.junit.jupiter.api.Disabled("Awaiting inference pass — untyped-arg check stripped in Phase 4.4")
+    
         void untypedComparisonRejected() {
             assertThrows(SpnParseException.class, () -> run("""
                 pure bigger(_, _) = (a, b) { a > b }
@@ -356,7 +355,6 @@ class SpnParserTest {
     // ── Field access and methods ──────────────────────────────────────────
 
     @Nested
-    @org.junit.jupiter.api.Disabled("Awaiting inference pass — field/method resolution needs receiver type info stripped in Phase 4.4")
     class FieldsAndMethods {
         @Test
         void fieldAccess() {
@@ -673,7 +671,7 @@ class SpnParserTest {
     }
 
     @Test
-    @org.junit.jupiter.api.Disabled("Awaiting inference pass — operator dispatch stripped in Phase 4.4")
+
     void rationalArithmetic() {
         // Rational addition: 1/2 + 3/4 = (1*4 + 2*3)/(2*4) = 10/8
         String source = """
@@ -692,7 +690,7 @@ x + y
     }
 
     @Test
-    @org.junit.jupiter.api.Disabled("Awaiting inference pass — operator dispatch + promotion stripped in Phase 4.4")
+
     void numericsIndexFullDispatch() {
         // Full numerics/index.spn: Rational + ComplexPolar via promotion
         Object result = run("""
@@ -716,7 +714,7 @@ x+y
     }
 
     @Test
-    @org.junit.jupiter.api.Disabled("Awaiting inference pass — parse-time overload-missing check stripped in Phase 4.4")
+
     void parseErrorForUndefinedOperatorOnNonPrimitives() {
         // Applying + to struct types with no matching overload should fail at
         // parse time (not runtime), with a helpful message naming the types.
@@ -744,7 +742,6 @@ x + y
     // ── Union types and type inference ─────────────────────────────────────
 
     @Nested
-    @org.junit.jupiter.api.Disabled("Awaiting inference pass — union/exhaustiveness/dispatch stripped in Phase 4.4")
     class UnionTypesAndInference {
 
         @Test
@@ -1085,7 +1082,6 @@ x + y
     // ── Operator arity mutex ──────────────────────────────────────────────
 
     @Nested
-    @org.junit.jupiter.api.Disabled("Awaiting inference pass — mutex check requires typesMatch stripped in Phase 4.4")
     class OperatorArityMutex {
         // Rule: for a given operator and first-parameter type, you may define
         // EITHER a unary OR a binary overload — not both. The alternative form
@@ -1242,7 +1238,6 @@ x + y
     // ── Named pattern destructuring ────────────────────────────────────────
 
     @Nested
-    @org.junit.jupiter.api.Disabled("Awaiting inference pass — named-field binding needs field-type resolution stripped in Phase 4.4")
     class NamedPatternDestructuring {
         // Grammar: Type(field = pattern, field = pattern, ...)
         // Fields may appear in any order, unspecified fields default to Wildcard,
