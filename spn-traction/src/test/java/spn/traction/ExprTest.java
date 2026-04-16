@@ -40,7 +40,6 @@ class ExprTest {
     }
 
     @Nested
-    @org.junit.jupiter.api.Disabled("Expr eval uses cross-module operator dispatch — needs module-level operator export investigation")
     class Evaluation {
         @Test void litEval() {
             assertEquals(true, run("""
@@ -59,7 +58,9 @@ class ExprTest {
                 """));
         }
 
-        @Test void varEval() {
+        @Test
+        @org.junit.jupiter.api.Disabled("env[name] uses array-access node on Dict — needs dict-indexing support")
+        void varEval() {
             assertEquals(true, run("""
                 import algebra.expr
                 let e = var(:x)
@@ -120,9 +121,10 @@ class ExprTest {
     }
 
     @Nested
-    @org.junit.jupiter.api.Disabled("Depends on Expr eval")
     class Proving {
-        @Test void proveIdentity() {
+        @Test
+        @org.junit.jupiter.api.Disabled("structEq normalization returns false — prove.spn normalization logic bug")
+        void proveIdentity() {
             // x + 0 == x (after normalization)
             assertEquals(true, run("""
                 import algebra.prove
@@ -131,7 +133,9 @@ class ExprTest {
                 """));
         }
 
-        @Test void proveNumerically() {
+        @Test
+        @org.junit.jupiter.api.Disabled("[:] empty dict literal not supported — needs syntax or stdlib workaround")
+        void proveNumerically() {
             // check 2*3 == 3*2 at x=5
             assertEquals(true, run("""
                 import algebra.prove

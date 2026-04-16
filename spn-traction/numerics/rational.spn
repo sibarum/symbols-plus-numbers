@@ -68,7 +68,7 @@ pure /(Rational, Rational) -> Rational = (q1, q2) {
 }
 
 pure compare(Rational, Rational) -> int = (q1, q2) {
-  (q2 - q1).0
+  (q1 - q2).0
 }
 
 deriveOrderingFromInt(Rational, compare)

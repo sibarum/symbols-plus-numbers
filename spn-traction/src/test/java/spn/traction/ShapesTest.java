@@ -39,6 +39,15 @@ class ShapesTest {
         return root.getCallTarget().call();
     }
 
+    @Test
+    void rationalOrderingWorks() {
+        // Smoke test: verify < on Rational works correctly within the shapes module context
+        assertEquals(true, run("""
+            import geometry.shapes
+            Rational(12, 1) > Rational.zero
+            """));
+    }
+
     @Nested
     class Area {
         @Test
@@ -52,7 +61,7 @@ class ShapesTest {
         }
 
         @Test
-        @org.junit.jupiter.api.Disabled("Triangle area uses -det (unary neg on intermediate Rational) — needs deeper inference chain")
+        @org.junit.jupiter.api.Disabled("Passes in isolation, fails in full suite — test-ordering isolation issue")
         void triangleArea() {
             // Triangle (0,0), (4,0), (0,3) → area = |4*3|/2 = 6
             assertEquals(true, run("""
@@ -69,7 +78,6 @@ class ShapesTest {
     @Nested
     class Containment {
         @Test
-        @org.junit.jupiter.api.Disabled("Containment comparison on Rationals — needs investigation")
         void rectContainsInteriorPoint() {
             assertEquals(true, run("""
                 import geometry.shapes
@@ -79,7 +87,6 @@ class ShapesTest {
         }
 
         @Test
-        @org.junit.jupiter.api.Disabled("Same as rectContainsInteriorPoint")
         void rectDoesNotContainExteriorPoint() {
             assertEquals(false, run("""
                 import geometry.shapes
@@ -107,7 +114,7 @@ class ShapesTest {
     @Nested
     class Bounds {
         @Test
-        @org.junit.jupiter.api.Disabled("Bounds uses rmin/rmax which use < on Rational — needs ordering dispatch")
+        @org.junit.jupiter.api.Disabled("Same isolation issue as triangleArea")
         void triangleBounds() {
             assertEquals(true, run("""
                 import geometry.shapes
