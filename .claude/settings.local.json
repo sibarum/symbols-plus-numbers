@@ -32,7 +32,14 @@
       "Bash(mvn -pl spn-parse clean compile)",
       "Bash(grep -E \"^\\\\[INFO\\\\] Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$|FAIL|BUILD\")",
       "Bash(grep -E \"^\\\\[INFO\\\\] Tests run: [0-9]+, Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$|BUILD|FAIL\")",
-      "Bash(grep -E \"FAILURE\\\\!$\")"
+      "Bash(grep -E \"FAILURE\\\\!$\")",
+      "Bash(mvn -pl spn-stdlib -am install -DskipTests -q)",
+      "Bash(mvn -pl spn-traction -am test -Dtest=TypedCollectionTest -q)",
+      "Bash(mvn -pl spn-traction -am install -DskipTests -q)",
+      "Bash(mvn -pl spn-traction test -Dtest=TypedCollectionTest -Dsurefire.failIfNoSpecifiedTests=false -q)",
+      "Bash(cat)",
+      "Read(//tmp/**)",
+      "Bash(mvn -pl spn-traction test -Dtest=TypedCollectionTest -Dsurefire.failIfNoSpecifiedTests=false)"
     ]
   }
 }

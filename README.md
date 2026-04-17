@@ -162,6 +162,7 @@ arr.items                              -- compile error: private field
 - **Private constructor fields** — `let this.field = expr` creates encapsulated state, accessible only from methods on the same type
 - **Multiple dispatch** — macro-generated functions participate in type-dispatched overloading
 - **Unique internal names** — multiple invocations of the same macro don't collide
+- **Macro-aware error messages** — parse errors inside an expanded body are tagged with the macro invocation site (`[in macro name(file:line)]`), so diagnostics point back to the caller rather than the internal expansion
 
 ### Unary Operator Dispatch
 
@@ -337,13 +338,13 @@ Shift+F5 records all function calls, returns, errors, and variable assignments d
 |--------|-----------|
 | **Math** | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `ceil`, `floor`, `round`, `abs`, `sign`, `min`, `max`, `clamp`, `pow`, `sqrt`, `heron`, `gcd`, `toFloat` |
 | **Array** | `map`, `filter`, `fold`, `flatten`, `zip`, `reverse`, `take`, `drop`, `find`, `all`, `any`, `sort`, `enumerate`, `concat`, `append`, `length`, `first`, `last`, `unique`, `chunk`, `groupBy`, `indexOf`, `contains` |
-| **Dict** | `hasKey`, `keys`, `values`, `entries`, `merge`, `remove`, `mapValues` |
-| **Set** | `difference`, `intersection`, `isSubset`, `fromArray`, `toArray`, `size` |
+| **Dict** | `put`, `dictGet`, `hasKey`, `keys`, `values`, `entries`, `merge`, `remove`, `mapValues`, `dictSize`, `emptyDict` |
+| **Set** | `setAdd`, `setRemove`, `difference`, `intersection`, `isSubset`, `fromArray`, `toArray`, `size` |
 | **String** | `toUpper`, `toLower`, `trim`, `replace`, `substring`, `split`, `startsWith`, `show`, `join`, `formatNum` |
 | **Range** | `rangeStep`, `repeat`, `iterate` |
 | **Option** | `mapOption`, `flatMap`, `unwrap`, `unwrapOr` |
 | **Ordering** | `deriveOrderingFromInt(T, cmp)`, `deriveOrderingFromOrdering(T, cmp)` — stdlib macros |
-| **Collections** | `constructTypedArray(T)` — stdlib macro that generates a type-safe array wrapper with `.push(T)`, `.get(int) -> T`, `.length()` and private encapsulated storage |
+| **Collections** | Stdlib macros for typed collection wrappers with private encapsulated storage: `constructTypedArray(T)` (`.push`, `.get`, `.length`), `constructTypedSet(T)` (`.add`, `.remove`, `.size`, `.toArray`), `constructTypedDict(K, V)` (`.put`, `.get`, `.has`, `.remove`, `.size`, `.keys`, `.values`) |
 
 Canvas functions (`canvas`, `show`, `clear`, `fill`, `stroke`, `strokeWeight`, `rect`, `circle`, `line`, `text`, `animate`) are provided by the spn-canvas module.
 
@@ -457,8 +458,6 @@ mvn test
 - **TypeGraph-driven IDE features** -- go-to-definition, find-usages, and dependency visualization powered by the unified declaration graph
 - **Incremental type inference** -- exploit definition-order for sub-millisecond re-inference on edits (invalidate from edit line onward, cache above)
 - **Macro evolution** -- `emit { }` blocks with conditional logic, compile-time evaluation, environment/platform-specific code generation, non-source artifact generation (manifests, lookup tables)
-- **Typed collections for Set and Dict** -- `constructTypedSet(T)`, `constructTypedDict(K, V)` stdlib macros (Array is done)
-- **Macro error attribution** -- error messages from macro-expanded code should point to the macro call site, not the internal expansion
 - **AND-types (interfaces)** -- globally namespaced interfaces that can be dynamically attached to any type at compile time, enabling omnidirectional dependency injection
 - **`=?` three-way comparator** -- single `compareTo` dispatch replacing individual `<`, `>`, `<=`, `>=` overloads, returning `:lt | :eq | :gt`
 - **Cross-file trace links** -- clickable caller links in the Tracer invocation panel

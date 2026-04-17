@@ -19,6 +19,8 @@
 -- ═══════════════════════════════════════════════════════════════════════
 
 import Array (append, length)
+import Set (setAdd, setRemove, fromArray, toArray, size)
+import Dict (put, dictGet, dictSize, emptyDict, hasKey, remove, keys, values)
 
 -- ── Typed Array ─────────────────────────────────────────────────────
 
@@ -41,4 +43,84 @@ macro constructTypedArray(T) = {
     length(this.items)
   }
   emit TypedArray
+}
+
+-- ── Typed Set ───────────────────────────────────────────────────────
+--
+--   type UserIdSet = constructTypedSet(UserId)
+--   let s = UserIdSet()
+--   let s2 = s.add(UserId(:alice)).add(UserId(:bob))
+--   s2.size()           -- 2
+--   s2.toArray()        -- [UserId(:alice), UserId(:bob)] (untyped Array)
+--
+-- No `contains` method — membership is a pattern-matching semantic in SPN.
+
+macro constructTypedSet(T) = {
+  type TypedSet
+  pure TypedSet(Set) -> TypedSet = (s) {
+    let this.items = s
+    this(s)
+  }
+  pure TypedSet() -> TypedSet = () {
+    TypedSet(fromArray([]))
+  }
+  pure TypedSet.add(T) -> TypedSet = (item) {
+    TypedSet(setAdd(this.items, item))
+  }
+  pure TypedSet.remove(T) -> TypedSet = (item) {
+    TypedSet(setRemove(this.items, item))
+  }
+  pure TypedSet.size() -> int = () {
+    size(this.items)
+  }
+  pure TypedSet.toArray() -> Array = () {
+    toArray(this.items)
+  }
+  emit TypedSet
+}
+
+-- ── Typed Dict ──────────────────────────────────────────────────────
+--
+-- K is the key type; today this should be `Symbol` (constrained-symbol
+-- subtypes aren't yet constructible as values, so bare symbols are the
+-- only usable keys). V is any type; values entering via `.put` are
+-- promoted to V automatically.
+--
+--   type UserMap = constructTypedDict(Symbol, User)
+--   let m = UserMap().put(:alice, alice).put(:bob, bob)
+--   m.get(:alice)
+--   m.has(:carol)   -- false
+--   m.size()        -- 2
+
+macro constructTypedDict(K, V) = {
+  type TypedDict
+  pure TypedDict(Dict) -> TypedDict = (d) {
+    let this.entries = d
+    this(d)
+  }
+  pure TypedDict() -> TypedDict = () {
+    TypedDict(emptyDict())
+  }
+  pure TypedDict.put(K, V) -> TypedDict = (k, v) {
+    TypedDict(put(this.entries, k, v))
+  }
+  pure TypedDict.get(K) -> V = (k) {
+    dictGet(this.entries, k)
+  }
+  pure TypedDict.has(K) -> bool = (k) {
+    hasKey(this.entries, k)
+  }
+  pure TypedDict.remove(K) -> TypedDict = (k) {
+    TypedDict(remove(this.entries, k))
+  }
+  pure TypedDict.size() -> int = () {
+    dictSize(this.entries)
+  }
+  pure TypedDict.keys() -> Array = () {
+    keys(this.entries)
+  }
+  pure TypedDict.values() -> Array = () {
+    values(this.entries)
+  }
+  emit TypedDict
 }
