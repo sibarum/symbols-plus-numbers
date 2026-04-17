@@ -1273,6 +1273,112 @@ x + y
         }
     }
 
+    // ── Multi-emit macros (bundle form) ────────────────────────────────────
+    //
+    // `emit { label: TypeName, ... }` emits multiple named types. The caller
+    // binds `let h = macroCall(...)` to a compile-time handle and then pulls
+    // individual types via `type X = h.label`. Single-emit `emit T` remains
+    // backward compatible (it's the 1-field degenerate case).
+
+    @Nested
+    class MultiEmitMacros {
+
+        @Test
+        void singleEmitBackwardCompatible() {
+            // Existing `emit T` + `type X = call(...)` path still works unchanged.
+            assertEquals(42L, run("""
+                macro constructWrapper(T) = {
+                  type Wrapper(T)
+                  pure Wrapper.unwrap() -> T = () { this.0 }
+                  emit Wrapper
+                }
+
+                type Box(int)
+                type SafeBox = constructWrapper(Box)
+
+                let sb = SafeBox(Box(42))
+                sb.unwrap().0
+                """));
+        }
+
+        @Test
+        void bundleEmitTwoTypesViaHandle() {
+            // The motivating case: one macro emits a pair of related types,
+            // caller pulls each via handle.field.
+            assertEquals(7L, run("""
+                macro constructPair() = {
+                  type First(int)
+                  type Second(int)
+                  pure First.get() -> int = () { this.0 }
+                  pure Second.get() -> int = () { this.0 }
+                  emit { first: First, second: Second }
+                }
+
+                let pair = constructPair()
+                type A = pair.first
+                type B = pair.second
+
+                let a = A(3)
+                let b = B(4)
+                a.get() + b.get()
+                """));
+        }
+
+        @Test
+        void unknownHandleFieldErrors() {
+            assertThrows(SpnParseException.class, () -> run("""
+                macro constructPair() = {
+                  type First(int)
+                  type Second(int)
+                  emit { first: First, second: Second }
+                }
+
+                let pair = constructPair()
+                type Nope = pair.third
+                Nope(1)
+                """));
+        }
+
+        @Test
+        void oldFormOnMultiEmitErrors() {
+            // `type X = macroCall(...)` on a multi-emit macro must produce a
+            // clear error steering the user to the handle form.
+            assertThrows(SpnParseException.class, () -> run("""
+                macro constructPair() = {
+                  type First(int)
+                  type Second(int)
+                  emit { first: First, second: Second }
+                }
+
+                type Ambiguous = constructPair()
+                Ambiguous(1)
+                """));
+        }
+
+        @Test
+        void twoHandlesDoNotConflict() {
+            // Separate invocations emit types under distinct internal names;
+            // using both handles in the same scope must not collide.
+            assertEquals(true, run("""
+                macro constructPair() = {
+                  type First(int)
+                  type Second(int)
+                  pure First.get() -> int = () { this.0 }
+                  pure Second.get() -> int = () { this.0 }
+                  emit { first: First, second: Second }
+                }
+
+                let p1 = constructPair()
+                let p2 = constructPair()
+
+                type A = p1.first
+                type B = p2.second
+
+                A(10).get() == 10 && B(20).get() == 20
+                """));
+        }
+    }
+
     // ── Operator arity mutex ──────────────────────────────────────────────
 
     @Nested

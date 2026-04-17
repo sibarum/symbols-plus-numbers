@@ -14,8 +14,8 @@ type XRational (int, int)
 pure XRational(int, int) -> XRational = (n, d) {
   match (n, d)
   | (0, 0) -> { this(1, 1) }
-  | (0, d) -> { this(0, d) }
-  | (n, 0) -> { this(n, 0) }
+  | (0, _) -> { this(0, d) }
+  | (_, 0) -> { this(n, 0) }
   | _ -> {
       -- TODO: bitshift algorithm
       this(sign(d) * n, abs(d))

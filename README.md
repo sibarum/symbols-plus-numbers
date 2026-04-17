@@ -158,11 +158,31 @@ arr.items                              -- compile error: private field
 **Macro features:**
 - **`emit`** keyword transmits a declaration from the macro's scope to the caller
 - **`type X = macroCall(T)`** binds the emitted type under a user-chosen name
+- **Multi-emit bundles** — `emit { label: T1, label2: T2 }` emits several named types; the caller binds `let h = macroCall(...)` to a compile-time handle and pulls each via `type X = h.label` (see below)
 - **Scoped isolation** — internal helpers are discarded after the macro completes
 - **Private constructor fields** — `let this.field = expr` creates encapsulated state, accessible only from methods on the same type
 - **Multiple dispatch** — macro-generated functions participate in type-dispatched overloading
 - **Unique internal names** — multiple invocations of the same macro don't collide
 - **Macro-aware error messages** — parse errors inside an expanded body are tagged with the macro invocation site (`[in macro name(file:line)]`), so diagnostics point back to the caller rather than the internal expansion
+
+**Multi-emit with named handles:**
+
+```
+macro constructRatComplex(bits) = {
+  type R(int, int)    -- Rational with bit-budget normalization
+  -- R's constructor, operators, promotes
+  type C(R, R)        -- Complex built on R
+  -- C's constructor, operators, promotes
+  emit { rational: R, complex: C }
+}
+
+-- The caller binds a compile-time handle, then pulls each type by label:
+let rc = constructRatComplex(31)
+type Rat31 = rc.rational
+type Cpx31 = rc.complex
+```
+
+The handle (`rc`) is a compile-time namespace, not a runtime value. Two separate invocations (e.g. `constructRatComplex(31)` and `constructRatComplex(63)`) produce non-conflicting types even when pulled into the same scope. Function and value emit (`pure f = rc.normalize`, `let v = rc.bits`) are planned extensions — today, the bundle form carries types only.
 
 ### Unary Operator Dispatch
 

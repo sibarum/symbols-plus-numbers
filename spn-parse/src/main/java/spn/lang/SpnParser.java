@@ -76,12 +76,25 @@ public class SpnParser {
     // Macro registry: "Name" → MacroDef (compile-time code template)
     record MacroDef(String name, List<String> paramNames, List<SpnParseToken> bodyTokens) {}
 
+    // A macro can emit multiple named declarations. Today only TYPE is supported;
+    // FUNCTION and VALUE are reserved for future stages.
+    enum EmittedKind { TYPE }
+    record EmittedEntry(EmittedKind kind, String internalName) {}
+
+    // A macro handle is a compile-time namespace bound via `let h = macroCall(...)`.
+    // It is not a runtime value — field access (`h.rational`) resolves at parse time.
+    record MacroHandle(LinkedHashMap<String, EmittedEntry> bundle, int line, int col) {}
+
     // Macro expansion state
     private boolean insideMacroExpansion = false;
-    private final Set<String> macroEmittedNames = new HashSet<>();
+    // Bundle of names emitted by the currently-expanding macro, keyed by the
+    // caller-visible label. Cleared at the start of each expansion.
+    private final LinkedHashMap<String, EmittedEntry> macroEmittedBundle = new LinkedHashMap<>();
     private static final String MACRO_END_SENTINEL = "__MACRO_END__";
     private int macroExpansionCounter = 0; // unique suffix for internal type names
     private final Map<String, MacroDef> macroRegistry = new LinkedHashMap<>();
+    // Compile-time namespace: `let h = macroCall(...)` binds h → the emitted bundle.
+    private final Map<String, MacroHandle> macroHandles = new LinkedHashMap<>();
 
     // Associated constants: "TypeName.name" → zero-arg CallTarget returning the value
     record ConstantEntry(CallTarget callTarget, FieldType type) {}
@@ -511,7 +524,7 @@ public class SpnParser {
         // Enter macro scope
         boolean wasInMacro = insideMacroExpansion;
         insideMacroExpansion = true;
-        macroEmittedNames.clear();
+        macroEmittedBundle.clear();
 
         // Add a sentinel at the end so we know when the macro body is done
         expanded.add(new SpnParseToken(
@@ -563,7 +576,7 @@ public class SpnParser {
             Map<String, ConstantEntry> snapConstants,
             Map<String, List<OperatorOverload>> snapFunctionOverloads) {
 
-        if (macroEmittedNames.isEmpty()) {
+        if (macroEmittedBundle.isEmpty()) {
             // No emit → old-style macro. Keep everything it registered
             // (backward compat: deriveOrderingFromInt, deriveDouble, etc.).
             return;
@@ -594,7 +607,8 @@ public class SpnParser {
 
     /** Check if a registry key matches any emitted name (direct or prefixed like "TypeName.method"). */
     private boolean isEmittedKey(String key) {
-        for (String emitted : macroEmittedNames) {
+        for (EmittedEntry entry : macroEmittedBundle.values()) {
+            String emitted = entry.internalName();
             if (key.equals(emitted) || key.startsWith(emitted + ".")) return true;
         }
         return false;
@@ -607,13 +621,27 @@ public class SpnParser {
      * and factories prefixed with the internal name.
      */
     private void renameMacroEmittedType(String targetName, SpnParseToken nameTok) {
-        if (macroEmittedNames.isEmpty()) {
+        if (macroEmittedBundle.isEmpty()) {
             throw tokens.error("Macro did not emit a type — use 'emit TypeName' in the macro body", nameTok);
         }
 
-        // Take the first emitted name as the source type
-        String internalName = macroEmittedNames.iterator().next();
+        if (macroEmittedBundle.size() > 1) {
+            throw tokens.error("Macro emits multiple declarations (" + macroEmittedBundle.size()
+                    + "); use 'let handle = macroCall(...)' and 'type X = handle.field' to pick one",
+                    nameTok);
+        }
 
+        // Single-emit case: take the sole entry's internal name
+        String internalName = macroEmittedBundle.values().iterator().next().internalName();
+        aliasEmittedType(targetName, internalName, nameTok);
+    }
+
+    /**
+     * Register an already-emitted internal type under {@code targetName} as an alias.
+     * Copies the struct descriptor, type descriptor, methods, factories, and
+     * function descriptors prefixed with the internal name.
+     */
+    private void aliasEmittedType(String targetName, String internalName, SpnParseToken nameTok) {
         // Register the struct descriptor under the user's chosen name as an ALIAS.
         // Keep the internal name too — compiled CallTargets reference the original
         // descriptor, so lookups by the internal name must still work.
@@ -658,19 +686,41 @@ public class SpnParser {
     // ── Emit (macro scope export) ────────────────────────────────────────
 
     /**
-     * Parse: {@code emit TypeName}
+     * Parse: {@code emit TypeName}  (single-emit, backward-compatible)
+     *   or: {@code emit { label: TypeName, label2: TypeName2, ... }}  (bundle-emit)
      *
-     * <p>Only valid inside a macro expansion. Records the name as "emitted" so
-     * it survives the macro scope revert. The emitted declaration (and any
-     * methods prefixed with its name) persist into the caller's scope.
+     * <p>Only valid inside a macro expansion. Records each (label → internal name)
+     * pair in the current macro's emit bundle. Labels are caller-visible and used
+     * via a macro handle (e.g. {@code type X = h.label}). For the single-emit form,
+     * label == internal name.
+     *
+     * <p>The emitted declarations (and any methods prefixed with their names)
+     * persist into the caller's scope after the macro scope reverts; internal
+     * declarations without an emit are discarded.
      */
     private void parseEmit() {
         SpnParseToken emitTok = tokens.expect("emit");
         if (!insideMacroExpansion) {
             throw tokens.error("'emit' can only be used inside a macro body", emitTok);
         }
-        SpnParseToken nameTok = tokens.advance();
-        macroEmittedNames.add(nameTok.text());
+
+        if (tokens.match("{")) {
+            // Bundle form: emit { label: TypeName, ... }
+            while (!tokens.check("}")) {
+                SpnParseToken labelTok = tokens.advance();
+                String label = labelTok.text();
+                tokens.expect(":");
+                SpnParseToken nameTok = tokens.advance();
+                macroEmittedBundle.put(label, new EmittedEntry(EmittedKind.TYPE, nameTok.text()));
+                tokens.match(",");
+            }
+            tokens.expect("}");
+        } else {
+            // Single form: emit TypeName  (label == internal name)
+            SpnParseToken nameTok = tokens.advance();
+            String name = nameTok.text();
+            macroEmittedBundle.put(name, new EmittedEntry(EmittedKind.TYPE, name));
+        }
     }
 
     // ── Import declarations ────────────────────────────────────────────────
@@ -947,7 +997,7 @@ public class SpnParser {
         SpnParseToken nameTok = tokens.expectType(TokenType.TYPE_NAME);
         String name = nameTok.text();
 
-        // type Name = macroCall(args)  OR  type Name = BaseType [where validatorClosure]
+        // type Name = macroCall(args)  OR  type Name = handle.field  OR  type Name = BaseType [where ...]
         if (tokens.match("=")) {
             // Check for macro call: type X = macroName(args)
             SpnParseToken rhsTok = tokens.peek();
@@ -959,6 +1009,29 @@ public class SpnParser {
                 expandMacroInvocation();
                 // Find the emitted type and re-register it under the user's chosen name.
                 renameMacroEmittedType(name, nameTok);
+                return;
+            }
+
+            // Check for macro handle field access: type X = handle.field
+            if (rhsTok != null && rhsNext != null
+                    && macroHandles.containsKey(rhsTok.text())
+                    && rhsNext.text().equals(".")) {
+                SpnParseToken handleTok = tokens.advance(); // handle name
+                tokens.advance(); // '.'
+                SpnParseToken fieldTok = tokens.advance();
+                String handleName = handleTok.text();
+                String fieldName = fieldTok.text();
+                MacroHandle handle = macroHandles.get(handleName);
+                EmittedEntry entry = handle.bundle().get(fieldName);
+                if (entry == null) {
+                    throw tokens.error("Macro handle '" + handleName
+                            + "' has no field '" + fieldName + "'", fieldTok);
+                }
+                if (entry.kind() != EmittedKind.TYPE) {
+                    throw tokens.error("Field '" + handleName + "." + fieldName
+                            + "' is not a type", fieldTok);
+                }
+                aliasEmittedType(name, entry.internalName(), nameTok);
                 return;
             }
 
@@ -1747,6 +1820,25 @@ public class SpnParser {
         }
 
         String name = expectIdentifier().text();
+
+        // Check: `let name = macroCall(...)` → macro handle binding.
+        // Bind `name` as a compile-time namespace over the macro's emit bundle;
+        // field access (`type X = name.field`) resolves later at parse time.
+        // No runtime node is emitted.
+        SpnParseToken la0 = tokens.peek();
+        SpnParseToken la1 = tokens.peek(1);
+        SpnParseToken la2 = tokens.peek(2);
+        if (la0 != null && la0.text().equals("=")
+                && la1 != null && macroRegistry.containsKey(la1.text())
+                && la2 != null && la2.text().equals("(")) {
+            tokens.advance(); // consume '='
+            int line = la1.line();
+            int col = la1.col();
+            expandMacroInvocation();
+            var bundle = new LinkedHashMap<>(macroEmittedBundle);
+            macroHandles.put(name, new MacroHandle(bundle, line, col));
+            return null;
+        }
 
         // Optional type annotation
         FieldType annotatedType = null;
