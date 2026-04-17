@@ -75,6 +75,12 @@ public class SpnParser {
 
     // Macro registry: "Name" → MacroDef (compile-time code template)
     record MacroDef(String name, List<String> paramNames, List<SpnParseToken> bodyTokens) {}
+
+    // Macro expansion state
+    private boolean insideMacroExpansion = false;
+    private final Set<String> macroEmittedNames = new HashSet<>();
+    private static final String MACRO_END_SENTINEL = "__MACRO_END__";
+    private int macroExpansionCounter = 0; // unique suffix for internal type names
     private final Map<String, MacroDef> macroRegistry = new LinkedHashMap<>();
 
     // Associated constants: "TypeName.name" → zero-arg CallTarget returning the value
@@ -87,6 +93,11 @@ public class SpnParser {
     // Operator overload registry: operator → list of (paramTypes, callTarget) pairs
     record OperatorOverload(FieldType[] paramTypes, FieldType returnType, CallTarget callTarget) {}
     private final Map<String, List<OperatorOverload>> operatorRegistry = new LinkedHashMap<>();
+
+    // Function overload registry: for functions with multiple type-dispatched overloads.
+    // A function enters this registry when a second definition with the same name is
+    // encountered (the first definition stays in functionRegistry for backward compat).
+    private final Map<String, List<OperatorOverload>> functionOverloads = new LinkedHashMap<>();
 
     // Promotion registry: sourceType → (targetType, conversionCallTarget)
     record Promotion(String sourceDesc, String targetDesc, CallTarget converter) {}
@@ -353,6 +364,7 @@ public class SpnParser {
             case "yield" -> parseYieldStatement();
             case "return" -> parseYieldStatement(); // return is syntactic sugar for yield
             case "macro" -> { parseMacroDecl(); yield null; }
+            case "emit" -> { parseEmit(); yield null; }
             default -> parseExpressionStatement();
         };
     }
@@ -402,8 +414,15 @@ public class SpnParser {
 
     /**
      * Expand a macro invocation: Name(arg1, arg2, ...) at the current position.
-     * Substitutes argument tokens for parameter occurrences in the body, then
-     * injects the substituted tokens back into the stream for normal parsing.
+     *
+     * <p><b>Scoped expansion</b>: the macro body runs in a temporary scope.
+     * Named declarations (type, function, method, constant) are LOCAL to the
+     * macro and discarded after expansion — unless explicitly {@code emit}-ted.
+     * Semantic declarations (operator overloads, promotions) register globally
+     * and persist.
+     *
+     * <p>Existing macros (deriveOrderingFromInt) only emit semantic declarations,
+     * so they work unchanged — nothing to emit, nothing to discard.
      */
     private void expandMacroInvocation() {
         SpnParseToken nameTok = tokens.advance();
@@ -411,10 +430,7 @@ public class SpnParser {
 
         tokens.expect("(");
         List<List<SpnParseToken>> args = new ArrayList<>();
-        // Guard against EOF: must also check hasMore() so we don't spin forever
-        // when the user is mid-typing and the closing ')' hasn't been written yet.
         while (tokens.hasMore() && !tokens.check(")")) {
-            // Each argument is a single token sequence terminated by , or )
             List<SpnParseToken> arg = new ArrayList<>();
             int depth = 0;
             while (tokens.hasMore()) {
@@ -425,7 +441,6 @@ public class SpnParser {
                 arg.add(tokens.advance());
             }
             args.add(arg);
-            // If we reached EOF without hitting a comma or ), bail rather than loop.
             if (!tokens.hasMore()) break;
             tokens.match(",");
         }
@@ -442,10 +457,7 @@ public class SpnParser {
             substitution.put(macro.paramNames().get(i), args.get(i));
         }
 
-        // Substitute: walk body tokens, replace any whose text matches a param.
-        // Re-stamp substituted tokens with the position of the parameter they
-        // replaced, so the parser sees them as living "inside" the macro body
-        // (line-aware checks like function-call detection work correctly).
+        // Substitute parameters in body tokens
         List<SpnParseToken> expanded = new ArrayList<>();
         for (SpnParseToken tok : macro.bodyTokens()) {
             List<SpnParseToken> sub = substitution.get(tok.text());
@@ -459,8 +471,203 @@ public class SpnParser {
             }
         }
 
-        // Inject expanded tokens at current position; parser will pick them up
+        // Uniquify internal type names to prevent collisions between multiple
+        // invocations of the same macro. Only rename types that were declared
+        // IN THE ORIGINAL BODY (not substituted from parameters).
+        macroExpansionCounter++;
+        String suffix = "$" + macroExpansionCounter;
+        // Find internal type names from the ORIGINAL body (before substitution)
+        Set<String> internalTypeNames = new HashSet<>();
+        List<SpnParseToken> bodyTokens = macro.bodyTokens();
+        for (int i = 0; i < bodyTokens.size() - 1; i++) {
+            if (bodyTokens.get(i).text().equals("type")
+                    && bodyTokens.get(i + 1).type() == TokenType.TYPE_NAME
+                    && !substitution.containsKey(bodyTokens.get(i + 1).text())) {
+                internalTypeNames.add(bodyTokens.get(i + 1).text());
+            }
+        }
+        // Rename occurrences of those names in the EXPANDED (post-substitution) tokens
+        if (!internalTypeNames.isEmpty()) {
+            for (int i = 0; i < expanded.size(); i++) {
+                SpnParseToken t = expanded.get(i);
+                if (internalTypeNames.contains(t.text())) {
+                    expanded.set(i, new SpnParseToken(
+                            t.line(), t.col(), t.endCol(),
+                            t.text() + suffix, t.type()));
+                }
+            }
+        }
+
+        // Snapshot named registries BEFORE expansion
+        Map<String, SpnStructDescriptor> snapStructs = new LinkedHashMap<>(structRegistry);
+        Map<String, SpnTypeDescriptor> snapTypes = new LinkedHashMap<>(typeRegistry);
+        Map<String, CallTarget> snapFunctions = new LinkedHashMap<>(functionRegistry);
+        Map<String, MethodEntry> snapMethods = new LinkedHashMap<>(methodRegistry);
+        Map<String, SpnFunctionDescriptor> snapDescriptors = new LinkedHashMap<>(functionDescriptorRegistry);
+        Map<String, List<FactoryEntry>> snapFactories = new LinkedHashMap<>(factoryRegistry);
+        Map<String, ConstantEntry> snapConstants = new LinkedHashMap<>(constantRegistry);
+        Map<String, List<OperatorOverload>> snapFunctionOverloads = new LinkedHashMap<>(functionOverloads);
+
+        // Enter macro scope
+        boolean wasInMacro = insideMacroExpansion;
+        insideMacroExpansion = true;
+        macroEmittedNames.clear();
+
+        // Add a sentinel at the end so we know when the macro body is done
+        expanded.add(new SpnParseToken(
+                nameTok.line(), nameTok.col(), nameTok.endCol(),
+                MACRO_END_SENTINEL, TokenType.IDENTIFIER));
+
+        // Inject expanded tokens — the main parseTopLevel loop will process them.
+        // The sentinel stops the macro scope.
         tokens.injectAt(expanded);
+
+        // Parse until we hit the sentinel
+        while (tokens.hasMore()) {
+            SpnParseToken peek = tokens.peek();
+            if (peek != null && MACRO_END_SENTINEL.equals(peek.text())) {
+                tokens.advance(); // consume sentinel
+                break;
+            }
+            try {
+                SpnStatementNode stmt = parseTopLevel();
+                // Statements from macro body are discarded (types/functions
+                // registered in registries are what matter, not runtime nodes)
+            } catch (SpnParseException e) {
+                collectedErrors.add(e);
+                synchronize();
+            }
+        }
+
+        // Revert named registries — keep only emitted names + global semantics
+        revertNamedRegistries(snapStructs, snapTypes, snapFunctions, snapMethods,
+                snapDescriptors, snapFactories, snapConstants, snapFunctionOverloads);
+
+        insideMacroExpansion = wasInMacro;
+    }
+
+    /**
+     * Revert named registries to their pre-macro state, keeping entries
+     * that were explicitly {@code emit}-ted.
+     */
+    private void revertNamedRegistries(
+            Map<String, SpnStructDescriptor> snapStructs,
+            Map<String, SpnTypeDescriptor> snapTypes,
+            Map<String, CallTarget> snapFunctions,
+            Map<String, MethodEntry> snapMethods,
+            Map<String, SpnFunctionDescriptor> snapDescriptors,
+            Map<String, List<FactoryEntry>> snapFactories,
+            Map<String, ConstantEntry> snapConstants,
+            Map<String, List<OperatorOverload>> snapFunctionOverloads) {
+
+        if (macroEmittedNames.isEmpty()) {
+            // No emit → old-style macro. Keep everything it registered
+            // (backward compat: deriveOrderingFromInt, deriveDouble, etc.).
+            return;
+        }
+
+        // Selective revert: keep emitted names, revert everything else.
+        // For each registry, remove entries that are NEW (not in snapshot)
+        // AND not emitted.
+        revertRegistry(structRegistry, snapStructs);
+        revertRegistry(typeRegistry, snapTypes);
+        revertRegistry(functionRegistry, snapFunctions);
+        revertRegistry(methodRegistry, snapMethods);
+        revertRegistry(functionDescriptorRegistry, snapDescriptors);
+        revertRegistry(factoryRegistry, snapFactories);
+        revertRegistry(constantRegistry, snapConstants);
+        revertRegistry(functionOverloads, snapFunctionOverloads);
+    }
+
+    /** Remove new entries from a registry unless they match an emitted name. */
+    private <V> void revertRegistry(Map<String, V> registry, Map<String, V> snapshot) {
+        var newKeys = new ArrayList<>(registry.keySet());
+        for (String key : newKeys) {
+            if (!snapshot.containsKey(key) && !isEmittedKey(key)) {
+                registry.remove(key);
+            }
+        }
+    }
+
+    /** Check if a registry key matches any emitted name (direct or prefixed like "TypeName.method"). */
+    private boolean isEmittedKey(String key) {
+        for (String emitted : macroEmittedNames) {
+            if (key.equals(emitted) || key.startsWith(emitted + ".")) return true;
+        }
+        return false;
+    }
+
+    /**
+     * After a macro expansion in {@code type X = macroCall(T)} context, find
+     * the emitted type (registered under its internal name) and re-register
+     * it under the user's chosen name {@code X}. Also re-register any methods
+     * and factories prefixed with the internal name.
+     */
+    private void renameMacroEmittedType(String targetName, SpnParseToken nameTok) {
+        if (macroEmittedNames.isEmpty()) {
+            throw tokens.error("Macro did not emit a type — use 'emit TypeName' in the macro body", nameTok);
+        }
+
+        // Take the first emitted name as the source type
+        String internalName = macroEmittedNames.iterator().next();
+
+        // Register the struct descriptor under the user's chosen name as an ALIAS.
+        // Keep the internal name too — compiled CallTargets reference the original
+        // descriptor, so lookups by the internal name must still work.
+        SpnStructDescriptor sd = structRegistry.get(internalName);
+        if (sd != null) {
+            structRegistry.put(targetName, sd);
+            typeGraph.add(TypeGraph.Node.builder(targetName, TypeGraph.Kind.TYPE)
+                    .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                    .structDescriptor(sd).build());
+        }
+
+        // Alias type descriptor
+        SpnTypeDescriptor td = typeRegistry.get(internalName);
+        if (td != null) {
+            typeRegistry.put(targetName, td);
+        }
+
+        // Alias methods: "InternalName.method" → also register as "TargetName.method"
+        for (var entry : new ArrayList<>(methodRegistry.entrySet())) {
+            if (entry.getKey().startsWith(internalName + ".")) {
+                String newKey = targetName + entry.getKey().substring(internalName.length());
+                methodRegistry.put(newKey, entry.getValue());
+            }
+        }
+
+        // Alias factories
+        List<FactoryEntry> fes = factoryRegistry.get(internalName);
+        if (fes != null) {
+            factoryRegistry.put(targetName, fes);
+        }
+
+        // Alias function descriptors
+        for (var entry : new ArrayList<>(functionDescriptorRegistry.entrySet())) {
+            String key = entry.getKey();
+            if (key.equals(internalName) || key.startsWith(internalName + ".") || key.startsWith(internalName + "/")) {
+                String newKey = targetName + key.substring(internalName.length());
+                functionDescriptorRegistry.put(newKey, entry.getValue());
+            }
+        }
+    }
+
+    // ── Emit (macro scope export) ────────────────────────────────────────
+
+    /**
+     * Parse: {@code emit TypeName}
+     *
+     * <p>Only valid inside a macro expansion. Records the name as "emitted" so
+     * it survives the macro scope revert. The emitted declaration (and any
+     * methods prefixed with its name) persist into the caller's scope.
+     */
+    private void parseEmit() {
+        SpnParseToken emitTok = tokens.expect("emit");
+        if (!insideMacroExpansion) {
+            throw tokens.error("'emit' can only be used inside a macro body", emitTok);
+        }
+        SpnParseToken nameTok = tokens.advance();
+        macroEmittedNames.add(nameTok.text());
     }
 
     // ── Import declarations ────────────────────────────────────────────────
@@ -737,8 +944,22 @@ public class SpnParser {
         SpnParseToken nameTok = tokens.expectType(TokenType.TYPE_NAME);
         String name = nameTok.text();
 
-        // type Name = BaseType [where validatorClosure]
+        // type Name = macroCall(args)  OR  type Name = BaseType [where validatorClosure]
         if (tokens.match("=")) {
+            // Check for macro call: type X = macroName(args)
+            SpnParseToken rhsTok = tokens.peek();
+            SpnParseToken rhsNext = tokens.peek(1);
+            if (rhsTok != null && rhsNext != null
+                    && macroRegistry.containsKey(rhsTok.text())
+                    && rhsNext.text().equals("(")) {
+                // Expand the macro — it will emit a type under its internal name.
+                expandMacroInvocation();
+                // Find the emitted type and re-register it under the user's chosen name.
+                renameMacroEmittedType(name, nameTok);
+                return;
+            }
+
+            // Plain type alias: type Name = BaseType [where validatorClosure]
             SpnTypeDescriptor.Builder builder = SpnTypeDescriptor.builder(name);
             String baseType = tokens.advance().text();
             builder.baseType(baseType);
@@ -806,7 +1027,14 @@ public class SpnParser {
             return;
         }
 
-        throw tokens.error("Expected '=', 'where', or '(' after type name '" + name + "'");
+        // Bare opaque type: `type TypeName` — no fields declared.
+        // Fields are defined via `let this.field = expr` in the constructor.
+        // Creates an empty struct descriptor that gets populated by the factory.
+        SpnStructDescriptor sd = SpnStructDescriptor.builder(name).build();
+        structRegistry.put(name, sd);
+        typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.STRUCT)
+                .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                .structDescriptor(sd).build());
     }
 
     /**
@@ -1116,7 +1344,10 @@ public class SpnParser {
         }
 
         tokens.expect("=");
+        String outerMethodType = currentMethodTypeName;
+        currentMethodTypeName = typeName;
         parseFunctionBody(methodKey, paramTypes, returnType, isPure, true);
+        currentMethodTypeName = outerMethodType;
         return null;
     }
 
@@ -1366,6 +1597,27 @@ public class SpnParser {
         if (isMethod) {
             methodRegistry.put(name, new MethodEntry(callTarget, descriptor));
         } else {
+            // If a function with this name already exists, promote BOTH to
+            // the overload registry for type-dispatched multiple dispatch.
+            CallTarget existing = functionRegistry.get(name);
+            if (existing != null) {
+                List<OperatorOverload> overloads = functionOverloads.computeIfAbsent(
+                        name, k -> new ArrayList<>());
+                // Add the existing one if this is the first collision
+                if (overloads.isEmpty()) {
+                    SpnFunctionDescriptor existingDesc = functionDescriptorRegistry.get(name);
+                    if (existingDesc != null) {
+                        FieldDescriptor[] ep = existingDesc.getParams();
+                        FieldType[] existingPts = new FieldType[ep.length];
+                        for (int i = 0; i < ep.length; i++) existingPts[i] = ep[i].type();
+                        overloads.add(new OperatorOverload(existingPts,
+                                existingDesc.getReturnType(), existing));
+                    }
+                }
+                // Add the new one
+                overloads.add(new OperatorOverload(
+                        paramTypes.toArray(new FieldType[0]), returnType, callTarget));
+            }
             functionRegistry.put(name, callTarget);
         }
         functionDescriptorRegistry.put(name, descriptor);
@@ -1392,6 +1644,7 @@ public class SpnParser {
     private boolean containsYield;
     private boolean currentFunctionIsPure;
     private String currentFactoryTypeName; // non-null when inside a factory body
+    private String currentMethodTypeName;  // non-null when inside a method body (for private field access)
     private int currentFactoryArity;      // arity of the factory being parsed
     private final List<SpnDeferredInvokeNode> deferredCalls = new ArrayList<>();
 
@@ -1406,6 +1659,50 @@ public class SpnParser {
         }
     }
 
+    // ── Private instance fields ────────────────────────────────────────────
+
+    /**
+     * Parse: {@code let this.fieldName = expr} inside a constructor body.
+     *
+     * <p>Adds a PRIVATE field to the type's struct descriptor. The field is
+     * accessible from methods on the same type (via {@code this.fieldName})
+     * but not from external code (compile error).
+     *
+     * <p>At runtime, the factory body collects all {@code this.field}
+     * assignments. The final {@code this(...)} raw-construction call then
+     * includes these values positionally. For the MVP, each
+     * {@code let this.field = expr} is compiled as a local variable; the
+     * factory must end with {@code this(field1, field2, ...)} to construct
+     * the struct with the collected values.
+     */
+    private SpnStatementNode parseLetThisField() {
+        tokens.advance(); // consume 'this'
+        tokens.advance(); // consume '.'
+        SpnParseToken fieldTok = expectIdentifier();
+        String fieldName = fieldTok.text();
+        tokens.expect("=");
+        SpnExpressionNode value = parseExpression();
+
+        FieldType inferredType = inferType(value);
+
+        // Add the private field to the existing struct descriptor (mutate in place
+        // so all references — including the factory's return type — stay consistent).
+        SpnStructDescriptor desc = structRegistry.get(currentFactoryTypeName);
+        if (desc != null) {
+            if (desc.fieldIndex(fieldName) >= 0) {
+                throw tokens.error("Duplicate private field '" + fieldName + "' on " + currentFactoryTypeName, fieldTok);
+            }
+            desc.addPrivateField(fieldName, inferredType != null ? inferredType : FieldType.UNTYPED);
+        }
+
+        // Compile as a regular local variable — the factory will use it
+        // in the final this(...) construction.
+        int slot = currentScope.addLocal(fieldName, inferredType);
+        var writeNode = SpnWriteLocalVariableNodeGen.create(value, slot);
+        writeNode.setVariableName(fieldName);
+        return writeNode;
+    }
+
     // ── Let bindings ───────────────────────────────────────────────────────
 
     private SpnStatementNode parseLetBinding() {
@@ -1417,6 +1714,12 @@ public class SpnParser {
         if (first.type() == TokenType.TYPE_NAME && tokens.peek(1) != null
                 && tokens.peek(1).text().equals("(")) {
             return parseLetDestructure();
+        }
+
+        // Check for private instance field: let this.field = expr (inside a factory/constructor)
+        if (first.text().equals("this") && tokens.peek(1) != null
+                && tokens.peek(1).text().equals(".") && currentFactoryTypeName != null) {
+            return parseLetThisField();
         }
 
         // Check for tuple/positional destructuring: let (a, b) = expr
@@ -2100,6 +2403,12 @@ public class SpnParser {
                     FieldType receiverType = inferType(expr);
                     MethodEntry method = resolveMethod(receiverType, memberName);
                     if (method != null) {
+                        // Promote args to match method parameter types.
+                        // Method descriptors have 'this' as param[0], so we promote
+                        // against params[1:] (skipping the receiver).
+                        if (method.descriptor() != null) {
+                            resolver.promoteMethodArgs(args, method.descriptor());
+                        }
                         expr = new spn.node.func.SpnMethodInvokeNode(
                                 method.callTarget(), expr,
                                 args.toArray(new SpnExpressionNode[0]));
@@ -2167,7 +2476,22 @@ public class SpnParser {
     private int resolveFieldIndex(SpnExpressionNode expr, String fieldName) {
         FieldType type = inferType(expr);
         int idx = resolver.resolveFieldIndex(type, fieldName);
-        if (idx >= 0) return idx;
+        if (idx >= 0) {
+            // Privacy check: reject access to private fields from outside the type's methods.
+            // Inside a method (currentFactoryTypeName set), private fields of the SAME type are OK.
+            SpnStructDescriptor sd = resolver.resolveStructDescriptor(type);
+            if (sd != null && sd.isFieldPrivate(idx)) {
+                String typeName = sd.getName();
+                // Allow access from methods/factories on the same type
+                boolean isOwnFactory = typeName.equals(currentFactoryTypeName);
+                boolean isOwnMethod = typeName.equals(currentMethodTypeName);
+                if (!isOwnFactory && !isOwnMethod) {
+                    throw tokens.error("Field '" + fieldName + "' on " + typeName
+                            + " is private (defined via let this." + fieldName + " in constructor)");
+                }
+            }
+            return idx;
+        }
         throw tokens.error("Cannot resolve field '" + fieldName + "'"
                 + (type != null ? " on type " + type.describe() : " (unknown type)"));
     }
@@ -2351,9 +2675,21 @@ public class SpnParser {
             }
             tokens.expect(")");
 
-            // Look up the function
+            // Check for overloaded function (multiple dispatch)
+            List<OperatorOverload> overloads = functionOverloads.get(name);
+            if (overloads != null && !overloads.isEmpty()) {
+                // Use the same dispatch logic as operators: exact type match,
+                // then promotion-based match.
+                SpnExpressionNode dispatched = resolver.tryFunctionDispatch(
+                        name, overloads, args);
+                if (dispatched != null) return dispatched;
+            }
+
+            // Single-function lookup (no overloading)
             CallTarget target = functionRegistry.get(name);
             if (target != null) {
+                // If overloads exist but dispatch failed, we still try the last-registered
+                // version (backward compat for non-overloaded functions).
                 checkPurityViolation(name, tok);
                 checkUntypedArgs(args, name, tok);
                 promoteArgs(args, name);
@@ -2503,12 +2839,37 @@ public class SpnParser {
                     + args.size() + " args) for raw construction inside a factory", nameTok);
         }
 
-        // Check for factory — TypeName(args) always goes through factory if defined.
+        // Check for factory — TypeName(args) goes through factory if defined.
+        // Try type-based dispatch first (for overloaded factories), then arity match.
         List<FactoryEntry> factories = factoryRegistry.get(name);
         if (factories != null) {
+            // Collect arg types for dispatch
+            FieldType[] argTypes = new FieldType[args.size()];
+            for (int i = 0; i < args.size(); i++) argTypes[i] = inferType(args.get(i));
+
+            // Try exact type match first
+            for (FactoryEntry fe : factories) {
+                if (fe.arity() != args.size()) continue;
+                FieldDescriptor[] params = fe.descriptor().getParams();
+                boolean match = true;
+                for (int i = 0; i < args.size() && i < params.length; i++) {
+                    if (argTypes[i] != null && !typesMatch(params[i].type(), argTypes[i])) {
+                        match = false; break;
+                    }
+                }
+                if (match) {
+                    SpnExpressionNode callNode = new spn.node.func.SpnInvokeNode(
+                            fe.callTarget(), args.toArray(new SpnExpressionNode[0]));
+                    if (fe.descriptor().hasTypedReturn()) {
+                        trackType(callNode, fe.descriptor().getReturnType());
+                    }
+                    return at(callNode, nameTok);
+                }
+            }
+
+            // Arity match with promotion
             for (FactoryEntry fe : factories) {
                 if (fe.arity() == args.size()) {
-                    // Promote args to match factory param types
                     String qualifiedName = name + "/" + args.size();
                     promoteArgs(args, qualifiedName);
                     SpnExpressionNode callNode = new spn.node.func.SpnInvokeNode(
@@ -2516,7 +2877,7 @@ public class SpnParser {
                     if (fe.descriptor().hasTypedReturn()) {
                         trackType(callNode, fe.descriptor().getReturnType());
                     }
-                    return callNode;
+                    return at(callNode, nameTok);
                 }
             }
         }

@@ -623,10 +623,13 @@ public class EditorWindow {
             namespace = namespace.substring(0, namespace.length() - 6);
         }
 
-        String ns = namespace;
+        // The module registry caches by FULL namespace (module prefix + relative).
+        // Invalidate BOTH forms so we hit regardless of how the module was imported.
+        String fullNs = ctx.getNamespace() + "." + namespace;
         for (Tab tab : tabView.getTabs()) {
             if (tab instanceof EditorTab et) {
-                et.invalidateModule(ns);
+                et.invalidateModule(namespace);
+                et.invalidateModule(fullNs);
             }
         }
     }

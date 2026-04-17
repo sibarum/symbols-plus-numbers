@@ -44,7 +44,7 @@ public final class SpnStructDescriptor {
     private final String name;
 
     @CompilationFinal(dimensions = 1)
-    private final FieldDescriptor[] fields;
+    private FieldDescriptor[] fields; // non-final: constructor fields are added at parse time
 
     @CompilationFinal(dimensions = 1)
     private final String[] typeParams;
@@ -113,6 +113,22 @@ public final class SpnStructDescriptor {
             if (f.isTyped()) return true;
         }
         return false;
+    }
+
+    /** Returns true if the field at the given index is private (constructor-defined). */
+    public boolean isFieldPrivate(int index) {
+        return index >= 0 && index < fields.length && fields[index].isPrivate();
+    }
+
+    /**
+     * Add a private field to this descriptor (parse-time only).
+     * Used by {@code let this.field = expr} in constructor bodies.
+     * Must be called before any Truffle compilation (i.e., during parsing).
+     */
+    public void addPrivateField(String fieldName, FieldType type) {
+        FieldDescriptor[] newFields = java.util.Arrays.copyOf(fields, fields.length + 1);
+        newFields[fields.length] = FieldDescriptor.privateField(fieldName, type);
+        this.fields = newFields;
     }
 
     // ── Generic support ─────────────────────────────────────────────────────
@@ -188,6 +204,12 @@ public final class SpnStructDescriptor {
         /** Adds an untyped field. */
         public Builder field(String fieldName) {
             fields.add(FieldDescriptor.untyped(fieldName));
+            return this;
+        }
+
+        /** Adds a private typed field (defined via `let this.field` in a constructor). */
+        public Builder privateField(String fieldName, FieldType type) {
+            fields.add(FieldDescriptor.privateField(fieldName, type));
             return this;
         }
 

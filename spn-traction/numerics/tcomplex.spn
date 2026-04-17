@@ -89,3 +89,7 @@ pure TComplex.toCartesian() -> (Rational, Rational) = () {
 
   (real, imag)
 }
+
+promote Rational -> TComplex = (q) {
+  TComplex(q)
+}

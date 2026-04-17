@@ -66,6 +66,7 @@ public final class TypeResolver {
         String operatorOrMethod,      // "+", "neg", "inv", "area", etc.
         String resolvedTarget,        // "+(Rational, Rational)" or "Rational.neg()"
         int promotionsApplied,        // 0 = exact match, 1+ = promotion chain used
+        String promotionDetail,       // e.g. "int→Rational" or null if no promotion
         CallTarget callTarget         // the actual target (for cross-reference)
     ) {}
 
@@ -160,7 +161,7 @@ public final class TypeResolver {
                 trackType(result, ov.returnType());
                 recordDispatch(result, op,
                         op + "(" + leftType.describe() + ", " + rightType.describe() + ")",
-                        0, ov.callTarget());
+                        0, null, ov.callTarget());
                 return result;
             }
         }
@@ -201,9 +202,10 @@ public final class TypeResolver {
         SpnExpressionNode promotedRight = applyPromotionChain(right, bestRight);
         SpnExpressionNode result = new SpnInvokeNode(bestOverload.callTarget(), promotedLeft, promotedRight);
         trackType(result, bestOverload.returnType());
+        String promoDetail = describePromotions(leftType, bestLeft, rightType, bestRight);
         recordDispatch(result, op,
                 op + "(" + bestLeft.typeDesc + ", " + bestRight.typeDesc + ")",
-                bestCost, bestOverload.callTarget());
+                bestCost, promoDetail, bestOverload.callTarget());
         return result;
     }
 
@@ -225,7 +227,7 @@ public final class TypeResolver {
                     trackType(result, ov.returnType());
                     recordDispatch(result, op,
                             op + "(" + operandType.describe() + ")",
-                            0, ov.callTarget());
+                            0, null, ov.callTarget());
                     return result;
                 }
             }
@@ -242,7 +244,7 @@ public final class TypeResolver {
             }
             recordDispatch(result, op,
                     operandType.describe() + "." + methodName + "()",
-                    0, method.callTarget());
+                    0, null, method.callTarget());
             return result;
         }
 
@@ -258,6 +260,100 @@ public final class TypeResolver {
         try { if (lit.executeLong(null) != 1L) return null; }
         catch (Exception e) { return null; }
         return tryUnaryDispatch("/", right);
+    }
+
+    // ── Function overload dispatch ────────────────────────────────────────
+
+    /**
+     * Dispatch a function call to the best-matching overload by argument types.
+     * Reuses the same exact-match → promotion-chain strategy as operator dispatch.
+     * Returns null if no overload matches.
+     */
+    public SpnExpressionNode tryFunctionDispatch(
+            String name, List<SpnParser.OperatorOverload> overloads,
+            List<SpnExpressionNode> args) {
+        if (overloads == null || overloads.isEmpty()) return null;
+
+        // Infer argument types
+        FieldType[] argTypes = new FieldType[args.size()];
+        for (int i = 0; i < args.size(); i++) {
+            argTypes[i] = inferType(args.get(i));
+        }
+
+        // 1. Exact match
+        for (SpnParser.OperatorOverload ov : overloads) {
+            if (ov.paramTypes().length != args.size()) continue;
+            boolean match = true;
+            for (int i = 0; i < args.size(); i++) {
+                if (argTypes[i] == null || !typesMatch(ov.paramTypes()[i], argTypes[i])) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                SpnExpressionNode result = new SpnInvokeNode(
+                        ov.callTarget(), args.toArray(new SpnExpressionNode[0]));
+                if (ov.returnType() != null) trackType(result, ov.returnType());
+                recordDispatch(result, name,
+                        name + "(" + describeArgTypes(argTypes) + ")",
+                        0, null, ov.callTarget());
+                return result;
+            }
+        }
+
+        // 2. Promotion-based match (try each arg with its promotion chain)
+        // For simplicity, try single-arg promotions first
+        for (SpnParser.OperatorOverload ov : overloads) {
+            if (ov.paramTypes().length != args.size()) continue;
+            boolean canMatch = true;
+            List<SpnExpressionNode> promotedArgs = new java.util.ArrayList<>(args);
+            int totalCost = 0;
+            for (int i = 0; i < args.size(); i++) {
+                if (argTypes[i] != null && typesMatch(ov.paramTypes()[i], argTypes[i])) continue;
+                if (argTypes[i] == null) { canMatch = false; break; }
+                // Try promotion
+                List<PromotionStep> steps = buildPromotionChain(argTypes[i]);
+                boolean promoted = false;
+                for (PromotionStep step : steps) {
+                    if (step.typeDesc.equals(ov.paramTypes()[i].describe())) {
+                        promotedArgs.set(i, applyPromotionChain(args.get(i), step));
+                        totalCost += step.depth;
+                        promoted = true;
+                        break;
+                    }
+                }
+                if (!promoted) { canMatch = false; break; }
+            }
+            if (canMatch && totalCost > 0) {
+                SpnExpressionNode result = new SpnInvokeNode(
+                        ov.callTarget(), promotedArgs.toArray(new SpnExpressionNode[0]));
+                if (ov.returnType() != null) trackType(result, ov.returnType());
+                recordDispatch(result, name,
+                        name + "(" + describeParamTypes(ov.paramTypes()) + ")",
+                        totalCost, describeArgPromotions(argTypes, ov.paramTypes()), ov.callTarget());
+                return result;
+            }
+        }
+
+        return null;
+    }
+
+    private String describeArgTypes(FieldType[] types) {
+        var sb = new StringBuilder();
+        for (int i = 0; i < types.length; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(types[i] != null ? types[i].describe() : "?");
+        }
+        return sb.toString();
+    }
+
+    private String describeParamTypes(FieldType[] types) {
+        var sb = new StringBuilder();
+        for (int i = 0; i < types.length; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(types[i].describe());
+        }
+        return sb.toString();
     }
 
     // ── Method resolution ───────────────────────────────────────────────────
@@ -322,6 +418,31 @@ public final class TypeResolver {
         for (int i = 0; i < args.size() && i < params.length; i++) {
             FieldType argType = inferType(args.get(i));
             FieldType paramType = params[i].type();
+            if (argType == null || paramType == null) continue;
+            if (paramType instanceof FieldType.Untyped) continue;
+            if (typesMatch(paramType, argType)) continue;
+
+            List<PromotionStep> steps = buildPromotionChain(argType);
+            for (PromotionStep step : steps) {
+                if (step.typeDesc.equals(paramType.describe())) {
+                    args.set(i, applyPromotionChain(args.get(i), step));
+                    trackType(args.get(i), paramType);
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Promote method arguments, skipping the implicit 'this' parameter.
+     * Method descriptors have 'this' as params[0]; args don't include 'this'.
+     */
+    public void promoteMethodArgs(List<SpnExpressionNode> args, SpnFunctionDescriptor desc) {
+        FieldDescriptor[] params = desc.getParams();
+        // params[0] is 'this', so args[i] aligns with params[i+1]
+        for (int i = 0; i < args.size() && (i + 1) < params.length; i++) {
+            FieldType argType = inferType(args.get(i));
+            FieldType paramType = params[i + 1].type();
             if (argType == null || paramType == null) continue;
             if (paramType instanceof FieldType.Untyped) continue;
             if (typesMatch(paramType, argType)) continue;
@@ -498,11 +619,37 @@ public final class TypeResolver {
         return Collections.unmodifiableMap(dispatches);
     }
 
+    // ── Promotion description helpers ────────────────────────────────────────
+
+    /** Describe binary operator promotions: "int→Rational, int→Rational" */
+    private String describePromotions(FieldType origLeft, PromotionStep left,
+                                      FieldType origRight, PromotionStep right) {
+        var sb = new StringBuilder();
+        if (left.depth > 0) sb.append(origLeft.describe()).append("→").append(left.typeDesc);
+        if (right.depth > 0) {
+            if (!sb.isEmpty()) sb.append(", ");
+            sb.append(origRight.describe()).append("→").append(right.typeDesc);
+        }
+        return sb.isEmpty() ? null : sb.toString();
+    }
+
+    /** Describe function arg promotions: "int→Rational, float→Rational" */
+    private String describeArgPromotions(FieldType[] argTypes, FieldType[] paramTypes) {
+        var sb = new StringBuilder();
+        for (int i = 0; i < argTypes.length && i < paramTypes.length; i++) {
+            if (argTypes[i] != null && !typesMatch(paramTypes[i], argTypes[i])) {
+                if (!sb.isEmpty()) sb.append(", ");
+                sb.append(argTypes[i].describe()).append("→").append(paramTypes[i].describe());
+            }
+        }
+        return sb.isEmpty() ? null : sb.toString();
+    }
+
     // ── Internal helpers ────────────────────────────────────────────────────
 
     private void recordDispatch(SpnExpressionNode expr, String op, String resolved,
-                                int promotions, CallTarget target) {
-        dispatches.put(expr, new DispatchRecord(op, resolved, promotions, target));
+                                int promotions, String promotionDetail, CallTarget target) {
+        dispatches.put(expr, new DispatchRecord(op, resolved, promotions, promotionDetail, target));
     }
 
     private record PromotionStep(String typeDesc, int depth, List<CallTarget> converters) {}

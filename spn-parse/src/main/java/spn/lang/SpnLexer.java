@@ -14,7 +14,7 @@ public class SpnLexer {
             "type", "where", "with", "data", "struct",
             "pure", "action", "let", "const", "while", "do", "match", "yield",
             "import", "module", "version", "require", "return",
-            "int", "float", "string", "bool", "promote", "macro"
+            "int", "float", "string", "bool", "promote", "macro", "emit"
     );
 
     private static final Set<String> PATTERN_KEYWORDS = Set.of(

@@ -1,2 +1,0 @@
-
-type InfiniteSeries(Rational, Operation, Expr)

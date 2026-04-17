@@ -132,25 +132,36 @@ match shape
 
 ### Macros
 
-Compile-time code generation via textual template macros. Macros are functions that emit code at their call site.
+Compile-time impure functions. A macro body can define types, functions, and methods — but declarations are LOCAL to the macro scope unless explicitly `emit`-ted. Operator overloads and promotions register globally (they modify semantics, not scope).
 
 ```
--- Define a macro
+-- Simple macro (old-style, no emit — everything registers normally)
 macro deriveDouble(T) = {
   pure double(T) -> T = (x) { x + x }
 }
-
--- Invoke it — emits the function for a specific type
 deriveDouble(int)
 double(5)  -- 10
 
--- Macros cross module boundaries via imports
+-- Derive ordering from a single comparator (stdlib)
 import Ordering
 deriveOrderingFromInt(Rational, compare)
 -- now <, >, <=, >= work on Rational
+
+-- Scoped macro with emit — typed collection wrapper
+import Collections
+type RationalArray = constructTypedArray(Rational)
+let arr = RationalArray([]).push(5)    -- 5 promoted to Rational automatically
+arr.get(0) == Rational(5, 1)          -- typed retrieval
+arr.items                              -- compile error: private field
 ```
 
-Macros support multiple parameters, emit multiple declarations, and can be defined in stdlib SPN files that are importable without touching Java code.
+**Macro features:**
+- **`emit`** keyword transmits a declaration from the macro's scope to the caller
+- **`type X = macroCall(T)`** binds the emitted type under a user-chosen name
+- **Scoped isolation** — internal helpers are discarded after the macro completes
+- **Private constructor fields** — `let this.field = expr` creates encapsulated state, accessible only from methods on the same type
+- **Multiple dispatch** — macro-generated functions participate in type-dispatched overloading
+- **Unique internal names** — multiple invocations of the same macro don't collide
 
 ### Unary Operator Dispatch
 
@@ -332,6 +343,7 @@ Shift+F5 records all function calls, returns, errors, and variable assignments d
 | **Range** | `rangeStep`, `repeat`, `iterate` |
 | **Option** | `mapOption`, `flatMap`, `unwrap`, `unwrapOr` |
 | **Ordering** | `deriveOrderingFromInt(T, cmp)`, `deriveOrderingFromOrdering(T, cmp)` — stdlib macros |
+| **Collections** | `constructTypedArray(T)` — stdlib macro that generates a type-safe array wrapper with `.push(T)`, `.get(int) -> T`, `.length()` and private encapsulated storage |
 
 Canvas functions (`canvas`, `show`, `clear`, `fill`, `stroke`, `strokeWeight`, `rect`, `circle`, `line`, `text`, `animate`) are provided by the spn-canvas module.
 
@@ -392,7 +404,8 @@ The `TypeGraph` records every declaration (types, functions, operators, promotio
 - **Newlines are statement boundaries.** No semicolons. Operators on a new line start a new expression (same-line rule for function calls, binary minus, and parenthesized expressions).
 - **Definition order matters.** Each line can use everything above it. Unary operators before binary operators that use them. Types before functions that reference them. The file reads as a dependency chain.
 - **No `if` keyword.** Conditionals are subject-less guard matches: `match | cond -> a | _ -> b`. One canonical form for all branching.
-- **Macros are code templates.** Compile-time textual substitution with function-invocation semantics. Output is normal SPN code, debuggable and inspectable.
+- **Macros are compile-time impure functions.** Same `(params) { body }` syntax as everything else. `emit` controls what escapes to the caller's scope. Replaces generics: `type RationalArray = constructTypedArray(Rational)`.
+- **Encapsulation via constructor fields.** `let this.field = expr` in a constructor creates private state, accessible only from methods on the same type. No runtime reflection.
 
 ## Getting Started
 
@@ -443,7 +456,9 @@ mvn test
 
 - **TypeGraph-driven IDE features** -- go-to-definition, find-usages, and dependency visualization powered by the unified declaration graph
 - **Incremental type inference** -- exploit definition-order for sub-millisecond re-inference on edits (invalidate from edit line onward, cache above)
-- **Macro evolution** -- `emit { }` blocks with logic, `Type` as a first-class type, compile-time evaluation, macro composition via splicing
+- **Macro evolution** -- `emit { }` blocks with conditional logic, compile-time evaluation, environment/platform-specific code generation, non-source artifact generation (manifests, lookup tables)
+- **Typed collections for Set and Dict** -- `constructTypedSet(T)`, `constructTypedDict(K, V)` stdlib macros (Array is done)
+- **Macro error attribution** -- error messages from macro-expanded code should point to the macro call site, not the internal expansion
 - **AND-types (interfaces)** -- globally namespaced interfaces that can be dynamically attached to any type at compile time, enabling omnidirectional dependency injection
 - **`=?` three-way comparator** -- single `compareTo` dispatch replacing individual `<`, `>`, `<=`, `>=` overloads, returning `:lt | :eq | :gt`
 - **Cross-file trace links** -- clickable caller links in the Tracer invocation panel

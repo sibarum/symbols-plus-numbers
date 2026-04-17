@@ -1,0 +1,44 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- SPN Standard Library — Typed Collections
+-- ═══════════════════════════════════════════════════════════════════════
+-- Macros that generate type-safe collection wrappers. Each wrapper
+-- encapsulates a raw Array/Set/Dict behind typed methods, enforced at
+-- compile time via the promotion system. Internal state is private —
+-- only the emitted API is accessible.
+--
+-- Usage:
+--   import Collections
+--
+--   type RationalArray = constructTypedArray(Rational)
+--   let arr = RationalArray([])
+--   let arr2 = arr.push(Rational(3, 4))
+--   arr2.get(0)  -- Rational(3, 4)
+--
+--   -- Promotions work automatically:
+--   let arr3 = arr.push(5)  -- 5 promoted to Rational(5, 1)
+-- ═══════════════════════════════════════════════════════════════════════
+
+import Array (append, length)
+
+-- ── Typed Array ─────────────────────────────────────────────────────
+
+macro constructTypedArray(T) = {
+  type TypedArray
+  pure TypedArray(Array) -> TypedArray = (arr) {
+    let this.items = arr
+    this(arr)
+  }
+  pure TypedArray() -> TypedArray = () {
+    TypedArray([])
+  }
+  pure TypedArray.push(T) -> TypedArray = (item) {
+    TypedArray(append(this.items, item))
+  }
+  pure TypedArray.get(int) -> T = (i) {
+    this.items[i]
+  }
+  pure TypedArray.length() -> int = () {
+    length(this.items)
+  }
+  emit TypedArray
+}

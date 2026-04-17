@@ -37,6 +37,56 @@ class SpnParserTest {
         return new SpnParser(source, null, symbolTable);
     }
 
+    // ── Private constructor fields ─────────────────────────────────────────
+
+    @Nested
+    class PrivateConstructorFields {
+        @Test
+        void bareTypeWithConstructorField() {
+            // type Stack with no declared fields + constructor-defined private field
+            assertEquals(5L, run("""
+                type Stack
+                pure Stack(int) -> Stack = (initial) {
+                  let this.top = initial
+                  this(initial)
+                }
+                pure Stack.peek() -> int = () { this.top }
+                let s = Stack(5)
+                s.peek()
+                """));
+        }
+
+        @Test
+        void privateFieldNotAccessibleExternally() {
+            assertThrows(SpnParseException.class, () -> run("""
+                type Stack
+                pure Stack(int) -> Stack = (initial) {
+                  let this.top = initial
+                  this(initial)
+                }
+                let s = Stack(5)
+                s.top
+                """));
+        }
+
+        @Test
+        void privateFieldAccessibleFromMethod() {
+            assertEquals(10L, run("""
+                type Counter
+                pure Counter(int) -> Counter = (n) {
+                  let this.value = n
+                  this(n)
+                }
+                pure Counter.get() -> int = () { this.value }
+                pure Counter.add(int) -> Counter = (n) {
+                  Counter(this.value + n)
+                }
+                let c = Counter(3).add(7)
+                c.get()
+                """));
+        }
+    }
+
     // ── Error recovery ─────────────────────────────────────────────────────
 
     @Nested
@@ -1099,6 +1149,113 @@ x + y
                 pure /(Box) -> int = (b) { b.0 }
                 let b = Box(42)
                 2/b
+                """));
+        }
+
+        @Test
+        void macroGeneratesTypedFunction() {
+            // Use case 1: macro generates a function with a specific type signature.
+            // deriveGetter(T) emits a function typed to T, dispatched via multiple dispatch.
+            assertEquals(3L, run("""
+                type Box(int)
+                type Pair(int, int)
+
+                macro deriveGetter(T) = {
+                  pure getFirst(T) -> int = (x) { x.0 }
+                }
+
+                deriveGetter(Box)
+                deriveGetter(Pair)
+
+                getFirst(Box(3))
+                """));
+        }
+
+        @Test
+        void macroMultipleDispatchOverloads() {
+            // Use case 2: same macro invoked for different types produces
+            // overloaded functions that dispatch correctly.
+            assertEquals(10L, run("""
+                type Box(int)
+                type Pair(int, int)
+
+                macro deriveSum(T) = {
+                  pure sumFields(T) -> int = (x) { x.0 + x.1 }
+                }
+
+                deriveSum(Pair)
+                sumFields(Pair(3, 7))
+                """));
+        }
+
+        @Test
+        void macroEmitType() {
+            // The new macro v2 pattern: macro emits a type, caller binds it.
+            // Internal declarations (helperFn) are discarded after macro.
+            assertEquals(99L, run("""
+                macro constructWrapper(T) = {
+                  type Wrapper(T)
+                  pure Wrapper.unwrap() -> T = () { this.0 }
+                  pure helperFn(int) -> int = (x) { x + 1 }
+                  emit Wrapper
+                }
+
+                type Box(int)
+                type SafeBox = constructWrapper(Box)
+
+                let sb = SafeBox(Box(99))
+                sb.unwrap().0
+                """));
+        }
+
+        @Test
+        void macroEmitTypeInternalDiscarded() {
+            // helperFn defined inside the macro should NOT be visible after expansion
+            assertThrows(SpnParseException.class, () -> run("""
+                macro constructWrapper(T) = {
+                  type Wrapper(T)
+                  pure helperFn(int) -> int = (x) { x + 1 }
+                  emit Wrapper
+                }
+
+                type Box(int)
+                type SafeBox = constructWrapper(Box)
+
+                helperFn(5)
+                """));
+        }
+
+        @Test
+        void macroEmitOperatorsRegisterGlobally() {
+            // Operator overloads inside a macro persist globally (no emit needed)
+            assertEquals(true, run("""
+                type Box(int)
+                pure ==(Box, Box) -> bool = (a, b) { a.0 == b.0 }
+
+                macro deriveAdd(T) = {
+                  pure +(T, T) -> T = (a, b) { T(a.0 + b.0) }
+                }
+
+                deriveAdd(Box)
+                Box(3) + Box(4) == Box(7)
+                """));
+        }
+
+        @Test
+        void macroGeneratesWrapperType() {
+            // Use case 1 advanced: macro generates a WRAPPER TYPE.
+            // The second parameter lets the caller name the wrapper.
+            assertEquals(99L, run("""
+                type Box(int)
+
+                macro deriveWrapper(T, W) = {
+                  type W(T)
+                  pure W.unwrap() -> T = () { this.0 }
+                }
+
+                deriveWrapper(Box, SafeBox)
+                let sb = SafeBox(Box(99))
+                sb.unwrap().0
                 """));
         }
 

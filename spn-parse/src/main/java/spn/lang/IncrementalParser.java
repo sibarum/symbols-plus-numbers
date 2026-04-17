@@ -154,9 +154,12 @@ public final class IncrementalParser {
                 int col = node.getSourceCol();
                 int endLine = node.hasSourceSpan() ? node.getSourceEndLine() - 1 : line;
                 int endCol = node.hasSourceSpan() ? node.getSourceEndCol() : col + 1;
-                result.add(new DispatchAnnotation(
-                        line, col, endLine, endCol,
-                        record.resolvedTarget()));
+                // Build description: "+(Rational, Rational)" or "+(Rational, Rational) [int→Rational]"
+                String desc = record.resolvedTarget();
+                if (record.promotionDetail() != null) {
+                    desc += " [" + record.promotionDetail() + "]";
+                }
+                result.add(new DispatchAnnotation(line, col, endLine, endCol, desc));
             }
         }
         // Sort by line then col for binary search in the GUI
