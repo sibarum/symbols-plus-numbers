@@ -534,6 +534,9 @@ public class SpnParser {
                 // Statements from macro body are discarded (types/functions
                 // registered in registries are what matter, not runtime nodes)
             } catch (SpnParseException e) {
+                // Tag the error with the macro invocation site so the user
+                // gets a stack trace: "error at X, in macro Y at file:line"
+                e.pushMacroFrame(macro.name(), sourceName, nameTok.line());
                 collectedErrors.add(e);
                 synchronize();
             }

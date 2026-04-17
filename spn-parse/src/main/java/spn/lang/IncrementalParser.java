@@ -115,7 +115,16 @@ public final class IncrementalParser {
         for (SpnParseException pe : parser.getErrors()) {
             int errorLine = pe.getLine() > 0 ? pe.getLine() - 1 : Math.max(0, spans.size() - 1);
             int errorCol = pe.getCol() > 0 ? pe.getCol() - 1 : 0;
-            errors.add(new ParseError(errorLine, errorCol, pe.getMessage()));
+            // Include macro expansion stack in the error message
+            String msg = pe.getMessage();
+            if (pe.getMacroStack() != null && !pe.getMacroStack().isEmpty()) {
+                var sb = new StringBuilder(msg);
+                for (String frame : pe.getMacroStack()) {
+                    sb.append(" [in macro ").append(frame).append("]");
+                }
+                msg = sb.toString();
+            }
+            errors.add(new ParseError(errorLine, errorCol, msg));
 
             int errorSpanIndex = findSpanForLine(spans, errorLine);
             if (errorSpanIndex >= 0) {
