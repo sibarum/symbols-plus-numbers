@@ -1,0 +1,92 @@
+import Math (abs, sign, gcd)
+import Ordering
+import Math (toFloat)
+
+-- Extended Rational, with residuals-at-zero and cheap bitshift normalization
+type XRational (int, int)
+
+-- Canonical form: every Rational has a single representation per value.
+--   (0, 0)       → (1, 1)    -- 0/0 = 1  (wheel-theoretic same-direction limit)
+--   (0, d), d≠0  → (0, d)    -- zero w/ residual
+--   (n, 0), n≠0  → (n, 0)    -- point-at-infinity w/ residual
+--   (n, d) else  → reduce by bitshift, sign carried in the numerator
+-- At the cost of == and ordering having contextual/projective meaning
+pure XRational(int, int) -> XRational = (n, d) {
+  match (n, d)
+  | (0, 0) -> { this(1, 1) }
+  | (0, d) -> { this(0, d) }
+  | (n, 0) -> { this(n, 0) }
+  | _ -> {
+      -- TODO: bitshift algorithm
+      this(sign(d) * n, abs(d))
+    }
+}
+
+pure XRational(int) -> XRational = (n) {
+  this(n, 1)
+}
+
+-- Multiplicative inverse: (n, d).inv() = (d, n). The constructor takes care
+-- of sign migration and the (0,1)→ω, (1,0)→0 wheel endpoints automatically.
+pure XRational.inv() -> XRational = () {
+  XRational(this.1, this.0)
+}
+
+pure XRational.neg() -> XRational = () {
+  XRational(-this.0, this.1)
+}
+
+-- Structural equality. Treats projective points as equal even if residuals are different.
+pure ==(XRational, XRational) -> bool = (r1, r2) {
+  let equalsZero = 0 == r1.0 == r2.0
+  let equalsInf = 0 == r1.1 == r2.1
+  let equals = r1.0 == r2.0 && r1.1 == r2.1
+
+  equalsZero || equalsInf || equals
+}
+
+pure +(XRational, XRational) -> XRational = ((q1n, q1d), (q2n, q2d)) {
+  XRational(q1n*q2d + q2n*q1d, q1d*q2d)
+}
+
+-- Binary subtraction only. Unary negation goes through the .neg() method
+-- (per the operator mutex rule — an operator is unary OR binary, not both).
+-- `-rat` expressions automatically fall back to `rat.neg()` at parse time.
+pure -(XRational, XRational) -> XRational = (q1, q2) {
+  q1 + q2.neg()
+}
+
+pure *(XRational, XRational) -> XRational = ((q1n, q1d), (q2n, q2d)) {
+  XRational(q1n*q2n, q1d*q2d)
+}
+
+pure *(XRational, int) -> XRational = ((n, d), i) {
+  XRational(n*i, d)
+}
+
+-- Binary division only. Multiplicative inverse goes through .inv().
+pure /(XRational, XRational) -> XRational = (q1, q2) {
+  q1 * q2.inv()
+}
+
+-- TODO: Needs refined to match == exactly
+pure compare(XRational, XRational) -> int = (q1, q2) {
+  (q1 - q2).0
+}
+
+deriveOrderingFromInt(XRational, compare)
+
+-- Canonical forms
+const XRational.one = XRational(1,1)
+const XRational.zero = XRational(0,1)
+const XRational.omega = XRational(1,0)
+
+promote int -> XRational = (i) {
+  XRational(i)
+}
+
+promote XRational -> float = (q) {
+  match q
+  | XRational(_, 0) -> 0
+  | XRational(n,d) -> toFloat(n) / toFloat(d)
+}
