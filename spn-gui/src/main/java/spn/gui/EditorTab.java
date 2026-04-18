@@ -58,8 +58,12 @@ public class EditorTab extends ScrollableTab {
     public String getSavedContent() { return savedContent; }
 
     public void setSavedContent(String content) {
-        this.savedContent = content;
-        changeOverlay.snapshotSaved(content);
+        // Normalize line endings to LF so the snapshot matches TextArea.getText(),
+        // which joins lines with \n regardless of source encoding. Without this,
+        // a CRLF file loaded on Windows would read back as dirty immediately.
+        String normalized = normalizeNewlines(content);
+        this.savedContent = normalized;
+        changeOverlay.snapshotSaved(normalized);
     }
 
     public ModuleContext getModuleContext() { return moduleContext; }
@@ -74,9 +78,15 @@ public class EditorTab extends ScrollableTab {
     public TextArea getTextArea() { return textArea; }
 
     public void loadContent(String content) {
-        textArea.setText(content);
-        savedContent = content;
-        changeOverlay.snapshotSaved(content);
+        String normalized = normalizeNewlines(content);
+        textArea.setText(normalized);
+        savedContent = normalized;
+        changeOverlay.snapshotSaved(normalized);
+    }
+
+    private static String normalizeNewlines(String s) {
+        if (s == null) return "";
+        return s.replace("\r\n", "\n").replace("\r", "\n");
     }
 
     // ── Tab interface ──────────────────────────────────────────────────

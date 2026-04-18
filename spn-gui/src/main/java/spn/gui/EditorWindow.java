@@ -221,9 +221,13 @@ public class EditorWindow {
         return active instanceof EditorTab et ? et : null;
     }
 
-    /** Open a new empty editor tab. */
+    /** Open a new empty editor tab, inheriting the active tab's module context. */
     void openNewTab() {
         EditorTab tab = new EditorTab(this);
+        EditorTab active = getActiveEditorTab();
+        if (active != null && active.getModuleContext() != null) {
+            tab.setModuleContext(active.getModuleContext());
+        }
         tabView.addTab(tab);
         updateTitle();
     }
