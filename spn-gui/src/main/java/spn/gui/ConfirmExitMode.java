@@ -24,11 +24,19 @@ class ConfirmExitMode implements Mode {
 
     private final EditorWindow window;
     private final SdfFontRenderer font;
+    private final boolean closeWindowAfter;
     private int selected = 0;
 
-    ConfirmExitMode(EditorWindow window) {
+    /**
+     * @param closeWindowAfter whether to close the window after Save/Discard.
+     *                         Only true when the dialog was triggered by the
+     *                         window's X button; false for other triggers
+     *                         (e.g. tab close), which only dismiss the dialog.
+     */
+    ConfirmExitMode(EditorWindow window, boolean closeWindowAfter) {
         this.window = window;
         this.font = window.getFont();
+        this.closeWindowAfter = closeWindowAfter;
     }
 
     @Override
@@ -126,19 +134,17 @@ class ConfirmExitMode implements Mode {
         switch (option) {
             case 0 -> { // Discard
                 window.popMode();
-                window.requestClose();
+                if (closeWindowAfter) window.requestClose();
             }
             case 1 -> { // Save
                 window.saveFile(false);
                 window.popMode();
-                window.requestClose();
+                if (closeWindowAfter) window.requestClose();
             }
             case 2 -> { // Save As
                 window.saveFile(true);
-                // Only close if they actually saved (didn't cancel the dialog)
-                // saveFile sets currentFile on success
                 window.popMode();
-                window.requestClose();
+                if (closeWindowAfter) window.requestClose();
             }
             case 3 -> { // Cancel
                 window.popMode();

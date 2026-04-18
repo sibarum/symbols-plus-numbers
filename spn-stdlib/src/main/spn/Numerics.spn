@@ -1,0 +1,167 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- SPN Standard Library — Numerics
+-- ═══════════════════════════════════════════════════════════════════════
+-- Macro-generated rational + complex type pairs parameterized by a bit
+-- budget. Each pair uses hard-budget bitshift normalization: after any
+-- arithmetic, numerator and denominator are shifted right by the minimum
+-- amount needed to fit both in the budget. This gives predictable
+-- precision (~2^-bits per step) at the cost of exact value preservation.
+--
+-- Complex numbers are represented as (scale, tan θ) with exact angle
+-- addition via tan(a+b) = (tan a + tan b) / (1 - tan a · tan b), keeping
+-- all arithmetic closed under the rationals — no transcendental functions,
+-- no square roots.
+--
+-- Usage:
+--   import Numerics
+--
+--   let num31 = constructRatComplex(31)
+--   type Rat31 = num31.rational
+--   type Cpx31 = num31.complex
+--
+--   let q = Rat31(3, 4)
+--   let z = Cpx31(Rat31(1,2), Rat31(1,3))
+--
+-- Two separate invocations (e.g. constructRatComplex(31) and
+-- constructRatComplex(20)) produce non-conflicting types even when used
+-- in the same scope.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import Math (abs, sign, max, bitWidth, shr, shl)
+import Ordering
+
+macro constructRatComplex(bits) = {
+
+  -- ── Rational with hard-budget bitshift normalization ──────────────
+  type R(int, int)
+
+  -- Canonical form:
+  --   (0, 0)       → (1, 1)       -- wheel-theoretic 0/0
+  --   (0, d), d≠0  → (0, d)       -- zero with residual
+  --   (n, 0), n≠0  → (n, 0)       -- omega with residual
+  --   (n, d) else  → sign-migrated, both shifted to fit in `bits`
+  pure R(int, int) -> R = (n, d) {
+    match (n, d)
+    | (0, 0) -> { this(1, 1) }
+    | (0, _) -> { this(0, d) }
+    | (_, 0) -> { this(n, 0) }
+    | _ -> {
+        let ns = sign(d) * n
+        let ds = abs(d)
+        let maxB = max(bitWidth(abs(ns)), bitWidth(ds))
+        let k = max(0, maxB - bits)
+        match
+        | k == 0 -> this(ns, ds)
+        | _ -> {
+            -- Round-to-nearest on magnitude; re-apply sign.
+            let half = shl(1, k - 1)
+            let shN = sign(ns) * shr(abs(ns) + half, k)
+            let shD = shr(ds + half, k)
+            this(shN, shD)
+          }
+      }
+  }
+
+  pure R(int) -> R = (n) { this(n, 1) }
+
+  pure R.inv() -> R = () { R(this.1, this.0) }
+  pure R.neg() -> R = () { R(-this.0, this.1) }
+
+  -- Projective equality: collapsed zeros and omegas are equivalence
+  -- classes, so equality checks both the class and the exact structural
+  -- form.
+  pure ==(R, R) -> bool = (r1, r2) {
+    let bothZero = r1.0 == 0 && r2.0 == 0
+    let bothOmega = r1.1 == 0 && r2.1 == 0
+    let exact = r1.0 == r2.0 && r1.1 == r2.1
+    bothZero || bothOmega || exact
+  }
+
+  pure +(R, R) -> R = ((n1, d1), (n2, d2)) {
+    R(n1*d2 + n2*d1, d1*d2)
+  }
+
+  pure -(R, R) -> R = (q1, q2) { q1 + q2.neg() }
+  pure *(R, R) -> R = ((n1, d1), (n2, d2)) { R(n1*n2, d1*d2) }
+  pure *(R, int) -> R = ((n, d), i) { R(n*i, d) }
+  pure /(R, R) -> R = (q1, q2) { q1 * q2.inv() }
+
+  -- compare agrees with == at projective points; otherwise returns the
+  -- sign of the numerator of (q1 - q2).
+  pure compare(R, R) -> int = (q1, q2) {
+    match (q1, q2)
+    | (R(0, _), R(0, _)) -> 0
+    | (R(_, 0), R(_, 0)) -> 0
+    | _ -> (q1 - q2).0
+  }
+
+  deriveOrderingFromInt(R, compare)
+
+  const R.one = R(1, 1)
+  const R.zero = R(0, 1)
+  const R.omega = R(1, 0)
+
+  promote int -> R = (i) { R(i) }
+
+  -- ── Complex as (scale, tan θ) — exact angle arithmetic over R ─────
+  type C(scale: R, tangent: R)
+
+  pure C(R, R) -> C = (scale, tan) { this(scale, tan) }
+
+  -- Single-R constructor: given tan θ, builds the point at angle 2θ on
+  -- the unit circle. scale = cos²θ = 1/(1+t²); tangent = tan(2θ).
+  pure C(R) -> C = (t) {
+    C(1/(1+t*t), (2*t)/(1-t*t))
+  }
+
+  pure *(C, C) -> C = ((s1, t1), (s2, t2)) {
+    let scl = s1 * s2
+    let tan = (t1 + t2) / (R.one - t1 * t2)
+    C(scl, tan)
+  }
+
+  pure /(C, C) -> C = ((s1, t1), (s2, t2)) {
+    let scl = s1 / s2
+    let tan = (t1 - t2) / (R.one + t1 * t2)
+    C(scl, tan)
+  }
+
+  pure C.neg() -> C = () {
+    let (s, t) = this
+    C(s.neg(), t)
+  }
+
+  pure ==(C, C) -> bool = (z1, z2) {
+    z1.scale == z2.scale && z1.tangent == z2.tangent
+  }
+
+  pure +(C, C) -> C = ((s1, t1), (s2, t2)) {
+    let (a, b) = t1
+    let (c, d) = t2
+    let x1 = s1 * b
+    let y1 = s1 * a
+    let x2 = s2 * d
+    let y2 = s2 * c
+    let x = x1 + x2
+    let y = y1 + y2
+    match (x, y)
+    | ((0, _), (0, _)) -> { C(R.zero, R.zero) }
+    | ((_, _), (0, _)) -> { C(x, R.zero) }
+    | ((0, _), (_, _)) -> { C(y, R.omega) }
+    | _ -> { C(x, y / x) }
+  }
+
+  pure -(C, C) -> C = (c1, c2) { c1 + c2.neg() }
+
+  pure C.toCartesian() -> (R, R) = () {
+    let (s, t) = this
+    let (tn, td) = t
+    let real = s * td
+    let imag = s * tn
+    (real, imag)
+  }
+
+  promote R -> C = (q) { C(q) }
+
+  emit { rational: R, complex: C }
+}

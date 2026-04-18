@@ -1,15 +1,16 @@
 package spn.gui;
 
-import static org.lwjgl.glfw.GLFW.*;
-
 /**
  * Bridge between the TabView and the legacy Mode stack.
  * This sits at the bottom of the mode stack (where EditorMode used to be).
  * It delegates all input and rendering to the TabView, which in turn
  * delegates to the active Tab.
  *
- * <p>Escape handling: if the active tab is the last editor tab, prompt
- * for save. Otherwise close the tab and switch to the next one.
+ * <p>Escape handling: forwarded to the active tab only. The base view
+ * itself never treats Escape as a close signal — Escape is scoped to the
+ * current tab (to cancel an in-progress action like search, unpin a trace
+ * view, etc.) and never propagates to the window, module context, or
+ * Save Changes dialog. Window close is solely the X button's job.
  */
 class TabViewMode implements Mode {
 
@@ -23,16 +24,10 @@ class TabViewMode implements Mode {
 
     @Override
     public boolean onKey(int key, int scancode, int action, int mods) {
-        // Let the active tab handle Escape first (e.g., to unpin a trace view)
-        // Only close the tab if the tab didn't consume it
-        if (tabView.onKey(key, scancode, action, mods)) {
-            return true;
-        }
-        if (action == GLFW_PRESS && key == GLFW_KEY_ESCAPE) {
-            window.handleTabClose();
-            return true;
-        }
-        return false;
+        // Escape is scoped to the active tab. If the tab doesn't consume it
+        // (no in-progress action to cancel), Escape is a no-op at this level —
+        // it must not close the tab, open a dirty prompt, or close the window.
+        return tabView.onKey(key, scancode, action, mods);
     }
 
     @Override

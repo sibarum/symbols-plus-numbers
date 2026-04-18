@@ -276,7 +276,8 @@ public class EditorWindow {
         // Editor tab: check dirty
         if (active instanceof EditorTab et) {
             if (et.isDirty()) {
-                pushLegacyMode(new ConfirmExitMode(this));
+                // Tab-close path: dialog dismisses without closing the window
+                pushLegacyMode(new ConfirmExitMode(this, false));
             } else {
                 tabView.closeActiveTab();
                 if (tabView.tabCount() == 0) {
@@ -343,8 +344,8 @@ public class EditorWindow {
             return;
         }
 
-        // Unsaved changes — push confirmation prompt
-        pushLegacyMode(new ConfirmExitMode(this));
+        // Unsaved changes from X button — close the window after Save/Discard
+        pushLegacyMode(new ConfirmExitMode(this, true));
     }
 
     // ---- Rendering (delegates to WindowFrame) ----------------------------

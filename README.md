@@ -168,21 +168,18 @@ arr.items                              -- compile error: private field
 **Multi-emit with named handles:**
 
 ```
-macro constructRatComplex(bits) = {
-  type R(int, int)    -- Rational with bit-budget normalization
-  -- R's constructor, operators, promotes
-  type C(R, R)        -- Complex built on R
-  -- C's constructor, operators, promotes
-  emit { rational: R, complex: C }
-}
+import Numerics     -- ships with constructRatComplex
 
 -- The caller binds a compile-time handle, then pulls each type by label:
 let rc = constructRatComplex(31)
 type Rat31 = rc.rational
 type Cpx31 = rc.complex
+
+let q = Rat31(3, 4) + Rat31(1, 2)       -- exact rational arithmetic
+let z = Cpx31(Rat31(1, 1), Rat31(0, 1)) -- complex as (scale, tan θ)
 ```
 
-The handle (`rc`) is a compile-time namespace, not a runtime value. Two separate invocations (e.g. `constructRatComplex(31)` and `constructRatComplex(63)`) produce non-conflicting types even when pulled into the same scope. Function and value emit (`pure f = rc.normalize`, `let v = rc.bits`) are planned extensions — today, the bundle form carries types only.
+The handle (`rc`) is a compile-time namespace, not a runtime value. Two separate invocations (e.g. `constructRatComplex(31)` and `constructRatComplex(20)`) produce non-conflicting types even when pulled into the same scope — useful when you want mixed-precision numerics in one file. Function and value emit (`pure f = rc.normalize`, `let v = rc.bits`) are planned extensions — today, the bundle form carries types only.
 
 ### Unary Operator Dispatch
 
@@ -352,11 +349,11 @@ Shift+F5 records all function calls, returns, errors, and variable assignments d
 
 ## Standard Library
 
-113+ built-in functions across 7 modules, plus SPN-source stdlib modules:
+120+ built-in functions across 7 modules, plus SPN-source stdlib modules:
 
 | Module | Functions |
 |--------|-----------|
-| **Math** | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `ceil`, `floor`, `round`, `abs`, `sign`, `min`, `max`, `clamp`, `pow`, `sqrt`, `heron`, `gcd`, `toFloat` |
+| **Math** | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `ceil`, `floor`, `round`, `abs`, `sign`, `min`, `max`, `clamp`, `pow`, `sqrt`, `heron`, `gcd`, `toFloat`, `bitWidth`, `shr`, `shl` |
 | **Array** | `map`, `filter`, `fold`, `flatten`, `zip`, `reverse`, `take`, `drop`, `find`, `all`, `any`, `sort`, `enumerate`, `concat`, `append`, `length`, `first`, `last`, `unique`, `chunk`, `groupBy`, `indexOf`, `contains` |
 | **Dict** | `put`, `dictGet`, `hasKey`, `keys`, `values`, `entries`, `merge`, `remove`, `mapValues`, `dictSize`, `emptyDict` |
 | **Set** | `setAdd`, `setRemove`, `difference`, `intersection`, `isSubset`, `fromArray`, `toArray`, `size` |
@@ -365,6 +362,7 @@ Shift+F5 records all function calls, returns, errors, and variable assignments d
 | **Option** | `mapOption`, `flatMap`, `unwrap`, `unwrapOr` |
 | **Ordering** | `deriveOrderingFromInt(T, cmp)`, `deriveOrderingFromOrdering(T, cmp)` — stdlib macros |
 | **Collections** | Stdlib macros for typed collection wrappers with private encapsulated storage: `constructTypedArray(T)` (`.push`, `.get`, `.length`), `constructTypedSet(T)` (`.add`, `.remove`, `.size`, `.toArray`), `constructTypedDict(K, V)` (`.put`, `.get`, `.has`, `.remove`, `.size`, `.keys`, `.values`) |
+| **Numerics** | `constructRatComplex(bits)` — stdlib macro that emits a paired `(rational, complex)` type bundle with hard-budget bitshift normalization. Rationals carry residual zeros and infinities; complex uses `(scale, tan θ)` for exact angle arithmetic closed under rationals |
 
 Canvas functions (`canvas`, `show`, `clear`, `fill`, `stroke`, `strokeWeight`, `rect`, `circle`, `line`, `text`, `animate`) are provided by the spn-canvas module.
 

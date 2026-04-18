@@ -36,7 +36,7 @@ class ImportMode implements Mode {
 
     private final EditorWindow window;
     private final SdfFontRenderer font;
-    private final List<ImportItem> allItems;
+    private List<ImportItem> allItems;
 
     private final StringBuilder query = new StringBuilder();
     private int cursorPos;
@@ -54,6 +54,19 @@ class ImportMode implements Mode {
     @Override
     public boolean onKey(int key, int scancode, int action, int mods) {
         if (action != GLFW_PRESS && action != GLFW_REPEAT) return true;
+
+        boolean ctrl = (mods & GLFW_MOD_CONTROL) != 0;
+
+        // Ctrl+R rebuilds the import index and clears module caches, mirroring
+        // the same shortcut in module mode.
+        if (ctrl && key == GLFW_KEY_R) {
+            allItems = buildImportIndex();
+            refilter();
+            window.refreshModuleCaches();
+            window.flash("Imports refreshed — caches cleared", false);
+            return true;
+        }
+
         switch (key) {
             case GLFW_KEY_ESCAPE -> { window.popMode(); return true; }
             case GLFW_KEY_ENTER -> {
@@ -190,7 +203,7 @@ class ImportMode implements Mode {
 
     @Override
     public String hudText() {
-        return "Type to search | Enter Import | Esc Cancel";
+        return "Type to search | Ctrl+R Refresh | Enter Import | Esc Cancel";
     }
 
     // ---- Import index ----
