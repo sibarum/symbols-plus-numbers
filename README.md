@@ -21,6 +21,7 @@ A programming language where numeric types carry their own algebraic rules, patt
   - [Custom Numeric Types](#custom-numeric-types)
   - [Union Types](#union-types)
   - [Macros](#macros)
+  - [Qualified Dispatch Keys](#qualified-dispatch-keys)
   - [Unary Operator Dispatch](#unary-operator-dispatch)
   - [Pure Functions & Pattern Matching](#pure-functions--pattern-matching)
   - [Tuple Types & Destructuring](#tuple-types--destructuring)
@@ -74,6 +75,15 @@ pure area(Circle | Rectangle) -> float = (shape) {
     | Circle(r)         -> 3.14159 * r * r
     | Rectangle(w, h)   -> w * h
 }
+
+-- Signatures + qualified keys: name a structural contract, constrain
+-- macro params with `requires`. No conformance declaration on the type.
+signature Additive (@+, @-, @neg)
+
+macro deriveDouble(T requires Additive) = {
+  pure T.doubled() -> T = () { this + this }
+}
+deriveDouble(Rational)        -- compile error if Rational lacks any Additive key
 ```
 
 ## Features
@@ -417,8 +427,9 @@ An OpenGL-based editor with:
 - **Ctrl+F / Ctrl+H** — find and replace with live highlighting
 - **Ctrl+P** — command palette (action menu)
 - **Ctrl+/** — help browser
-- **Ctrl+I** — import browser with module discovery
+- **Ctrl+I** — import browser with module discovery, kind filters (`@`, `sig:`, `macro:`, `type:`, `fn:`, `mod:`), color-coded results, and cross-reference search (typing a key name surfaces every signature that includes it). Ctrl+R rebuilds the index.
 - **Ctrl+M** — module browser with file search (Ctrl+R to refresh caches)
+- **Ctrl+V** — paste into any text-input mode (import / module / help / palette / template fields)
 - **Shift+F5** — Trace Mode (execution profiler with per-file source overlay)
 - **F5** — run current file
 - **Multi-tab editing** with dirty detection and Ctrl+Tab cycling
@@ -513,7 +524,8 @@ The `TypeGraph` records every declaration (types, functions, operators, promotio
 - **Newlines are statement boundaries.** No semicolons. Operators on a new line start a new expression (same-line rule for function calls, binary minus, and parenthesized expressions).
 - **Definition order matters.** Each line can use everything above it. Unary operators before binary operators that use them. Types before functions that reference them. The file reads as a dependency chain.
 - **No `if` keyword.** Conditionals are subject-less guard matches: `match | cond -> a | _ -> b`. One canonical form for all branching.
-- **Macros are compile-time impure functions.** Same `(params) { body }` syntax as everything else. `emit` controls what escapes to the caller's scope. Replaces generics: `type RationalArray = constructTypedArray(Rational)`.
+- **Macros are compile-time impure functions.** Same `(params) { body }` syntax as everything else. `emit` controls what escapes to the caller's scope. Replaces generics: `type RationalArray = constructTypedArray(Rational)`. Macro parameters can carry `requires` constraints — `macro foo(T requires Ring)` — to specify polymorphism without a separate type-variable system.
+- **Dispatch is one mechanism.** Operators (`a + b`), method calls (`a.foo()`), free-function calls (`foo(a, b)`), and signature-constrained generics (`macro<T requires Sig>`) all resolve via the same global table — find an entry matching the arg types, with promotion as a relaxation. Qualified keys (`@com.foo.bar`) are the universal name for a dispatch slot; operators are pre-registered keys; `signature` declarations name sets of required keys. No parallel typeclass / trait / interface system.
 - **Encapsulation via constructor fields.** `let this.field = expr` in a constructor creates private state, accessible only from methods on the same type. No runtime reflection.
 
 ## Getting Started
@@ -565,11 +577,13 @@ mvn test
 
 - **TypeGraph-driven IDE features** -- go-to-definition, find-usages, and dependency visualization powered by the unified declaration graph
 - **Incremental type inference** -- exploit definition-order for sub-millisecond re-inference on edits (invalidate from edit line onward, cache above)
-- **Macro evolution** -- `emit { }` blocks with conditional logic, compile-time evaluation, environment/platform-specific code generation, non-source artifact generation (manifests, lookup tables)
-- **AND-types (interfaces)** -- globally namespaced interfaces that can be dynamically attached to any type at compile time, enabling omnidirectional dependency injection
+- **Macro evolution** -- compile-time evaluation beyond literal comparisons (currently the conditional-block evaluator handles literal/symbol/bool/int comparisons + `&&`/`||`/`!`); environment- or platform-specific code generation; non-source artifact generation (manifests, lookup tables); `pure f = handle.fn` and `let v = handle.value` to round out the multi-emit bundle (today only types are bundle-emittable)
 - **`=?` three-way comparator** -- single `compareTo` dispatch replacing individual `<`, `>`, `<=`, `>=` overloads, returning `:lt | :eq | :gt`
 - **Cross-file trace links** -- clickable caller links in the Tracer invocation panel
 - **Type narrowing in match branches** -- union types narrow to the matched variant inside each arm
+- **Native dispatcher overflow recovery** -- per-(operation, type-pair) fallback implementations registered alongside the canonical impl; macro-generatable
+- **Constrained-symbol coercion** -- `:red` should auto-coerce into `type Color = Symbol` at function call sites (today the coercion has to be explicit, blocking constrained-key TypedDict)
+- **Generic functions with `requires`** -- bring the macro-side `T requires Sig` constraint to plain `pure` functions so polymorphism doesn't require a macro
 - Highly optimized 3D scenegraph runtime with unified geometry and physics simulation
 - Vector math and Cayley transforms for full 3D with zero transcendental functions
 - Native image compilation via GraalVM

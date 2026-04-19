@@ -81,6 +81,8 @@ public final class FilesystemModuleLoader implements ModuleLoader {
                     .extra("constants", parser.getConstantRegistry())
                     .extra("macros", parser.getMacroRegistry())
                     .extra("promotions", parser.getPromotionRegistry())
+                    .extra("signatures", parser.getSignatureRegistry())
+                    .extra("qualifiedKeys", parser.getQualifiedKeyRegistry())
                     .build();
 
             return Optional.of(module);

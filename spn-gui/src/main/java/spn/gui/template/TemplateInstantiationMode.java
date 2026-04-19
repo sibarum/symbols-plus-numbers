@@ -98,6 +98,16 @@ public class TemplateInstantiationMode implements Mode {
             return true;
         }
 
+        // Ctrl+V — paste clipboard into the active field
+        if (ctrl && key == GLFW_KEY_V) {
+            String clip = window.getClipboardText();
+            if (!clip.isEmpty()) {
+                Field f = fields.get(activeIndex);
+                updateField(activeIndex, f.value + clip);
+            }
+            return true;
+        }
+
         switch (key) {
             case GLFW_KEY_TAB -> {
                 if (shift) {

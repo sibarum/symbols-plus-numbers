@@ -100,6 +100,17 @@ class ModuleMode implements Mode {
             return true;
         }
 
+        // Ctrl+V — paste clipboard text into the query at the cursor
+        if (ctrl && key == GLFW_KEY_V) {
+            String clip = window.getClipboardText();
+            if (!clip.isEmpty()) {
+                query.insert(cursorPos, clip);
+                cursorPos += clip.length();
+                refilter();
+            }
+            return true;
+        }
+
         // Ctrl+R refreshes module: rescan files, clear caches, force re-parse
         if (ctrl && key == GLFW_KEY_R) {
             module.rescan();

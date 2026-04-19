@@ -31,8 +31,19 @@ class ImportMode implements Mode {
     private static final float CURSOR_R = 0.90f, CURSOR_G = 0.90f, CURSOR_B = 0.30f;
     private static final float PROMPT_R = 0.55f, PROMPT_G = 0.55f, PROMPT_B = 0.60f;
 
-    /** An importable item: either a whole module or a specific export from a module. */
-    record ImportItem(String moduleName, String exportName, String displayText, String importStatement) {}
+    /** Kind of importable item — drives rendering color and import-statement shape. */
+    enum Kind {
+        MODULE,      // whole-module import: `import Module`
+        FUNCTION,    // stdlib function or .spn-exported function
+        TYPE,        // struct or user-defined type
+        SIGNATURE,   // `signature Name (...)`
+        KEY,         // qualified dispatch key `@ns.name` — imported via `import ns.(name)`
+        MACRO        // `macro foo(...)`
+    }
+
+    /** An importable item: a whole module or a specific export from a module. */
+    record ImportItem(String moduleName, String exportName, Kind kind,
+                      String displayText, String importStatement) {}
 
     private final EditorWindow window;
     private final SdfFontRenderer font;
@@ -43,6 +54,11 @@ class ImportMode implements Mode {
     private int selectedIndex;
     private int scrollOffset;
     private List<ImportItem> filtered;
+
+    // Cross-reference index: signature name → set of required dispatch keys.
+    // Queried during filtering so typing a key-name substring also surfaces
+    // signatures that reference that key.
+    private Map<String, Set<String>> sigKeyRefs = new HashMap<>();
 
     ImportMode(EditorWindow window) {
         this.window = window;
@@ -64,6 +80,17 @@ class ImportMode implements Mode {
             refilter();
             window.refreshModuleCaches();
             window.flash("Imports refreshed — caches cleared", false);
+            return true;
+        }
+
+        // Ctrl+V — paste clipboard text into the query at the cursor
+        if (ctrl && key == GLFW_KEY_V) {
+            String clip = window.getClipboardText();
+            if (!clip.isEmpty()) {
+                query.insert(cursorPos, clip);
+                cursorPos += clip.length();
+                refilter();
+            }
             return true;
         }
 
@@ -182,9 +209,11 @@ class ImportMode implements Mode {
                     MODULE_R, MODULE_G, MODULE_B);
             float modW = font.getTextWidth(item.moduleName(), SMALL_SCALE);
 
-            // Display text (the import statement)
+            // Display text tinted by the item's kind (keys green, signatures
+            // purple, macros yellow, types cyan, functions/modules neutral)
+            float[] color = colorForKind(item.kind());
             font.drawText("  " + item.displayText(), paletteX + 12f + modW, itemY, FONT_SCALE,
-                    NAME_R, NAME_G, NAME_B);
+                    color[0], color[1], color[2]);
         }
 
         // Scroll indicator
@@ -203,21 +232,33 @@ class ImportMode implements Mode {
 
     @Override
     public String hudText() {
-        return "Type to search | Ctrl+R Refresh | Enter Import | Esc Cancel";
+        return "Search: @ keys | sig: signatures | macro: macros | type: types | fn: functions | Ctrl+R Refresh";
+    }
+
+    /** Pick a tint color matching the TokenType used in source-code highlighting. */
+    private static float[] colorForKind(Kind kind) {
+        return switch (kind) {
+            case KEY       -> new float[]{ 0.55f, 0.85f, 0.45f }; // lime-green (QUALIFIED_KEY)
+            case SIGNATURE -> new float[]{ 0.55f, 0.50f, 0.85f }; // purple (KEYWORD-like)
+            case MACRO     -> new float[]{ 0.95f, 0.80f, 0.30f }; // warm yellow
+            case TYPE      -> new float[]{ 0.35f, 0.78f, 0.75f }; // cyan (TYPE_NAME)
+            case FUNCTION, MODULE -> new float[]{ NAME_R, NAME_G, NAME_B }; // neutral white
+        };
     }
 
     // ---- Import index ----
 
     private List<ImportItem> buildImportIndex() {
         List<ImportItem> items = new ArrayList<>();
+        sigKeyRefs.clear(); // rebuild the cross-ref index from scratch
 
-        // Build stdlib modules with their exports
+        // Stdlib modules — all exports are functions
         var byModule = new LinkedHashMap<String, List<String>>();
         for (var entry : spn.stdlib.gen.SpnStdlibRegistry.allBuiltins()) {
             byModule.computeIfAbsent(entry.module(), k -> new ArrayList<>()).add(entry.name());
         }
 
-        // Add Canvas builtins by building a temporary module
+        // Canvas module exports
         {
             var canvasRegistry = new spn.language.SpnModuleRegistry();
             spn.canvas.CanvasBuiltins.registerModule(canvasRegistry);
@@ -229,24 +270,18 @@ class ImportMode implements Mode {
 
         for (var entry : byModule.entrySet()) {
             String mod = entry.getKey();
-            List<String> exports = entry.getValue();
-
-            // Whole module import
-            items.add(new ImportItem(mod, null,
-                    "import " + mod,
-                    "import " + mod));
-
-            // Individual export imports (skip operators and internal names)
-            for (String exp : exports) {
+            items.add(new ImportItem(mod, null, Kind.MODULE,
+                    "import " + mod, "import " + mod));
+            for (String exp : entry.getValue()) {
                 if (isImportableExport(exp)) {
-                    items.add(new ImportItem(mod, exp,
+                    items.add(new ImportItem(mod, exp, Kind.FUNCTION,
                             "import " + mod + " (" + exp + ")",
                             "import " + mod + " (" + exp + ")"));
                 }
             }
         }
 
-        // Discover .spn script modules on the classpath
+        // .spn script modules on the classpath — have full kind info via extras
         try {
             var symbolTable = new spn.type.SpnSymbolTable();
             var loader = new spn.lang.ClasspathModuleLoader(null, symbolTable);
@@ -256,48 +291,32 @@ class ImportMode implements Mode {
             registry.addLoader(loader);
 
             for (String namespace : loader.discoverModules()) {
-                // Skip native modules already shown above
                 if (byModule.containsKey(namespace)) continue;
                 try {
-                    registry.resolve(namespace).ifPresent(mod -> {
-                        var exports = mod.allExportedNames();
-                        // Whole module import
-                        items.add(new ImportItem(namespace, null,
-                                "import " + namespace,
-                                "import " + namespace));
-                        // Individual export imports
-                        for (String exp : exports) {
-                            items.add(new ImportItem(namespace, exp,
-                                    "import " + namespace + " (" + exp + ")",
-                                    "import " + namespace + " (" + exp + ")"));
-                        }
-                    });
+                    registry.resolve(namespace).ifPresent(mod ->
+                            addModuleItems(items, namespace, mod, ""));
                 } catch (Exception e) {
-                    // Skip modules that fail to parse — still show the module-level import
-                    items.add(new ImportItem(namespace, null,
-                            "import " + namespace,
-                            "import " + namespace));
+                    items.add(new ImportItem(namespace, null, Kind.MODULE,
+                            "import " + namespace, "import " + namespace));
                 }
             }
         } catch (Exception e) {
-            // Best-effort: continue with what we have
+            // Best-effort
         }
 
-        // Add module context files as importable namespaces (relative form for sibling imports)
+        // Sibling .spn files in the current module context
         ModuleContext ctx = window.getModuleContext();
         if (ctx != null) {
-            ctx.rescan(); // pick up any newly created files
+            ctx.rescan();
             for (ModuleContext.ModuleFile f : ctx.getFiles()) {
                 String rel = f.relativePath();
                 if (rel.endsWith(".spn")) rel = rel.substring(0, rel.length() - 4);
                 String namespace = rel.replace('/', '.').replace('\\', '.');
 
-                // Module-level import
-                items.add(new ImportItem(namespace, null,
+                items.add(new ImportItem(namespace, null, Kind.MODULE,
                         "import " + namespace + "  [module]",
                         "import " + namespace));
 
-                // Try to load and discover exports
                 try {
                     var modRegistry = new spn.language.SpnModuleRegistry();
                     spn.stdlib.gen.StdlibModuleLoader.registerAll(modRegistry);
@@ -306,15 +325,8 @@ class ImportMode implements Mode {
                     modRegistry.addLoader(new spn.lang.ClasspathModuleLoader(null, symTable));
                     modRegistry.addLoader(new spn.lang.FilesystemModuleLoader(
                             ctx.getRoot(), ctx.getNamespace(), null, symTable));
-                    modRegistry.resolve(namespace).ifPresent(mod -> {
-                        for (String exp : mod.allExportedNames()) {
-                            if (isImportableExport(exp)) {
-                                items.add(new ImportItem(namespace, exp,
-                                        "import " + namespace + " (" + exp + ")  [module]",
-                                        "import " + namespace + " (" + exp + ")"));
-                            }
-                        }
-                    });
+                    modRegistry.resolve(namespace).ifPresent(mod ->
+                            addModuleItems(items, namespace, mod, "  [module]"));
                 } catch (Exception e) {
                     // Skip exports if module fails to parse
                 }
@@ -323,6 +335,85 @@ class ImportMode implements Mode {
 
         items.sort(Comparator.comparing(ImportItem::displayText));
         return items;
+    }
+
+    /**
+     * Emit ImportItems for every importable entity in a module: functions and
+     * types from first-class fields; signatures, qualified keys, and macros
+     * from extras (populated by the filesystem/classpath module loaders).
+     */
+    @SuppressWarnings("unchecked")
+    private void addModuleItems(List<ImportItem> items, String namespace,
+                                spn.language.SpnModule mod, String tag) {
+        // Functions and builtin factories → Kind.FUNCTION
+        for (String name : mod.getFunctions().keySet()) {
+            if (isImportableExport(name)) {
+                items.add(new ImportItem(namespace, name, Kind.FUNCTION,
+                        "import " + namespace + " (" + name + ")" + tag,
+                        "import " + namespace + " (" + name + ")"));
+            }
+        }
+        for (String name : mod.getBuiltinFactories().keySet()) {
+            if (isImportableExport(name)) {
+                items.add(new ImportItem(namespace, name, Kind.FUNCTION,
+                        "import " + namespace + " (" + name + ")" + tag,
+                        "import " + namespace + " (" + name + ")"));
+            }
+        }
+
+        // Types and structs → Kind.TYPE
+        for (String name : mod.getTypes().keySet()) {
+            if (isImportableExport(name)) {
+                items.add(new ImportItem(namespace, name, Kind.TYPE,
+                        "import " + namespace + " (" + name + ")" + tag,
+                        "import " + namespace + " (" + name + ")"));
+            }
+        }
+        for (String name : mod.getStructs().keySet()) {
+            if (isImportableExport(name)) {
+                items.add(new ImportItem(namespace, name, Kind.TYPE,
+                        "import " + namespace + " (" + name + ")" + tag,
+                        "import " + namespace + " (" + name + ")"));
+            }
+        }
+
+        // Macros, signatures, and qualified keys live in extras
+        Map<String, ?> macros = (Map<String, ?>) mod.getExtra("macros");
+        if (macros != null) {
+            for (String name : macros.keySet()) {
+                items.add(new ImportItem(namespace, name, Kind.MACRO,
+                        "import " + namespace + " (" + name + ")" + tag + "  [macro]",
+                        "import " + namespace + " (" + name + ")"));
+            }
+        }
+        Map<String, ?> signatures = (Map<String, ?>) mod.getExtra("signatures");
+        if (signatures != null) {
+            for (var e : signatures.entrySet()) {
+                String name = e.getKey();
+                items.add(new ImportItem(namespace, name, Kind.SIGNATURE,
+                        "import " + namespace + " (" + name + ")" + tag + "  [signature]",
+                        "import " + namespace + " (" + name + ")"));
+                // Record the signature's required keys for cross-ref search.
+                if (e.getValue() instanceof Set<?> keySet) {
+                    Set<String> stringKeys = new LinkedHashSet<>();
+                    for (Object k : keySet) stringKeys.add(k.toString());
+                    sigKeyRefs.put(name, stringKeys);
+                }
+            }
+        }
+        Map<String, ?> keys = (Map<String, ?>) mod.getExtra("qualifiedKeys");
+        if (keys != null) {
+            for (String fqn : keys.keySet()) {
+                // fqn has the form "@a.b.c.name" — short name is last segment
+                String core = fqn.startsWith("@") ? fqn.substring(1) : fqn;
+                int lastDot = core.lastIndexOf('.');
+                String shortName = lastDot >= 0 ? core.substring(lastDot + 1) : core;
+                String pkg = lastDot >= 0 ? core.substring(0, lastDot) : namespace;
+                items.add(new ImportItem(namespace, fqn, Kind.KEY,
+                        "import " + pkg + ".(" + shortName + ")" + tag + "  [key]",
+                        "import " + pkg + ".(" + shortName + ")"));
+            }
+        }
     }
 
     /**
@@ -348,19 +439,44 @@ class ImportMode implements Mode {
         if (q.isEmpty()) {
             // Show only top-level module imports when browsing (no query)
             filtered = allItems.stream()
-                    .filter(item -> item.exportName() == null)
+                    .filter(item -> item.kind() == Kind.MODULE)
                     .toList();
             selectedIndex = 0;
             scrollOffset = 0;
             return;
         }
 
+        // Prefix filter: `kind:text` narrows to one Kind. Leading @ biases to keys.
+        Kind requiredKind = null;
+        if (q.startsWith("key:"))       { requiredKind = Kind.KEY;       q = q.substring(4); }
+        else if (q.startsWith("sig:"))  { requiredKind = Kind.SIGNATURE; q = q.substring(4); }
+        else if (q.startsWith("macro:")){ requiredKind = Kind.MACRO;     q = q.substring(6); }
+        else if (q.startsWith("type:")) { requiredKind = Kind.TYPE;      q = q.substring(5); }
+        else if (q.startsWith("fn:"))   { requiredKind = Kind.FUNCTION;  q = q.substring(3); }
+        else if (q.startsWith("mod:"))  { requiredKind = Kind.MODULE;    q = q.substring(4); }
+        else if (q.startsWith("@"))     { requiredKind = Kind.KEY;       /* keep @ in the query for matching */ }
+
         filtered = new ArrayList<>();
         for (ImportItem item : allItems) {
+            if (requiredKind != null && item.kind() != requiredKind) continue;
             boolean matchModule = item.moduleName().toLowerCase().contains(q);
             boolean matchExport = item.exportName() != null
                     && item.exportName().toLowerCase().contains(q);
-            if (matchModule || matchExport) {
+
+            // Cross-reference: if this is a signature, also match against its
+            // referenced keys — so typing a substring of a key name surfaces
+            // every signature that includes it.
+            boolean matchSigRef = false;
+            if (item.kind() == Kind.SIGNATURE && item.exportName() != null) {
+                Set<String> refs = sigKeyRefs.get(item.exportName());
+                if (refs != null) {
+                    for (String key : refs) {
+                        if (key.toLowerCase().contains(q)) { matchSigRef = true; break; }
+                    }
+                }
+            }
+
+            if (matchModule || matchExport || matchSigRef) {
                 filtered.add(item);
             }
         }

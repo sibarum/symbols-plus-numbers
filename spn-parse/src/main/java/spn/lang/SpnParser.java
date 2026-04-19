@@ -373,6 +373,8 @@ public class SpnParser {
     public Map<String, FieldType> getTypeConstantTypes() { return typeConstantTypes; }
     public Map<String, ConstantEntry> getConstantRegistry() { return constantRegistry; }
     public Map<String, MacroDef> getMacroRegistry() { return macroRegistry; }
+    public Map<String, Set<String>> getSignatureRegistry() { return signatureRegistry; }
+    public Map<String, SpnFunctionDescriptor> getQualifiedKeyRegistry() { return qualifiedKeyRegistry; }
     public List<Promotion> getPromotionRegistry() { return promotionRegistry; }
 
     // ── Top-level parsing ──────────────────────────────────────────────────

@@ -57,6 +57,17 @@ public class ActionMenuMode implements Mode {
     public boolean onKey(int key, int scancode, int action, int mods) {
         if (action != GLFW_PRESS && action != GLFW_REPEAT) return true;
 
+        boolean ctrl = (mods & GLFW_MOD_CONTROL) != 0;
+        if (ctrl && key == GLFW_KEY_V) {
+            String clip = window.getClipboardText();
+            if (!clip.isEmpty()) {
+                query.insert(cursorPos, clip);
+                cursorPos += clip.length();
+                refilter();
+            }
+            return true;
+        }
+
         switch (key) {
             case GLFW_KEY_ESCAPE -> {
                 window.popMode();

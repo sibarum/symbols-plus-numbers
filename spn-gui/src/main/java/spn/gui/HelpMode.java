@@ -61,11 +61,24 @@ class HelpMode implements Mode {
     public boolean onKey(int key, int scancode, int action, int mods) {
         if (action != GLFW_PRESS && action != GLFW_REPEAT) return true;
 
+        boolean ctrl = (mods & GLFW_MOD_CONTROL) != 0;
+
         // Detail view: Escape goes back to search
         if (detailAction != null) {
             if (key == GLFW_KEY_ESCAPE || key == GLFW_KEY_BACKSPACE) {
                 detailAction = null;
                 return true;
+            }
+            return true;
+        }
+
+        // Ctrl+V — paste clipboard text into the query at the cursor
+        if (ctrl && key == GLFW_KEY_V) {
+            String clip = window.getClipboardText();
+            if (!clip.isEmpty()) {
+                query.insert(cursorPos, clip);
+                cursorPos += clip.length();
+                refilter();
             }
             return true;
         }

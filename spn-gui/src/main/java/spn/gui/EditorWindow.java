@@ -328,6 +328,16 @@ public class EditorWindow {
     }
 
     /**
+     * Returns the current system clipboard text, or an empty string if the
+     * clipboard is empty or unavailable. Used by modes with query text fields
+     * that want to support Ctrl+V paste.
+     */
+    public String getClipboardText() {
+        String s = glfwGetClipboardString(handle);
+        return s == null ? "" : s;
+    }
+
+    /**
      * Stack-aware close behavior:
      * - If modes are stacked above the base editor, pop one.
      * - If only the base editor remains and content is clean, close.
