@@ -67,14 +67,12 @@ macro constructRatComplex(bits) = {
   pure R.inv() -> R = () { R(this.1, this.0) }
   pure R.neg() -> R = () { R(-this.0, this.1) }
 
-  -- Projective equality: collapsed zeros and omegas are equivalence
-  -- classes, so equality checks both the class and the exact structural
-  -- form.
+  -- Value equality via cross-multiplication: a/b == c/d iff a·d == c·b.
+  -- Subsumes the projective cases (both-zero, both-omega) automatically
+  -- and tolerates the non-canonical bit patterns that bitshift
+  -- normalization accumulates through long operation chains.
   pure ==(R, R) -> bool = (r1, r2) {
-    let bothZero = r1.0 == 0 && r2.0 == 0
-    let bothOmega = r1.1 == 0 && r2.1 == 0
-    let exact = r1.0 == r2.0 && r1.1 == r2.1
-    bothZero || bothOmega || exact
+    r1.0 * r2.1 == r2.0 * r1.1
   }
 
   pure +(R, R) -> R = ((n1, d1), (n2, d2)) {
@@ -114,25 +112,46 @@ macro constructRatComplex(bits) = {
     C(1/(1+t*t), (2*t)/(1-t*t))
   }
 
+  -- Multiplication on direction vectors: (ad + i·an)(bd + i·bn).
+  -- Flip d/n signs and negate scale when the new denominator goes
+  -- negative — otherwise Rational's sign migration silently drops
+  -- quadrant info. (The tan(a+b) formula works mathematically but
+  -- composes badly with canonical-Rational sign migration.)
   pure *(C, C) -> C = ((s1, t1), (s2, t2)) {
+    let (an, ad) = t1
+    let (bn, bd) = t2
+    let nd = ad*bd - an*bn
+    let nn = ad*bn + an*bd
     let scl = s1 * s2
-    let tan = (t1 + t2) / (R.one - t1 * t2)
-    C(scl, tan)
+
+    match
+    | nn == 0 && nd == 0 -> C(R.zero, R.zero)
+    | nn == 0            -> C(scl * nd, R.zero)
+    | nd == 0            -> C(scl * nn, R.omega)
+    | nd < 0             -> C(scl.neg(), R(-nn, -nd))
+    | _                  -> C(scl, R(nn, nd))
   }
 
+  -- Division: (a · conj(b)) / |b|².
   pure /(C, C) -> C = ((s1, t1), (s2, t2)) {
-    let scl = s1 / s2
-    let tan = (t1 - t2) / (R.one + t1 * t2)
-    C(scl, tan)
+    let (an, ad) = t1
+    let (bn, bd) = t2
+    let nd = ad*bd + an*bn
+    let nn = an*bd - ad*bn
+    let denom_norm = bd*bd + bn*bn
+    let scl = (s1 / s2) / R(denom_norm, 1)
+
+    match
+    | nn == 0 && nd == 0 -> C(R.zero, R.zero)
+    | nn == 0            -> C(scl * nd, R.zero)
+    | nd == 0            -> C(scl * nn, R.omega)
+    | nd < 0             -> C(scl.neg(), R(-nn, -nd))
+    | _                  -> C(scl, R(nn, nd))
   }
 
   pure C.neg() -> C = () {
     let (s, t) = this
     C(s.neg(), t)
-  }
-
-  pure ==(C, C) -> bool = (z1, z2) {
-    z1.scale == z2.scale && z1.tangent == z2.tangent
   }
 
   pure +(C, C) -> C = ((s1, t1), (s2, t2)) {
@@ -148,7 +167,13 @@ macro constructRatComplex(bits) = {
     | ((0, _), (0, _)) -> { C(R.zero, R.zero) }
     | ((_, _), (0, _)) -> { C(x, R.zero) }
     | ((0, _), (_, _)) -> { C(y, R.omega) }
-    | _ -> { C(x, y / x) }
+    | _ -> {
+        -- Scale reconstruction: need scale·tan.d = x after Rational
+        -- canonicalization may have flipped tan.d's sign.
+        let tan = y / x
+        let scale = x / R(tan.1, 1)
+        C(scale, tan)
+      }
   }
 
   pure -(C, C) -> C = (c1, c2) { c1 + c2.neg() }
@@ -159,6 +184,14 @@ macro constructRatComplex(bits) = {
     let real = s * td
     let imag = s * tn
     (real, imag)
+  }
+
+  -- Value equality via cartesian — robust to non-canonical bit patterns
+  -- that the bitshift-normalized R can accumulate through a chain of ops.
+  pure ==(C, C) -> bool = (z1, z2) {
+    let (re1, im1) = z1.toCartesian()
+    let (re2, im2) = z2.toCartesian()
+    re1 == re2 && im1 == im2
   }
 
   promote R -> C = (q) { C(q) }

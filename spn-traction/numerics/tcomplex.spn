@@ -14,26 +14,63 @@ pure TComplex(Rational, Rational) -> TComplex = (scale, tan) {
   this(scale, tan)
 }
 
+-- Multiplication via cartesian: extract (re, im) of each operand, multiply
+-- as complex numbers, then reconstruct (scale, tangent). Going through
+-- cartesian sidesteps two issues with the direct tan(a+b) formula:
+--   (1) sign migration on the new tangent's denominator silently flips
+--       quadrant (broken for products whose angle exceeds π/2);
+--   (2) GCD reduction inside the Rational constructor steals magnitude
+--       that the scale was supposed to absorb (broken for any product
+--       whose (nn, nd) share a common factor).
 pure *(TComplex, TComplex) -> TComplex = ((s1, t1), (s2, t2)) {
-  let scl = s1 * s2
-  let tan = (t1 + t2) / (Rational.one - t1 * t2)
-  TComplex(scl, tan)
+  let (an, ad) = t1
+  let (bn, bd) = t2
+  let a_re = s1 * ad
+  let a_im = s1 * an
+  let b_re = s2 * bd
+  let b_im = s2 * bn
+  let re = a_re*b_re - a_im*b_im
+  let im = a_re*b_im + a_im*b_re
+
+  match (re, im)
+  | ((0, _), (0, _)) -> TComplex(Rational.zero, Rational.zero)
+  | ((_, _), (0, _)) -> TComplex(re, Rational.zero)
+  | ((0, _), (_, _)) -> TComplex(im, Rational.omega)
+  | _ -> {
+      let tan = im / re
+      let scale = re / Rational(tan.1, 1)
+      TComplex(scale, tan)
+    }
 }
 
+-- Division via cartesian: (a/b) = (a · conj(b)) / |b|², built from the
+-- same primitives as multiplication.
 pure /(TComplex, TComplex) -> TComplex = ((s1, t1), (s2, t2)) {
-  let scl = s1 / s2
-  let tan = (t1 - t2) / (Rational.one + t1 * t2)
-  TComplex(scl, tan)
+  let (an, ad) = t1
+  let (bn, bd) = t2
+  let a_re = s1 * ad
+  let a_im = s1 * an
+  let b_re = s2 * bd
+  let b_im = s2 * bn
+  let denom = b_re*b_re + b_im*b_im
+  let re = (a_re*b_re + a_im*b_im) / denom
+  let im = (a_im*b_re - a_re*b_im) / denom
+
+  match (re, im)
+  | ((0, _), (0, _)) -> TComplex(Rational.zero, Rational.zero)
+  | ((_, _), (0, _)) -> TComplex(re, Rational.zero)
+  | ((0, _), (_, _)) -> TComplex(im, Rational.omega)
+  | _ -> {
+      let tan = im / re
+      let scale = re / Rational(tan.1, 1)
+      TComplex(scale, tan)
+    }
 }
 
 -- Unary negation as a method (mutex rule). `-(tc)` falls back to this.
 pure TComplex.neg() -> TComplex = () {
   let (s, t) = this
   TComplex(s.neg(), t)
-}
-
-pure ==(TComplex, TComplex) -> bool = (z1, z2) {
-  z1.scale == z2.scale && z1.tangent == z2.tangent
 }
 
 pure +(TComplex, TComplex) -> TComplex = ((s1, t1), (s2, t2)) {
@@ -54,7 +91,12 @@ pure +(TComplex, TComplex) -> TComplex = ((s1, t1), (s2, t2)) {
   | ((_, _), (0, _)) -> { TComplex(x, Rational.zero) }
   | ((0, _), (_, _)) -> { TComplex(y, Rational.omega) }
   | _ -> {
-      TComplex(x, y / x)
+      -- Reconstruct so cartesian recovery matches: need scale·tan.d = x.
+      -- Rational division of y/x sign-migrates to keep tan.d positive,
+      -- so scale must absorb x/tan.d (which can be negative).
+      let tan = y / x
+      let scale = x / Rational(tan.1, 1)
+      TComplex(scale, tan)
     }
 }
 
@@ -72,7 +114,9 @@ pure *(Rational, TComplex) -> TComplex = (k, (s, t)) {
   | ((_, _), (0, _)) -> { TComplex(x2, Rational.zero) }
   | ((0, _), (_, _)) -> { TComplex(y2, Rational.omega) }
   | _ -> {
-      TComplex(x2, y2 / x2)
+      let tan = y2 / x2
+      let scale = x2 / Rational(tan.1, 1)
+      TComplex(scale, tan)
     }
 }
 
@@ -88,6 +132,16 @@ pure TComplex.toCartesian() -> (Rational, Rational) = () {
   let imag = s * tn
 
   (real, imag)
+}
+
+-- Value equality via cartesian comparison. Two TComplex with different
+-- (scale, tangent) bit patterns can encode the same complex number when
+-- the addition path leaves an unsimplified scale; cartesian extraction
+-- normalizes through canonical Rationals so == here is true value-eq.
+pure ==(TComplex, TComplex) -> bool = (z1, z2) {
+  let (re1, im1) = z1.toCartesian()
+  let (re2, im2) = z2.toCartesian()
+  re1 == re2 && im1 == im2
 }
 
 promote Rational -> TComplex = (q) {

@@ -120,4 +120,93 @@ class TComplexTest {
                 """));
         }
     }
+
+    // ── Pythagorean-triple multiplication ────────────────────────────────
+    //
+    // The Brahmagupta–Fibonacci identity (a²+b²)(c²+d²) = (ac-bd)² + (ad+bc)²
+    // is exactly what TComplex multiplication does. Each triple is a complex
+    // number with integer magnitude; multiplying produces another such triple.
+    // These tests cover quadrants where the naive tan(a+b) formulation drops
+    // sign info — they would have failed before the sign-migration fix.
+
+    @Nested
+    class PythagoreanProducts {
+
+        @Test void simpleProductCrossingPiOver2() {
+            // (3+4i)(5+12i) = -33+56i. Tangent of result is -56/33; the
+            // canonical Rational sign-migration moves that sign into the
+            // numerator, so without compensating in scale, cartesian
+            // recovery comes back as +33-56i (the wrong quadrant).
+            assertEquals(true, run("""
+                import numerics.tcomplex
+                let a = TComplex(Rational.one, Rational(4, 3))   -- 3 + 4i
+                let b = TComplex(Rational.one, Rational(12, 5))  -- 5 + 12i
+                let prod = a * b
+                let (re, im) = prod.toCartesian()
+                re == Rational(-33, 1) && im == Rational(56, 1)
+                """));
+        }
+
+        @Test void smallAngleProductFirstQuadrant() {
+            // Sanity: (3+4i)·(8+15i) = (24-60) + (45+32)i = -36+77i.
+            // Magnitude 5·17 = 85, the (36, 77, 85) triple.
+            assertEquals(true, run("""
+                import numerics.tcomplex
+                let a = TComplex(Rational.one, Rational(4, 3))   -- 3 + 4i
+                let b = TComplex(Rational.one, Rational(15, 8))  -- 8 + 15i
+                let prod = a * b
+                let (re, im) = prod.toCartesian()
+                re == Rational(-36, 1) && im == Rational(77, 1)
+                """));
+        }
+
+        @Test void divisionRoundTripsMultiplication() {
+            // (a*b) / b should give a back, exactly.
+            assertEquals(true, run("""
+                import numerics.tcomplex
+                let a = TComplex(Rational.one, Rational(4, 3))
+                let b = TComplex(Rational.one, Rational(12, 5))
+                let back = (a * b) / b
+                back == a
+                """));
+        }
+
+        @Test void additionPreservesCartesian() {
+            // (3+4i) + (5+12i) = 8+16i. Tests the addition reconstruction
+            // path — also broken before the scale-recovery fix.
+            assertEquals(true, run("""
+                import numerics.tcomplex
+                let a = TComplex(Rational.one, Rational(4, 3))
+                let b = TComplex(Rational.one, Rational(12, 5))
+                let s = a + b
+                let (re, im) = s.toCartesian()
+                re == Rational(8, 1) && im == Rational(16, 1)
+                """));
+        }
+
+        @Test void additionInThirdQuadrant() {
+            // (-3-4i) + (-5-12i) = -8-16i — exercises negative reals/imags.
+            assertEquals(true, run("""
+                import numerics.tcomplex
+                let a = TComplex(Rational(-1, 1), Rational(4, 3))   -- -3 - 4i
+                let b = TComplex(Rational(-1, 1), Rational(12, 5))  -- -5 - 12i
+                let s = a + b
+                let (re, im) = s.toCartesian()
+                re == Rational(-8, 1) && im == Rational(-16, 1)
+                """));
+        }
+
+        @Test void zerosWithDifferentTangentsCompareEqual() {
+            // Both represent 0+0i (scale=0 makes the tangent irrelevant for
+            // cartesian recovery), but the Rational tangent components have
+            // different bit patterns. Bit-equality on (scale, tangent) would
+            // say "not equal"; the cartesian-based == correctly says "equal."
+            assertEquals(true, run("""
+                import numerics.tcomplex
+                let zero1 = TComplex(Rational.zero, Rational.zero)
+                let zero2 = TComplex(Rational.zero, Rational(5, 1))
+                zero1 == zero2
+                """));
+        }
+    }
 }

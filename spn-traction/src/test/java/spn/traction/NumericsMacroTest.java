@@ -200,5 +200,39 @@ class NumericsMacroTest {
                 z.scale == Rat(6, 1) && z.tangent == Rat(0, 1)
                 """));
         }
+
+        @Test void pythagoreanProductCrossingPiOver2() {
+            // (3+4i) · (5+12i) = -33 + 56i. Mirrors the tcomplex.spn test —
+            // exposes the quadrant bug if the Rational sign migration drops
+            // the denominator sign without compensating in scale.
+            assertEquals(true, run("""
+                import Numerics
+
+                let num = constructRatComplex(31)
+                type Rat = num.rational
+                type Cpx = num.complex
+
+                let a = Cpx(Rat(1, 1), Rat(4, 3))    -- 3 + 4i
+                let b = Cpx(Rat(1, 1), Rat(12, 5))   -- 5 + 12i
+                let prod = a * b
+                let (re, im) = prod.toCartesian()
+                re == Rat(-33, 1) && im == Rat(56, 1)
+                """));
+        }
+
+        @Test void divisionRoundTripsMultiplication() {
+            assertEquals(true, run("""
+                import Numerics
+
+                let num = constructRatComplex(31)
+                type Rat = num.rational
+                type Cpx = num.complex
+
+                let a = Cpx(Rat(1, 1), Rat(4, 3))
+                let b = Cpx(Rat(1, 1), Rat(12, 5))
+                let back = (a * b) / b
+                back == a
+                """));
+        }
     }
 }
