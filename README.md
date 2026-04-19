@@ -159,11 +159,13 @@ arr.items                              -- compile error: private field
 - **`emit`** keyword transmits a declaration from the macro's scope to the caller
 - **`type X = macroCall(T)`** binds the emitted type under a user-chosen name
 - **Multi-emit bundles** — `emit { label: T1, label2: T2 }` emits several named types; the caller binds `let h = macroCall(...)` to a compile-time handle and pulls each via `type X = h.label` (see below)
+- **Conditional blocks** — `<! if COND !> { ... } <! else !> { ... }` selects between branches at expansion time based on macro-param values. Works for both conditional bodies and conditional declarations (see below)
 - **Scoped isolation** — internal helpers are discarded after the macro completes
 - **Private constructor fields** — `let this.field = expr` creates encapsulated state, accessible only from methods on the same type
 - **Multiple dispatch** — macro-generated functions participate in type-dispatched overloading
 - **Unique internal names** — multiple invocations of the same macro don't collide
 - **Macro-aware error messages** — parse errors inside an expanded body are tagged with the macro invocation site (`[in macro name(file:line)]`), so diagnostics point back to the caller rather than the internal expansion
+- **Signature constraints** — `macro foo(T requires Ring) = { ... }` checks at the call site that T has impls for every dispatch key the signature lists; missing keys are named in the error (see "Qualified Dispatch Keys" below)
 
 **Multi-emit with named handles:**
 
@@ -180,6 +182,94 @@ let z = Cpx31(Rat31(1, 1), Rat31(0, 1)) -- complex as (scale, tan θ)
 ```
 
 The handle (`rc`) is a compile-time namespace, not a runtime value. Two separate invocations (e.g. `constructRatComplex(31)` and `constructRatComplex(20)`) produce non-conflicting types even when pulled into the same scope — useful when you want mixed-precision numerics in one file. Function and value emit (`pure f = rc.normalize`, `let v = rc.bits`) are planned extensions — today, the bundle form carries types only.
+
+**Macro conditional blocks:**
+
+The `<! ... !>` delimiters mark a macro-expansion-time directive. The only form in v1 is a binary conditional — always paired with a mandatory `else` — selecting between two blocks:
+
+```
+macro withFlavor(flavor) = {
+  type Wrapper(int)
+
+  -- Conditional body: same method, different implementations
+  pure Wrapper.go() -> int = () {
+    <! if flavor == :fast !> { this.0 * 2 }
+    <! else !> { this.0 }
+  }
+
+  -- Conditional declaration: empty else = "include only if"
+  <! if flavor == :tagged !> {
+    pure Wrapper.tag() -> string = () { "tagged" }
+  } <! else !> { }
+
+  emit Wrapper
+}
+
+type Fast = withFlavor(:fast)         -- .go() doubles; no .tag()
+type Tagged = withFlavor(:tagged)     -- .go() passes through; has .tag()
+```
+
+The condition is evaluated against macro-param-substituted literals. Supported: int/string/symbol/bool literals, `==`/`!=`/`<`/`>`/`<=`/`>=`, `&&`/`||`/`!`, parentheses. Any non-literal identifier reaching evaluation produces a parse error attributed to the macro call site. Conditional blocks nest; inner directives are resolved on the chosen outer branch.
+
+The delimiters are deliberately loud (`<!` / `!>` render in a warning color) so that macro-time logic tears itself visually out of the surrounding SPN code — at a glance, you can tell what's evaluated now versus what runs later.
+
+### Qualified Dispatch Keys
+
+Global, fully-qualified dispatch slots that unify operators, methods, and interface members into one primitive. Every call site — `a + b`, `a.foo()`, `foo(a, b)`, and `macro<T requires Sig>(a)` — is the same mechanism: find an entry in the dispatch table matching the arg types, with promotion allowed as a relaxation.
+
+```
+module com.myapp
+
+-- Register the canonical shape of a key. The namespace prefix
+-- (com.myapp) must match this file's module declaration.
+register pure @com.myapp.serialize() -> string
+
+-- Any type, anywhere, can implement the key.
+type Box(int)
+pure Box.@com.myapp.serialize() -> string = () { "box" }
+
+-- Call with the `.@fqn(args)` form.
+Box(7).@com.myapp.serialize()
+```
+
+**Namespace ownership.** A file may only `register` keys whose prefix it owns — either exactly its module namespace or a sub-prefix. Attempts to claim a broader or unrelated namespace fail at parse time. Files without a `module` declaration can't register qualified keys at all.
+
+**Operators are pre-registered keys.** `@+`, `@-`, `@*`, `@*_dot` etc. reference the built-in operator overloads with no need for explicit registration.
+
+**Import shortening.** Writing `obj.@com.myapp.serialize()` everywhere is noisy. Bringing the key into scope lets you use the short name:
+
+```
+import com.myapp.(serialize, describe)
+
+obj.serialize()         -- resolves to obj.@com.myapp.serialize()
+obj.describe()          -- resolves to obj.@com.myapp.describe()
+```
+
+Regular methods take precedence over aliases — if `Box.foo` exists as a method and `@com.myapp.foo` is imported, `box.foo()` calls the method. The alias is a fallback, not a shadow.
+
+**Signatures** — a named set of required dispatch keys. Flat, composable, anonymous-structural:
+
+```
+signature Additive (@+, @-, @neg)
+signature Multiplicative (@*, @inv)
+signature Ring (Additive, Multiplicative, @zero, @one)
+```
+
+Sub-signature references expand at parse time so the registry holds the transitive closure. A type satisfies a signature iff it has impls for every key — *structurally*, with no conformance declaration, no `impl` block, no orphan rule. Add a missing operator on a type and it retroactively satisfies every signature that required it.
+
+**`requires` constraints on macro parameters.** The payoff: you can state polymorphism constraints at the call site without reaching for generics:
+
+```
+macro deriveArithmetic(T requires Ring) = {
+  pure T.doubled() -> T = () { this + this }
+  pure T.squared() -> T = () { this * this }
+}
+
+deriveArithmetic(Rational)   -- Rational has all Ring keys → ok
+deriveArithmetic(Box)        -- parse error: "Box doesn't satisfy Ring: missing @-, @inv, ..."
+```
+
+The error names the specific missing keys at the macro invocation site — dispatch failures don't have to happen deep inside macro expansion.
 
 ### Unary Operator Dispatch
 

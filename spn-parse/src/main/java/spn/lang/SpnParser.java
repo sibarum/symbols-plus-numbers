@@ -74,7 +74,13 @@ public class SpnParser {
     private final Map<String, List<FactoryEntry>> factoryRegistry = new LinkedHashMap<>();
 
     // Macro registry: "Name" → MacroDef (compile-time code template)
-    record MacroDef(String name, List<String> paramNames, List<SpnParseToken> bodyTokens) {}
+    record MacroParam(String name, String requiredSignature) {}
+    record MacroDef(String name, List<MacroParam> params, List<SpnParseToken> bodyTokens) {
+        /** Convenience accessor: just the names. */
+        public List<String> paramNames() {
+            return params.stream().map(MacroParam::name).toList();
+        }
+    }
 
     // A macro can emit multiple named declarations. Today only TYPE is supported;
     // FUNCTION and VALUE are reserved for future stages.
@@ -95,6 +101,30 @@ public class SpnParser {
     private final Map<String, MacroDef> macroRegistry = new LinkedHashMap<>();
     // Compile-time namespace: `let h = macroCall(...)` binds h → the emitted bundle.
     private final Map<String, MacroHandle> macroHandles = new LinkedHashMap<>();
+
+    // Module namespace claimed by a `module com.foo.bar` declaration at the
+    // top of the file. Null if no module was declared. Used to enforce
+    // ownership on `register @fqn` — a file may only register keys under
+    // a namespace it claims.
+    private String currentModuleNamespace = null;
+
+    // Globally-unique qualified-key registrations. `register pure @a.b.name
+    // (params) -> ret` puts an entry here keyed by the FQN text (with the @).
+    // Implementations reference the key; no impl is required to register it
+    // (v1 convenience), but when registered, its existence is an interface
+    // contract that signatures can refer to.
+    private final Map<String, SpnFunctionDescriptor> qualifiedKeyRegistry = new LinkedHashMap<>();
+
+    // Named signatures: `signature Name (@key, OtherSig, ...)` stores a
+    // flattened set of required dispatch-key names (text, with @). Sub-signature
+    // references are expanded at parse time; the registry always holds the
+    // transitive closure of required keys.
+    private final Map<String, Set<String>> signatureRegistry = new LinkedHashMap<>();
+
+    // Qualified-key aliases: `import com.myapp.(serialize)` binds the short
+    // name `serialize` to the full key `@com.myapp.serialize`. Resolved at
+    // method-call sites when a plain method lookup misses.
+    private final Map<String, String> qualifiedKeyAliases = new LinkedHashMap<>();
 
     // Associated constants: "TypeName.name" → zero-arg CallTarget returning the value
     record ConstantEntry(CallTarget callTarget, FieldType type) {}
@@ -229,7 +259,8 @@ public class SpnParser {
     /** Keywords that start a new top-level declaration — safe to resume after. */
     private static final Set<String> SYNC_KEYWORDS = Set.of(
             "type", "data", "struct", "pure", "action", "let", "const",
-            "import", "module", "version", "require", "macro", "promote"
+            "import", "module", "version", "require", "macro", "promote",
+            "register", "signature"
     );
 
     /**
@@ -378,6 +409,8 @@ public class SpnParser {
             case "return" -> parseYieldStatement(); // return is syntactic sugar for yield
             case "macro" -> { parseMacroDecl(); yield null; }
             case "emit" -> { parseEmit(); yield null; }
+            case "register" -> { parseRegisterDecl(); yield null; }
+            case "signature" -> { parseSignatureDecl(); yield null; }
             default -> parseExpressionStatement();
         };
     }
@@ -394,11 +427,17 @@ public class SpnParser {
         SpnParseToken nameTok = tokens.advance();
         String name = nameTok.text();
 
-        // Parameter list: (P1, P2, ...)
+        // Parameter list: (P1, P2 requires SigName, ...)
         tokens.expect("(");
-        List<String> paramNames = new ArrayList<>();
+        List<MacroParam> params = new ArrayList<>();
         while (!tokens.check(")")) {
-            paramNames.add(tokens.advance().text());
+            String paramName = tokens.advance().text();
+            String requiredSig = null;
+            if (tokens.match("requires")) {
+                SpnParseToken sigTok = tokens.advance();
+                requiredSig = sigTok.text();
+            }
+            params.add(new MacroParam(paramName, requiredSig));
             tokens.match(",");
         }
         tokens.expect(")");
@@ -422,7 +461,7 @@ public class SpnParser {
         tokens.expect("}");
 
         List<SpnParseToken> bodyTokens = tokens.slice(start, end);
-        macroRegistry.put(name, new MacroDef(name, paramNames, bodyTokens));
+        macroRegistry.put(name, new MacroDef(name, params, bodyTokens));
     }
 
     /**
@@ -462,6 +501,25 @@ public class SpnParser {
         if (args.size() != macro.paramNames().size()) {
             throw tokens.error("Macro '" + macro.name() + "' expects "
                     + macro.paramNames().size() + " argument(s), got " + args.size(), nameTok);
+        }
+
+        // Check `requires` constraints on macro params.
+        for (int i = 0; i < macro.params().size(); i++) {
+            MacroParam p = macro.params().get(i);
+            if (p.requiredSignature() == null) continue;
+            List<SpnParseToken> argTokens = args.get(i);
+            if (argTokens.size() != 1 || argTokens.get(0).type() != TokenType.TYPE_NAME) {
+                throw tokens.error("Parameter '" + p.name() + "' of macro '" + macro.name()
+                        + "' requires signature '" + p.requiredSignature()
+                        + "' but got a non-type argument", nameTok);
+            }
+            String typeName = argTokens.get(0).text();
+            List<String> missing = signatureMissingKeys(p.requiredSignature(), typeName);
+            if (!missing.isEmpty()) {
+                throw tokens.error("Type '" + typeName + "' doesn't satisfy signature '"
+                        + p.requiredSignature() + "': missing " + String.join(", ", missing),
+                        nameTok);
+            }
         }
 
         // Build parameter → argument map
@@ -510,6 +568,10 @@ public class SpnParser {
                 }
             }
         }
+
+        // Resolve macro-directive conditional blocks: <! if C !> { A } <! else !> { B }
+        // becomes just A's tokens or B's tokens (braces stripped) based on C.
+        expanded = resolveConditionalBlocks(expanded, nameTok);
 
         // Snapshot named registries BEFORE expansion
         Map<String, SpnStructDescriptor> snapStructs = new LinkedHashMap<>(structRegistry);
@@ -723,6 +785,414 @@ public class SpnParser {
         }
     }
 
+    // ── Qualified-key registration: register pure @fqn(params) -> ret ─────
+
+    /**
+     * Parse: {@code register pure @a.b.name(params) -> ReturnType}
+     *        {@code register action @a.b.name(params) -> ReturnType}
+     *
+     * <p>Declares a globally-unique qualified dispatch key. The FQN's
+     * namespace (all dotted segments except the last) must prefix-match
+     * the current file's {@code module} namespace — you may only register
+     * keys under a namespace you own.
+     *
+     * <p>Registration is a declaration only; impls are provided separately
+     * by any module. The declared descriptor lives in {@code qualifiedKeyRegistry}
+     * and serves as the interface contract that signatures can reference.
+     */
+    private void parseRegisterDecl() {
+        SpnParseToken regTok = tokens.expect("register");
+        boolean isPure;
+        if (tokens.match("pure")) {
+            isPure = true;
+        } else if (tokens.match("action")) {
+            isPure = false;
+        } else {
+            throw tokens.error("Expected 'pure' or 'action' after 'register'", regTok);
+        }
+
+        SpnParseToken keyTok = tokens.peek();
+        if (keyTok == null || keyTok.type() != TokenType.QUALIFIED_KEY) {
+            throw tokens.error("Expected a qualified key (e.g. @com.myapp.serialize) after 'register " + (isPure ? "pure" : "action") + "'", regTok);
+        }
+        tokens.advance();
+        String fqn = keyTok.text(); // includes leading @
+
+        // Dotted-FQN ownership enforcement: the namespace portion of the key
+        // (everything before the last dot) must match the current module's
+        // namespace as a prefix.
+        int lastDot = fqn.lastIndexOf('.');
+        if (lastDot < 0) {
+            // Unqualified — allowed for now, but no namespace checks apply.
+            // Useful for local/experimental keys within a single file.
+        } else {
+            String keyPrefix = fqn.substring(1, lastDot); // strip leading @
+            if (currentModuleNamespace == null) {
+                throw tokens.error("Cannot register '" + fqn
+                        + "' — this file has no 'module' declaration. Claim a namespace first.", keyTok);
+            }
+            if (!keyPrefix.equals(currentModuleNamespace)
+                    && !keyPrefix.startsWith(currentModuleNamespace + ".")) {
+                throw tokens.error("Cannot register '" + fqn
+                        + "' — key namespace '" + keyPrefix
+                        + "' is not under this file's module namespace '"
+                        + currentModuleNamespace + "'.", keyTok);
+            }
+        }
+
+        List<FieldType> paramTypes = parseParamTypeList();
+        FieldType returnType = parseOptionalReturnType();
+
+        // Build the descriptor for the slot. No body; callers provide impls.
+        SpnFunctionDescriptor.Builder db = isPure
+                ? SpnFunctionDescriptor.pure(fqn) : SpnFunctionDescriptor.impure(fqn);
+        for (int i = 0; i < paramTypes.size(); i++) db.param("_" + i, paramTypes.get(i));
+        db.returns(returnType);
+        SpnFunctionDescriptor descriptor = db.build();
+
+        // Duplicate registration is a conflict — a key is owned exactly once.
+        if (qualifiedKeyRegistry.containsKey(fqn)) {
+            throw tokens.error("Qualified key '" + fqn + "' is already registered.", keyTok);
+        }
+        qualifiedKeyRegistry.put(fqn, descriptor);
+    }
+
+    // ── Named signatures: signature Name (keys, sub-signatures) ────────────
+
+    /**
+     * Parse: {@code signature Name (@key, @other.key, SubSig, ...)}
+     *
+     * <p>A signature is a named set of required dispatch keys. Entries are
+     * flat; a sub-signature's keys expand in place at parse time so the
+     * registry holds the transitive closure. No type variables in the
+     * signature body — the canonical shape of each key lives in its
+     * registration (or built-in operator definition).
+     *
+     * <p>A type satisfies a signature iff it has impls for every key in
+     * the flattened set. Structural, anonymous, retroactive.
+     */
+    private void parseSignatureDecl() {
+        SpnParseToken sigTok = tokens.expect("signature");
+        SpnParseToken nameTok = tokens.peek();
+        if (nameTok == null || nameTok.type() != TokenType.TYPE_NAME) {
+            throw tokens.error("Expected a capitalized signature name after 'signature'", sigTok);
+        }
+        tokens.advance();
+        String sigName = nameTok.text();
+
+        tokens.expect("(");
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        while (!tokens.check(")")) {
+            SpnParseToken entry = tokens.peek();
+            if (entry == null) throw tokens.error("Unterminated signature body", sigTok);
+            if (entry.type() == TokenType.QUALIFIED_KEY) {
+                tokens.advance();
+                keys.add(entry.text());
+            } else if (entry.type() == TokenType.TYPE_NAME) {
+                tokens.advance();
+                Set<String> sub = signatureRegistry.get(entry.text());
+                if (sub == null) {
+                    throw tokens.error("Unknown signature '" + entry.text()
+                            + "' referenced in '" + sigName + "'", entry);
+                }
+                keys.addAll(sub);
+            } else {
+                throw tokens.error("Signature entry must be a '@key' or another signature name, got: "
+                        + entry.text(), entry);
+            }
+            tokens.match(",");
+        }
+        tokens.expect(")");
+
+        if (signatureRegistry.containsKey(sigName)) {
+            throw tokens.error("Signature '" + sigName + "' is already defined.", nameTok);
+        }
+        signatureRegistry.put(sigName, keys);
+    }
+
+    /**
+     * Check whether a type satisfies a named signature — i.e. has impls for
+     * every required dispatch key. Returns a list of missing keys (empty if
+     * satisfied). The caller decides whether "satisfies" is true/false and
+     * how to report missing keys.
+     */
+    private List<String> signatureMissingKeys(String sigName, String typeName) {
+        Set<String> required = signatureRegistry.get(sigName);
+        if (required == null) return List.of(sigName); // unknown signature itself
+        List<String> missing = new ArrayList<>();
+        for (String key : required) {
+            if (!typeHasKey(typeName, key)) missing.add(key);
+        }
+        return missing;
+    }
+
+    /**
+     * Structural check: does {@code typeName} have an impl for {@code key}?
+     * Operator keys ({@code @+}, {@code @*}) check the operator registry for
+     * overloads involving the type. Method keys ({@code @name},
+     * {@code @pkg.name}) check the method registry for
+     * {@code TypeName.@key}.
+     */
+    private boolean typeHasKey(String typeName, String key) {
+        // Strip the leading '@'
+        String body = key.startsWith("@") ? key.substring(1) : key;
+        // If body contains only operator chars (plus optional _qualifier),
+        // treat as operator lookup.
+        String opName = extractOperatorName(body);
+        if (opName != null) {
+            FieldType tType = resolveTypeByName(typeName);
+            List<OperatorOverload> overloads = operatorRegistry.get(opName);
+            if (overloads == null || tType == null) return false;
+            for (OperatorOverload ov : overloads) {
+                for (FieldType pt : ov.paramTypes()) {
+                    if (typesMatch(pt, tType)) return true;
+                }
+            }
+            return false;
+        }
+        // Otherwise it's a method-style key: look up TypeName.@key
+        return methodRegistry.containsKey(typeName + "." + key);
+    }
+
+    /** If the key body is all operator chars (with optional _qualifier), return it. */
+    private static String extractOperatorName(String body) {
+        if (body.isEmpty()) return null;
+        int i = 0;
+        while (i < body.length() && isOpChar(body.charAt(i))) i++;
+        if (i == 0) return null;
+        if (i < body.length() && body.charAt(i) != '_') return null;
+        return body;
+    }
+
+    private static boolean isOpChar(char c) {
+        return c == '+' || c == '-' || c == '*' || c == '/' || c == '%'
+                || c == '=' || c == '<' || c == '>' || c == '|' || c == '&';
+    }
+
+    // ── Macro conditional blocks: <! if COND !> { A } <! else !> { B } ─────
+
+    /**
+     * Scans a (parameter-substituted) macro expansion for conditional block
+     * directives. Each directive has the fixed shape:
+     *   {@code <! if COND !> { BRANCH_TRUE } <! else !> { BRANCH_FALSE }}
+     * The condition is evaluated against literal tokens (macro-param
+     * substitution has already happened). The entire directive is replaced
+     * with the inner tokens of the chosen branch — braces stripped — so that
+     * declarations inside the branch register at the surrounding scope.
+     * Nested directives are resolved recursively on the chosen branch.
+     *
+     * <p>Mandatory {@code else} — no single-branch form in v1.
+     */
+    private List<SpnParseToken> resolveConditionalBlocks(
+            List<SpnParseToken> input, SpnParseToken macroCallTok) {
+        List<SpnParseToken> out = new ArrayList<>();
+        int i = 0;
+        while (i < input.size()) {
+            SpnParseToken t = input.get(i);
+            if (t.type() == TokenType.MACRO_DIRECTIVE && t.text().equals("<!")) {
+                // Parse: <! if COND !> { A } <! else !> { B }
+                int start = i;
+                i++;
+                if (i >= input.size() || !input.get(i).text().equals("if")) {
+                    throw error("Expected 'if' after '<!'", input.get(start), macroCallTok);
+                }
+                i++;
+                List<SpnParseToken> condTokens = new ArrayList<>();
+                while (i < input.size() && !(input.get(i).type() == TokenType.MACRO_DIRECTIVE
+                        && input.get(i).text().equals("!>"))) {
+                    condTokens.add(input.get(i));
+                    i++;
+                }
+                if (i >= input.size()) {
+                    throw error("Unterminated macro directive (missing '!>')",
+                            input.get(start), macroCallTok);
+                }
+                i++; // consume !>
+                List<SpnParseToken> trueBranch = consumeBracedBlock(input, i, start, macroCallTok);
+                i += trueBranch.size() + 2; // { ... }
+                // expect <! else !>
+                if (i + 2 >= input.size()
+                        || input.get(i).type() != TokenType.MACRO_DIRECTIVE
+                        || !input.get(i).text().equals("<!")
+                        || !input.get(i + 1).text().equals("else")
+                        || input.get(i + 2).type() != TokenType.MACRO_DIRECTIVE
+                        || !input.get(i + 2).text().equals("!>")) {
+                    throw error("Expected '<! else !>' — mandatory after '<! if !> {...}'",
+                            input.get(start), macroCallTok);
+                }
+                i += 3; // consume <! else !>
+                List<SpnParseToken> falseBranch = consumeBracedBlock(input, i, start, macroCallTok);
+                i += falseBranch.size() + 2;
+
+                boolean chosen = evalMacroCondition(condTokens, input.get(start), macroCallTok);
+                // Recursively resolve nested directives within the chosen branch
+                out.addAll(resolveConditionalBlocks(
+                        chosen ? trueBranch : falseBranch, macroCallTok));
+            } else if (t.type() == TokenType.MACRO_DIRECTIVE && t.text().equals("!>")) {
+                throw error("Unexpected '!>' without matching '<!'", t, macroCallTok);
+            } else {
+                out.add(t);
+                i++;
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Returns the tokens INSIDE a {@code { ... }} block starting at index
+     * {@code openPos} in {@code input}. Tracks brace depth so nested blocks
+     * are consumed correctly.
+     */
+    private List<SpnParseToken> consumeBracedBlock(
+            List<SpnParseToken> input, int openPos, int directiveStart, SpnParseToken macroCallTok) {
+        if (openPos >= input.size() || !input.get(openPos).text().equals("{")) {
+            throw error("Expected '{' after macro directive", input.get(directiveStart), macroCallTok);
+        }
+        int depth = 1;
+        List<SpnParseToken> inside = new ArrayList<>();
+        int i = openPos + 1;
+        while (i < input.size() && depth > 0) {
+            SpnParseToken t = input.get(i);
+            if (t.text().equals("{")) {
+                depth++;
+                inside.add(t);
+            } else if (t.text().equals("}")) {
+                depth--;
+                if (depth == 0) return inside;
+                inside.add(t);
+            } else {
+                inside.add(t);
+            }
+            i++;
+        }
+        throw error("Unterminated block in macro directive", input.get(directiveStart), macroCallTok);
+    }
+
+    /**
+     * Evaluates a condition built from literal tokens (post-substitution).
+     * Supports: int/string/symbol/bool literals; comparison (==, !=, &lt;, &gt;,
+     * &lt;=, &gt;=); logical (&amp;&amp;, ||, !); parentheses. Any non-literal
+     * identifier reaching evaluation = error.
+     */
+    private boolean evalMacroCondition(List<SpnParseToken> cond, SpnParseToken directiveTok,
+                                       SpnParseToken macroCallTok) {
+        try {
+            MacroCondEval ev = new MacroCondEval(cond);
+            Object v = ev.parseExpr();
+            if (ev.pos != cond.size()) {
+                throw new RuntimeException("Trailing tokens in condition");
+            }
+            if (!(v instanceof Boolean b)) {
+                throw new RuntimeException("Condition did not evaluate to bool");
+            }
+            return b;
+        } catch (RuntimeException rex) {
+            throw error("Macro condition: " + rex.getMessage(), directiveTok, macroCallTok);
+        }
+    }
+
+    /** Small recursive-descent evaluator over condition tokens. */
+    private static final class MacroCondEval {
+        final List<SpnParseToken> toks;
+        int pos = 0;
+        MacroCondEval(List<SpnParseToken> toks) { this.toks = toks; }
+
+        SpnParseToken peek() { return pos < toks.size() ? toks.get(pos) : null; }
+        SpnParseToken advance() { return toks.get(pos++); }
+        boolean matchText(String t) {
+            if (peek() != null && peek().text().equals(t)) { pos++; return true; }
+            return false;
+        }
+
+        Object parseExpr() { return parseOr(); }
+
+        Object parseOr() {
+            Object v = parseAnd();
+            while (matchText("||")) {
+                Object r = parseAnd();
+                v = asBool(v) || asBool(r);
+            }
+            return v;
+        }
+
+        Object parseAnd() {
+            Object v = parseNot();
+            while (matchText("&&")) {
+                Object r = parseNot();
+                v = asBool(v) && asBool(r);
+            }
+            return v;
+        }
+
+        Object parseNot() {
+            if (matchText("!")) return !asBool(parseNot());
+            return parseComp();
+        }
+
+        Object parseComp() {
+            Object left = parseAtom();
+            SpnParseToken op = peek();
+            if (op != null) {
+                String t = op.text();
+                if (t.equals("==") || t.equals("!=") || t.equals("<")
+                        || t.equals(">") || t.equals("<=") || t.equals(">=")) {
+                    advance();
+                    Object right = parseAtom();
+                    return compare(t, left, right);
+                }
+            }
+            return left;
+        }
+
+        Object parseAtom() {
+            SpnParseToken t = advance();
+            if (t.type() == TokenType.NUMBER) return Long.parseLong(t.text());
+            if (t.type() == TokenType.STRING) {
+                String s = t.text();
+                // strip surrounding quotes
+                return s.length() >= 2 ? s.substring(1, s.length() - 1) : "";
+            }
+            if (t.type() == TokenType.SYMBOL) return t.text(); // ":foo"
+            if (t.text().equals("true")) return Boolean.TRUE;
+            if (t.text().equals("false")) return Boolean.FALSE;
+            if (t.text().equals("(")) {
+                Object v = parseExpr();
+                if (!matchText(")")) throw new RuntimeException("Expected ')'");
+                return v;
+            }
+            throw new RuntimeException("unexpected token '" + t.text() + "'");
+        }
+
+        static boolean asBool(Object o) {
+            if (o instanceof Boolean b) return b;
+            throw new RuntimeException("expected bool, got " + (o == null ? "null" : o.getClass().getSimpleName()));
+        }
+
+        static boolean compare(String op, Object a, Object b) {
+            if (a instanceof Long la && b instanceof Long lb) {
+                return switch (op) {
+                    case "==" -> la.equals(lb);
+                    case "!=" -> !la.equals(lb);
+                    case "<"  -> la < lb;
+                    case ">"  -> la > lb;
+                    case "<=" -> la <= lb;
+                    case ">=" -> la >= lb;
+                    default -> false;
+                };
+            }
+            if (op.equals("==")) return java.util.Objects.equals(a, b);
+            if (op.equals("!=")) return !java.util.Objects.equals(a, b);
+            throw new RuntimeException("ordering operator '" + op + "' requires ints");
+        }
+    }
+
+    /** Build a SpnParseException tagged with the macro call site. */
+    private SpnParseException error(String msg, SpnParseToken at, SpnParseToken macroCallTok) {
+        SpnParseException e = new SpnParseException(msg, sourceName, at.line(), at.col());
+        e.pushMacroFrame("conditional", sourceName, macroCallTok.line());
+        return e;
+    }
+
     // ── Import declarations ────────────────────────────────────────────────
 
     /**
@@ -735,17 +1205,20 @@ public class SpnParser {
      *   import String (join as glue)
      */
     /**
-     * Skip a module declaration (module com.mysite.mymodule).
-     * Module declarations are only meaningful in module.spn files,
-     * which are parsed by ModuleParser. In regular source files
-     * they are silently skipped.
+     * Parse a module declaration (module com.mysite.mymodule) and record the
+     * namespace for ownership checks on `register @fqn` declarations.
+     * Module declarations are primarily meaningful in module.spn files
+     * (handled by ModuleParser), but source files may also carry one to
+     * claim a namespace for qualified-key registration.
      */
     private void skipModuleDecl() {
         tokens.expect("module");
-        tokens.advance(); // first segment
+        StringBuilder ns = new StringBuilder();
+        ns.append(tokens.advance().text()); // first segment
         while (tokens.match(".")) {
-            tokens.advance(); // next segment
+            ns.append('.').append(tokens.advance().text());
         }
+        this.currentModuleNamespace = ns.toString();
     }
 
     /** Skip a version declaration (version "1.0.0" or version 1.0.0). */
@@ -779,10 +1252,34 @@ public class SpnParser {
             // FQ namespace: import spn.mylib.utils
             path.append(tokens.expectType(TokenType.IDENTIFIER).text());
             while (tokens.check(".")) {
+                // Peek past the dot — if followed by '(', we're at the
+                // qualified-key selective form `import pkg.(key)`, not an
+                // additional path segment. Stop path accumulation.
+                SpnParseToken afterDot = tokens.peek(1);
+                if (afterDot != null && afterDot.text().equals("(")) break;
                 tokens.advance(); // consume '.'
                 SpnParseToken segment = tokens.advance();
                 path.append(".").append(segment.text());
             }
+        }
+
+        // Qualified-key import form: `import a.b.(key1, key2)` — aliases each
+        // name to the full `@a.b.name` qualified key for use in method-call
+        // position. This is syntactically distinct from the regular selective
+        // form (no space between path and paren).
+        if (tokens.check(".") && tokens.peek(1) != null
+                && tokens.peek(1).text().equals("(")) {
+            tokens.advance(); // '.'
+            tokens.expect("(");
+            while (!tokens.check(")")) {
+                SpnParseToken nameTok = tokens.advance();
+                String shortName = nameTok.text();
+                String fullKey = "@" + path + "." + shortName;
+                qualifiedKeyAliases.put(shortName, fullKey);
+                tokens.match(",");
+            }
+            tokens.expect(")");
+            return;
         }
 
         // Optional selective import list: (abs, min, max)
@@ -1392,11 +1889,24 @@ public class SpnParser {
         return parseOperatorOrFuncDecl(isPure, false);
     }
 
-    /** Parse: pure TypeName.method(args) -> ReturnType = (params) { body } */
+    /**
+     * Parse: pure TypeName.method(args) -> ReturnType = (params) { body }
+     *    or: pure TypeName.@qualified.key(args) -> ReturnType = (params) { body }
+     *
+     * <p>The qualified-key form implements a globally-named dispatch slot on
+     * the type. Stored in the method registry under {@code TypeName.@fqn} so
+     * lookup is uniform with regular methods.
+     */
     private SpnStatementNode parseMethodDecl(boolean isPure, SpnParseToken nameTok) {
         String typeName = tokens.advance().text(); // consume TypeName
         tokens.advance(); // consume '.'
-        String methodName = expectIdentifier().text();
+        String methodName;
+        SpnParseToken methodTok = tokens.peek();
+        if (methodTok != null && methodTok.type() == TokenType.QUALIFIED_KEY) {
+            methodName = tokens.advance().text(); // keep the @ prefix in the name
+        } else {
+            methodName = expectIdentifier().text();
+        }
 
         List<FieldType> paramTypes = parseParamTypeList();
         FieldType returnType = parseOptionalReturnType();
@@ -1410,6 +1920,7 @@ public class SpnParser {
 
         // Declaration only (no =), just register the signature
         if (!tokens.check("=")) {
+            rejectOrphanBody(nameTok, "method '" + methodKey + "'");
             SpnFunctionDescriptor.Builder db = isPure
                     ? SpnFunctionDescriptor.pure(methodKey) : SpnFunctionDescriptor.impure(methodKey);
             db.param("this", paramTypes.get(0));
@@ -1434,7 +1945,10 @@ public class SpnParser {
         List<FieldType> paramTypes = parseParamTypeList();
         FieldType returnType = parseOptionalReturnType();
 
-        if (!tokens.check("=")) return null; // declaration only
+        if (!tokens.check("=")) {
+            rejectOrphanBody(nameTok, "factory '" + typeName + "'");
+            return null;
+        }
         tokens.expect("=");
 
         // Use arity-qualified name to prevent collisions between overloaded factories
@@ -1464,13 +1978,17 @@ public class SpnParser {
 
     /** Parse a regular function or operator overload declaration. */
     private SpnStatementNode parseOperatorOrFuncDecl(boolean isPure, boolean isOperator) {
+        SpnParseToken declTok = tokens.peek();
         String name = isOperator ? tokens.advance().text()
                 : expectIdentifier().text();
 
         List<FieldType> paramTypes = parseParamTypeList();
         FieldType returnType = parseOptionalReturnType();
 
-        if (!tokens.check("=")) return null; // declaration only
+        if (!tokens.check("=")) {
+            rejectOrphanBody(declTok, (isOperator ? "operator '" : "function '") + name + "'");
+            return null;
+        }
         tokens.expect("=");
 
         parseFunctionBody(name, paramTypes, returnType, isPure, false);
@@ -1524,6 +2042,20 @@ public class SpnParser {
     private FieldType parseOptionalReturnType() {
         if (tokens.match("->")) return parseFieldType();
         return FieldType.UNTYPED;
+    }
+
+    /**
+     * Called on declaration-only paths (no {@code =} before the body). If the
+     * next token is {@code {}, the user almost certainly forgot the {@code =}
+     * before a lambda body — error with a helpful message rather than silently
+     * treating the block as an unrelated anonymous expression.
+     */
+    private void rejectOrphanBody(SpnParseToken declTok, String declName) {
+        if (tokens.check("{")) {
+            throw tokens.error("Expected '=' before body for " + declName
+                    + ". Use '= (params) { ... }' for an implementation, or remove the '{ ... }'"
+                    + " for a signature-only declaration.", declTok);
+        }
     }
 
     /** A parameter binding: either a simple name or a positional destructure (a, b, c). */
@@ -2497,6 +3029,15 @@ public class SpnParser {
                     // Look up method by receiver type
                     FieldType receiverType = inferType(expr);
                     MethodEntry method = resolveMethod(receiverType, memberName);
+                    // Fallback: if no direct method exists and the short name
+                    // was imported as a qualified-key alias, retry with the
+                    // expanded `@a.b.name` form.
+                    if (method == null) {
+                        String aliased = qualifiedKeyAliases.get(memberName);
+                        if (aliased != null) {
+                            method = resolveMethod(receiverType, aliased);
+                        }
+                    }
                     if (method != null) {
                         // Promote args to match method parameter types.
                         // Method descriptors have 'this' as param[0], so we promote

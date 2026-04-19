@@ -14,7 +14,8 @@ public class SpnLexer {
             "type", "where", "with", "data", "struct",
             "pure", "action", "let", "const", "while", "do", "match", "yield",
             "import", "module", "version", "require", "return",
-            "int", "float", "string", "bool", "promote", "macro", "emit"
+            "int", "float", "string", "bool", "promote", "macro", "emit", "register",
+            "signature", "requires"
     );
 
     private static final Set<String> PATTERN_KEYWORDS = Set.of(
@@ -86,6 +87,32 @@ public class SpnLexer {
                 continue;
             }
 
+            // qualified dispatch key: @name, @dotted.name, @+, @*_dot, etc.
+            if (ch == '@' && pos + 1 < len) {
+                char next = line.charAt(pos + 1);
+                if (isIdentStart(next)) {
+                    // @name or @dotted.name
+                    pos++;
+                    while (pos < len && (isIdentPart(line.charAt(pos)) || line.charAt(pos) == '.')) pos++;
+                    if (line.charAt(pos - 1) == '.') pos--;
+                    tokens.add(new Token(start, pos, TokenType.QUALIFIED_KEY));
+                    prevNonWs = TokenType.QUALIFIED_KEY;
+                    continue;
+                }
+                if (isOperatorChar(next)) {
+                    // @+ or @-_cross — operator-name key, with optional _qualifier
+                    pos++;
+                    while (pos < len && isOperatorChar(line.charAt(pos))) pos++;
+                    if (pos < len && line.charAt(pos) == '_') {
+                        pos++;
+                        while (pos < len && isIdentPart(line.charAt(pos))) pos++;
+                    }
+                    tokens.add(new Token(start, pos, TokenType.QUALIFIED_KEY));
+                    prevNonWs = TokenType.QUALIFIED_KEY;
+                    continue;
+                }
+            }
+
             // number
             if (Character.isDigit(ch)) {
                 while (pos < len && Character.isDigit(line.charAt(pos))) pos++;
@@ -110,6 +137,19 @@ public class SpnLexer {
                 tokens.add(new Token(start, pos, type));
                 prevNonWs = type;
                 continue;
+            }
+
+            // Macro directive delimiters: <! opens a macro-expansion-time
+            // conditional region, !> closes it. Tokenized before double-operators
+            // so the initial `<` doesn't get swallowed into `<=` or similar.
+            if (pos + 1 < len) {
+                String two = line.substring(pos, pos + 2);
+                if (two.equals("<!") || two.equals("!>")) {
+                    pos += 2;
+                    tokens.add(new Token(start, pos, TokenType.MACRO_DIRECTIVE));
+                    prevNonWs = TokenType.MACRO_DIRECTIVE;
+                    continue;
+                }
             }
 
             // multi-char operators, with optional _qualifier suffix (check before single-char)

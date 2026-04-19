@@ -46,7 +46,11 @@
       "Bash(mvn -pl spn-gui install -DskipTests)",
       "Bash(mvn -pl spn-stdlib install -DskipTests)",
       "Bash(mvn -pl spn-traction -am install -DskipTests)",
-      "Bash(mvn -pl spn-traction test -Dtest=NumericsMacroTest -Dsurefire.failIfNoSpecifiedTests=false)"
+      "Bash(mvn -pl spn-traction test -Dtest=NumericsMacroTest -Dsurefire.failIfNoSpecifiedTests=false)",
+      "Bash(mvn -pl spn-parse install -DskipTests)",
+      "Bash(mvn -pl spn-parse test '-Dtest=SpnParserTest$MacroConditionalBlocks' -Dsurefire.failIfNoSpecifiedTests=false)",
+      "Bash(mvn -pl spn-parse test '-Dtest=SpnParserTest$QualifiedDispatchKeys' -Dsurefire.failIfNoSpecifiedTests=false)",
+      "Bash(mvn -pl spn-parse test '-Dtest=SpnParserTest$Signatures' -Dsurefire.failIfNoSpecifiedTests=false)"
     ]
   }
 }

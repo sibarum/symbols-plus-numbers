@@ -1379,6 +1379,522 @@ x + y
         }
     }
 
+    // ── Macro conditional blocks ───────────────────────────────────────────
+    //
+    // `<! if COND !> { A } <! else !> { B }` appears inside a macro body.
+    // At expansion time the condition is evaluated against substituted
+    // parameters; the entire directive is replaced with the inner tokens of
+    // the chosen branch (braces stripped) so declarations inside that branch
+    // register at the surrounding scope.
+
+    @Nested
+    class MacroConditionalBlocks {
+
+        @Test void symbolLiteralSelectsFirstBranch() {
+            assertEquals(10L, run("""
+                macro withBoost(flavor) = {
+                  type Wrapper(int)
+                  <! if flavor == :fast !> {
+                    pure Wrapper.go() -> int = () { this.0 * 2 }
+                  } <! else !> {
+                    pure Wrapper.go() -> int = () { this.0 }
+                  }
+                  emit Wrapper
+                }
+
+                type Fast = withBoost(:fast)
+                Fast(5).go()
+                """));
+        }
+
+        @Test void symbolLiteralSelectsElseBranch() {
+            assertEquals(5L, run("""
+                macro withBoost(flavor) = {
+                  type Wrapper(int)
+                  <! if flavor == :fast !> {
+                    pure Wrapper.go() -> int = () { this.0 * 2 }
+                  } <! else !> {
+                    pure Wrapper.go() -> int = () { this.0 }
+                  }
+                  emit Wrapper
+                }
+
+                type Slow = withBoost(:slow)
+                Slow(5).go()
+                """));
+        }
+
+        @Test void emptyElseAsIncludeOnlyIf() {
+            // `<! if X !> { decl } <! else !> {}` = "include only when X"
+            assertEquals(42L, run("""
+                macro maybeExtra(include) = {
+                  type Box(int)
+                  <! if include == :yes !> {
+                    pure Box.boost() -> int = () { this.0 + 40 }
+                  } <! else !> { }
+                  emit Box
+                }
+
+                type B = maybeExtra(:yes)
+                B(2).boost()
+                """));
+        }
+
+        @Test void intComparisonSelectsBranch() {
+            assertEquals(99L, run("""
+                macro threshold(limit) = {
+                  type T(int)
+                  <! if limit > 50 !> {
+                    pure T.val() -> int = () { 99 }
+                  } <! else !> {
+                    pure T.val() -> int = () { 1 }
+                  }
+                  emit T
+                }
+
+                type Big = threshold(100)
+                Big(0).val()
+                """));
+        }
+
+        @Test void logicalAndBothBranches() {
+            // flavor == :fast && bits > 16 — both must hold for true branch
+            assertEquals(true, run("""
+                macro choose(flavor, bits) = {
+                  type T(int)
+                  <! if flavor == :fast && bits > 16 !> {
+                    pure T.tag() -> bool = () { true }
+                  } <! else !> {
+                    pure T.tag() -> bool = () { false }
+                  }
+                  emit T
+                }
+
+                type Both = choose(:fast, 32)
+                Both(0).tag()
+                """));
+        }
+
+        @Test void logicalOrShortCircuits() {
+            // :fast || :blue is satisfied by :fast alone
+            assertEquals(true, run("""
+                macro choose(flavor) = {
+                  type T(int)
+                  <! if flavor == :fast || flavor == :blue !> {
+                    pure T.tag() -> bool = () { true }
+                  } <! else !> {
+                    pure T.tag() -> bool = () { false }
+                  }
+                  emit T
+                }
+
+                type Fast = choose(:fast)
+                Fast(0).tag()
+                """));
+        }
+
+        @Test void nestedConditionals() {
+            // Outer picks :fast branch, inner picks :tagged sub-option
+            assertEquals(7L, run("""
+                macro build(flavor, variant) = {
+                  type T(int)
+                  <! if flavor == :fast !> {
+                    <! if variant == :tagged !> {
+                      pure T.val() -> int = () { 7 }
+                    } <! else !> {
+                      pure T.val() -> int = () { 4 }
+                    }
+                  } <! else !> {
+                    pure T.val() -> int = () { 0 }
+                  }
+                  emit T
+                }
+
+                type X = build(:fast, :tagged)
+                X(0).val()
+                """));
+        }
+
+        @Test void bodyPositionInsideMatchArm() {
+            // Conditional gates the body of a single match arm
+            assertEquals(100L, run("""
+                macro pick(which) = {
+                  type T(int)
+                  pure T.eval() -> int = () {
+                    match this.0
+                    | 0 -> <! if which == :big !> { 100 } <! else !> { 10 }
+                    | _ -> -1
+                  }
+                  emit T
+                }
+
+                type X = pick(:big)
+                X(0).eval()
+                """));
+        }
+
+        @Test void missingElseIsParseError() {
+            assertThrows(SpnParseException.class, () -> run("""
+                macro bad() = {
+                  type T(int)
+                  <! if true !> {
+                    pure T.a() -> int = () { 1 }
+                  }
+                  emit T
+                }
+
+                type Oops = bad()
+                """));
+        }
+
+        @Test void unresolvableIdentifierIsError() {
+            // `unknownVar` isn't a macro param, isn't a literal — error
+            assertThrows(SpnParseException.class, () -> run("""
+                macro bad() = {
+                  type T(int)
+                  <! if unknownVar == :x !> {
+                    pure T.a() -> int = () { 1 }
+                  } <! else !> { }
+                  emit T
+                }
+
+                type Oops = bad()
+                """));
+        }
+    }
+
+    // ── Qualified dispatch keys (stage 1) ─────────────────────────────────
+    //
+    // `@name` is a globally-unique dispatch slot. A type implements it via
+    // `pure Type.@name(...) -> Ret = body`. The call site reads
+    // `obj.@name(args)`. Stage 1 uses unqualified names only (no dots);
+    // namespacing and imports come later.
+
+    @Nested
+    class QualifiedDispatchKeys {
+
+        @Test void implementAndInvokeSimpleKey() {
+            assertEquals(42L, run("""
+                type Box(int)
+
+                pure Box.@describe() -> int = () { this.0 + 40 }
+
+                let b = Box(2)
+                b.@describe()
+                """));
+        }
+
+        @Test void sameKeyOnDifferentTypes() {
+            // Both types implement @serialize; dispatch picks the right one per receiver
+            assertEquals(true, run("""
+                type A(int)
+                type B(int)
+
+                pure A.@tag() -> string = () { "a" }
+                pure B.@tag() -> string = () { "b" }
+
+                let aTag = A(1).@tag()
+                let bTag = B(2).@tag()
+                aTag == "a" && bTag == "b"
+                """));
+        }
+
+        @Test void multiArgQualifiedKey() {
+            assertEquals(7L, run("""
+                type Box(int)
+
+                pure Box.@add(int) -> int = (n) { this.0 + n }
+
+                Box(3).@add(4)
+                """));
+        }
+
+        @Test void missingImplErrors() {
+            // Calling @describe on a type that doesn't implement it
+            assertThrows(SpnParseException.class, () -> run("""
+                type Box(int)
+                let b = Box(1)
+                b.@describe()
+                """));
+        }
+
+        @Test void dottedFqnKey() {
+            // Dotted FQNs tokenize and dispatch identically to unqualified keys
+            assertEquals(42L, run("""
+                type Box(int)
+
+                pure Box.@com.myapp.describe() -> int = () { this.0 }
+
+                Box(42).@com.myapp.describe()
+                """));
+        }
+
+        @Test void registerInOwnNamespace() {
+            // module declares com.myapp; registering @com.myapp.* is allowed
+            assertEquals(42L, run("""
+                module com.myapp
+
+                register pure @com.myapp.describe() -> int
+
+                type Box(int)
+                pure Box.@com.myapp.describe() -> int = () { this.0 }
+
+                Box(42).@com.myapp.describe()
+                """));
+        }
+
+        @Test void registerUnderOwnedSubNamespace() {
+            // module com.myapp may register deeper namespaces
+            assertEquals(7L, run("""
+                module com.myapp
+
+                register pure @com.myapp.util.extract() -> int
+
+                type Box(int)
+                pure Box.@com.myapp.util.extract() -> int = () { this.0 }
+
+                Box(7).@com.myapp.util.extract()
+                """));
+        }
+
+        @Test void registerForeignNamespaceRejected() {
+            // module com.alice cannot register @com.bob.foo
+            assertThrows(SpnParseException.class, () -> run("""
+                module com.alice
+
+                register pure @com.bob.foo() -> int
+                """));
+        }
+
+        @Test void registerBroaderNamespaceRejected() {
+            // module com.alice.util cannot register @com.alice.foo (broader)
+            assertThrows(SpnParseException.class, () -> run("""
+                module com.alice.util
+
+                register pure @com.alice.foo() -> int
+                """));
+        }
+
+        @Test void registerWithoutModuleDeclRejected() {
+            // A file without `module ...` can't register any qualified FQN
+            assertThrows(SpnParseException.class, () -> run("""
+                register pure @com.anything.foo() -> int
+                """));
+        }
+
+        @Test void duplicateRegisterRejected() {
+            assertThrows(SpnParseException.class, () -> run("""
+                module com.myapp
+
+                register pure @com.myapp.foo() -> int
+                register pure @com.myapp.foo() -> int
+                """));
+        }
+    }
+
+    // ── Signatures + requires (stages 4-5) ────────────────────────────────
+    //
+    // `signature Name (keys)` declares a named set of required dispatch keys.
+    // `macro foo(T requires Name)` checks at invocation that T has impls
+    // for every key the signature lists. Missing keys are named in the error.
+
+    @Nested
+    class Signatures {
+
+        @Test void declareAndComposeSignatures() {
+            // Parsing test: multi-level composition should not error
+            run("""
+                signature Additive (@+, @-)
+                signature Multiplicative (@*, @/)
+                signature Ring (Additive, Multiplicative)
+                42
+                """);
+        }
+
+        @Test void unknownSubSignatureErrors() {
+            assertThrows(SpnParseException.class, () -> run("""
+                signature Ring (Nonexistent)
+                """));
+        }
+
+        @Test void macroRequiresSucceedsWhenSatisfied() {
+            // Box has @+ defined → satisfies Additive
+            assertEquals(6L, run("""
+                type Box(int)
+                pure +(Box, Box) -> Box = (a, b) { Box(a.0 + b.0) }
+
+                signature Additive (@+)
+
+                macro deriveDouble(T requires Additive) = {
+                  pure T.doubled() -> T = () { this + this }
+                }
+                deriveDouble(Box)
+
+                Box(3).doubled().0
+                """));
+        }
+
+        @Test void macroRequiresFailsWhenMissing() {
+            // Naked has no @+ → Additive not satisfied
+            assertThrows(SpnParseException.class, () -> run("""
+                type Naked(int)
+
+                signature Additive (@+)
+
+                macro deriveDouble(T requires Additive) = {
+                  pure T.doubled() -> T = () { this + this }
+                }
+                deriveDouble(Naked)
+                """));
+        }
+
+        @Test void missingKeysListedInError() {
+            // When multiple keys are missing, the error should name them
+            SpnParseException ex = assertThrows(SpnParseException.class, () -> run("""
+                type Empty(int)
+
+                signature FullSet (@+, @-, @*)
+
+                macro needs(T requires FullSet) = {
+                  pure T.noop() -> T = () { this }
+                }
+                needs(Empty)
+                """));
+            String msg = ex.getMessage();
+            assertTrue(msg.contains("@+"), "error should mention @+: " + msg);
+            assertTrue(msg.contains("@-"), "error should mention @-: " + msg);
+            assertTrue(msg.contains("@*"), "error should mention @*: " + msg);
+        }
+
+        @Test void methodKeyInSignature() {
+            // Signature requires a qualified method, not an operator
+            assertEquals("described", run("""
+                module com.myapp
+                register pure @com.myapp.describe() -> string
+
+                type Box(int)
+                pure Box.@com.myapp.describe() -> string = () { "described" }
+
+                signature Describable (@com.myapp.describe)
+
+                macro withDescribe(T requires Describable) = {
+                  pure T.tag() -> string = () { this.@com.myapp.describe() }
+                }
+                withDescribe(Box)
+
+                Box(7).tag()
+                """));
+        }
+
+        @Test void composedSignatureCheck() {
+            // Ring requires @+, @-, @*, @/ (via Additive + Multiplicative)
+            // Box has @+ and @* but not @- or @/ — so Ring isn't satisfied
+            assertThrows(SpnParseException.class, () -> run("""
+                type Box(int)
+                pure +(Box, Box) -> Box = (a, b) { Box(a.0 + b.0) }
+                pure *(Box, Box) -> Box = (a, b) { Box(a.0 * b.0) }
+
+                signature Additive (@+, @-)
+                signature Multiplicative (@*, @/)
+                signature Ring (Additive, Multiplicative)
+
+                macro ringOps(T requires Ring) = {
+                  pure T.thrice() -> T = () { this + this + this }
+                }
+                ringOps(Box)
+                """));
+        }
+    }
+
+    // ── Qualified-key import shortening (stage 3) ─────────────────────────
+    //
+    // `import com.myapp.(serialize)` aliases `serialize` in method-call
+    // position to `@com.myapp.serialize`, so callers can write
+    // `obj.serialize()` instead of `obj.@com.myapp.serialize()`.
+
+    @Nested
+    class QualifiedKeyImports {
+
+        @Test void shortNameResolvesToQualifiedKey() {
+            assertEquals(42L, run("""
+                module com.myapp
+                register pure @com.myapp.unwrap() -> int
+
+                type Box(int)
+                pure Box.@com.myapp.unwrap() -> int = () { this.0 }
+
+                import com.myapp.(unwrap)
+
+                Box(42).unwrap()
+                """));
+        }
+
+        @Test void multipleKeysInOneImport() {
+            assertEquals(true, run("""
+                module com.myapp
+                register pure @com.myapp.alpha() -> int
+                register pure @com.myapp.beta() -> int
+
+                type Box(int)
+                pure Box.@com.myapp.alpha() -> int = () { this.0 }
+                pure Box.@com.myapp.beta() -> int = () { this.0 * 2 }
+
+                import com.myapp.(alpha, beta)
+
+                let b = Box(5)
+                b.alpha() == 5 && b.beta() == 10
+                """));
+        }
+
+        @Test void regularMethodTakesPrecedenceOverAlias() {
+            // If a type has a regular .foo method AND @com.myapp.foo is imported,
+            // the regular method wins — the alias is only a fallback.
+            assertEquals(1L, run("""
+                module com.myapp
+                register pure @com.myapp.foo() -> int
+
+                type Box(int)
+                pure Box.foo() -> int = () { 1 }
+                pure Box.@com.myapp.foo() -> int = () { 2 }
+
+                import com.myapp.(foo)
+
+                Box(0).foo()
+                """));
+        }
+
+        @Test void unimportedShortNameErrors() {
+            // Calling a short name with no matching method and no import = error
+            assertThrows(SpnParseException.class, () -> run("""
+                module com.myapp
+                register pure @com.myapp.tag() -> int
+
+                type Box(int)
+                pure Box.@com.myapp.tag() -> int = () { this.0 }
+
+                -- No `import com.myapp.(tag)` — so `tag()` is unresolved
+                Box(1).tag()
+                """));
+        }
+
+        @Test void importedAliasWorksAcrossTypes() {
+            // Two types implementing the same key, called via short name
+            assertEquals(true, run("""
+                module com.myapp
+                register pure @com.myapp.size() -> int
+
+                type A(int)
+                type B(int)
+                pure A.@com.myapp.size() -> int = () { 1 }
+                pure B.@com.myapp.size() -> int = () { 2 }
+
+                import com.myapp.(size)
+
+                A(0).size() == 1 && B(0).size() == 2
+                """));
+        }
+    }
+
     // ── Operator arity mutex ──────────────────────────────────────────────
 
     @Nested
