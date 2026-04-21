@@ -261,4 +261,97 @@ class TypeGraphTest {
         assertEquals(11, ref.useSite().startCol(),
                 "use site starts at col 11 (after `pure ident(`)");
     }
+
+    @Test
+    void factoryCallSiteTargetsFactoryDeclarationNotTypeDeclaration() {
+        // The STRUCT `Rational` is declared on line 1; the factory overload
+        // on line 2 has its own name range. A ctrl+click on a factory *call*
+        // (line 3) must land on the factory's name (line 2), not the struct.
+        SpnParser parser = parseForTypeRefs(
+                "type Rational(num: int, den: int)\n" +
+                "pure Rational(int) -> Rational = (n) { Rational(n, 1) }\n" +
+                "pure one() -> Rational = () { Rational(1) }");
+
+        // Line 3 has two `Rational` references: the return type (targets the
+        // struct on line 1) and the call `Rational(1)` (targets the factory
+        // on line 2). Pick the rightmost one — that's the call.
+        var callSite = parser.getTypeReferenceSites().stream()
+                .filter(r -> "Rational".equals(r.typeName()))
+                .filter(r -> r.useSite().startLine() == 3)
+                .max(java.util.Comparator.comparingInt(r -> r.useSite().startCol()))
+                .orElse(null);
+        assertNotNull(callSite, "expected a Rational ref on line 3");
+        assertNotNull(callSite.targetRange(), "factory call must resolve a target");
+        assertEquals(2, callSite.targetRange().startLine(),
+                "target is the factory on line 2, not the struct on line 1");
+    }
+
+    @Test
+    void positionalComponentIsRecordedInTypeGraph() {
+        // For `type Rational(int, int)`, both components are positional and
+        // should be stored as FIELD nodes under composite keys "Rational.0"
+        // and "Rational.1" with the type-token's range.
+        TypeGraph g = parseToGraph("type Rational(int, int)");
+        TypeGraph.Node zero = g.lookupFirst("Rational.0");
+        TypeGraph.Node one = g.lookupFirst("Rational.1");
+        assertNotNull(zero, "expected positional component 0");
+        assertNotNull(one, "expected positional component 1");
+        assertEquals(TypeGraph.Kind.FIELD, zero.kind());
+        assertEquals(TypeGraph.Kind.FIELD, one.kind());
+        assertEquals(1, zero.nameRange().startLine());
+        // First int is at col 14 (after "type Rational("), second at col 19.
+        assertEquals(14, zero.nameRange().startCol());
+        assertEquals(19, one.nameRange().startCol());
+    }
+
+    @Test
+    void instanceMethodCallTargetsMethodDeclaration() {
+        // Method `inv` declared on line 2, called on line 3. The call site
+        // should emit a type-ref pointing at the method's name range (line 2).
+        SpnParser parser = parseForTypeRefs(
+                "type Rational(num: int, den: int)\n" +
+                "pure Rational.inv() -> Rational = () { Rational(this.den, this.num) }\n" +
+                "pure invertOne(Rational) -> Rational = (r) { r.inv() }");
+
+        var ref = parser.getTypeReferenceSites().stream()
+                .filter(r -> r.useSite().startLine() == 3)
+                .filter(r -> r.typeName() != null && r.typeName().endsWith(".inv"))
+                .findFirst().orElse(null);
+        assertNotNull(ref, "expected a method-ref for r.inv() on line 3");
+        assertNotNull(ref.targetRange(), "method call must resolve a target");
+        assertEquals(2, ref.targetRange().startLine(),
+                "method call targets the method declaration on line 2");
+    }
+
+    @Test
+    void constantAccessEmitsTwoUseSites() {
+        // `Rational.zero` access on line 3 should emit two type-ref sites:
+        // one over the type token (line 3, targeting the struct on line 1)
+        // and one over the const name (targeting the const decl on line 2).
+        SpnParser parser = parseForTypeRefs(
+                "type Rational(num: int, den: int)\n" +
+                "const Rational.zero = Rational(0, 1)\n" +
+                "pure getZero() -> Rational = () { Rational.zero }");
+
+        var line3Refs = parser.getTypeReferenceSites().stream()
+                .filter(r -> r.useSite().startLine() == 3)
+                .toList();
+        assertTrue(line3Refs.size() >= 2,
+                "expected at least 2 use sites on line 3, got " + line3Refs.size());
+
+        // Site pointing at the TypeName token should target the type decl (line 1).
+        var typeSite = line3Refs.stream()
+                .filter(r -> "Rational".equals(r.typeName()))
+                .findFirst().orElse(null);
+        assertNotNull(typeSite);
+        assertEquals(1, typeSite.targetRange().startLine());
+
+        // Site pointing at the const name should target the const decl (line 2).
+        var constSite = line3Refs.stream()
+                .filter(r -> "Rational.zero".equals(r.typeName()))
+                .findFirst().orElse(null);
+        assertNotNull(constSite, "expected a site keyed by the composite const name");
+        assertEquals(2, constSite.targetRange().startLine(),
+                "const use site targets the const declaration");
+    }
 }

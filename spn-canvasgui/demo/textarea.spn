@@ -1,0 +1,30 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Multiline text area demo.
+-- ═══════════════════════════════════════════════════════════════════════
+-- A resizable text area bound to this.body. Enter inserts a newline,
+-- Up/Down move across visual lines, Ctrl+A/C/X/V work, paste preserves
+-- newlines. wordWrap(true) breaks long lines at word boundaries.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import CanvasGui
+
+stateful type Doc(body: string)
+
+Doc("The quick brown fox jumps over the lazy dog.\n\nType more here — Enter inserts a newline. Long lines wrap at word boundaries when wordWrap is enabled.") {
+  let render = do() {
+    guiRender(
+      guiVBox([
+        guiText("chars: " ++ this.body),
+        guiText(this.body)
+            .editable(true)
+            .multiline(true)
+            .wordWrap(true)
+            .padding(0.5).bg(0.14, 0.16, 0.22)
+            .on(:change, do(s) { this.body = s }),
+      ]).padding(0.75)
+    )
+  }
+
+  guiWindow("Text area", 560, 360)
+  guiRun(30.0, render)
+}

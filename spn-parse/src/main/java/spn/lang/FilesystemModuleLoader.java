@@ -86,6 +86,11 @@ public final class FilesystemModuleLoader implements ModuleLoader {
                     // Type-declaration positions for IDE go-to-def on types
                     // imported from this module.
                     .extra("typeDeclarations", parser.buildTypeDeclarations())
+                    .extra("factoryDeclarations", parser.buildFactoryDeclarations())
+                    .extra("constantDeclarations", parser.buildConstantDeclarations())
+                    .extra("methodDeclarations", parser.buildMethodDeclarations())
+                    .extra("fieldDeclarations", parser.buildFieldDeclarations())
+                    .extra("operatorDeclarations", parser.buildOperatorDeclarations())
                     .build();
 
             return Optional.of(module);

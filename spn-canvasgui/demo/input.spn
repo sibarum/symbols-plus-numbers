@@ -1,0 +1,28 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Text input demo.
+-- ═══════════════════════════════════════════════════════════════════════
+-- An editable Text bound to this.name. Type, arrow-navigate, select with
+-- shift+arrows or mouse-drag, Ctrl+A to select all, Ctrl+C/X/V to
+-- copy/cut/paste. The label above echoes the current value each frame.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import CanvasGui
+
+stateful type Form(name: string)
+
+Form("hello world") {
+  let render = do() {
+    guiRender(
+      guiVBox([
+        guiText("Echo: " ++ this.name),
+        guiText(this.name)
+            .editable(true)
+            .padding(0.5).bg(0.14, 0.16, 0.22)
+            .on(:change, do(s) { this.name = s }),
+      ]).padding(0.75)
+    )
+  }
+
+  guiWindow("Text input", 520, 180)
+  guiRun(30.0, render)
+}

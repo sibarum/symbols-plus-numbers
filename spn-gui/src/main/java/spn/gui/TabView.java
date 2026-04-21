@@ -33,8 +33,23 @@ public class TabView {
     private final List<Tab> tabs = new ArrayList<>();
     private int activeIndex = -1;
 
+    /** Optional listener fired whenever the active tab changes (and on close
+     *  when activeIndex shifts to a different tab). Set by the owning window
+     *  to refresh window chrome (e.g. the titlebar). */
+    private java.util.function.Consumer<Tab> activationListener;
+
     public TabView(SdfFontRenderer font) {
         this.font = font;
+    }
+
+    public void setActivationListener(java.util.function.Consumer<Tab> listener) {
+        this.activationListener = listener;
+    }
+
+    private void fireActivation() {
+        if (activationListener != null && activeIndex >= 0 && activeIndex < tabs.size()) {
+            activationListener.accept(tabs.get(activeIndex));
+        }
     }
 
     // ── Tab management ─────────────────────────────────────────────────
@@ -44,6 +59,7 @@ public class TabView {
         tabs.add(tab);
         activeIndex = tabs.size() - 1;
         tab.onActivated();
+        fireActivation();
     }
 
     /** Switch to the tab at the given index. */
@@ -51,6 +67,7 @@ public class TabView {
         if (index >= 0 && index < tabs.size() && index != activeIndex) {
             activeIndex = index;
             tabs.get(activeIndex).onActivated();
+            fireActivation();
         }
     }
 
@@ -76,9 +93,16 @@ public class TabView {
         } else if (activeIndex >= tabs.size()) {
             activeIndex = tabs.size() - 1;
             tabs.get(activeIndex).onActivated();
+            fireActivation();
         } else if (index <= activeIndex && activeIndex > 0) {
             activeIndex--;
             tabs.get(activeIndex).onActivated();
+            fireActivation();
+        } else if (index == activeIndex) {
+            // Removed the active tab from the middle; same index now points
+            // at the next sibling — treat that as an activation.
+            tabs.get(activeIndex).onActivated();
+            fireActivation();
         }
         return true;
     }

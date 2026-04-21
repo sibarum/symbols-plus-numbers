@@ -96,6 +96,8 @@ public class EditorWindow {
 
         // Tab system — first tab is an empty editor
         tabView = new TabView(font);
+        // Refresh window chrome (titlebar) whenever the active tab changes.
+        tabView.setActivationListener(t -> updateTitle());
         tabView.addTab(new EditorTab(this));
 
         // TabViewMode sits at the bottom of the mode stack — suppress SUBMIT/CANCEL
@@ -158,6 +160,7 @@ public class EditorWindow {
             else flash("No module loaded \u2014 cannot find module.spn", true);
         });
         actionRegistry.register("Type Info",     "View",   "Ctrl+T",       "Show resolved operator dispatches for the current line. Displays which overloads are called (e.g. +(Rational, Rational)). Dismissed by any keystroke.", () -> {});
+        actionRegistry.register("Go to Definition","View", "Ctrl+Click",   "Navigate to the declaration of the identifier under the cursor. Works for local bindings, parameters, types, factories, methods, constants, operators, and named or positional fields. In-module targets open (or switch to) the defining file; cross-module targets jump to the declaration in the imported module's source, falling back to the `import` statement when the source isn't available.", () -> {});
         actionRegistry.register("Help",          "Help",   "Ctrl+/",       "Open the help search. Search commands, shortcuts, and API reference.", () -> pushLegacyMode(new HelpMode(this, actionRegistry)));
     }
 
@@ -462,6 +465,7 @@ public class EditorWindow {
             if (moduleCtx != null) {
                 moduleRegistry.addLoader(new spn.lang.FilesystemModuleLoader(
                         moduleCtx.getRoot(), moduleCtx.getNamespace(), null, symbolTable));
+                guiState.setModuleRoot(moduleCtx.getRoot());
             }
 
             String fullPath = currentFile != null ? currentFile.toAbsolutePath().toString() : "untitled";
@@ -556,6 +560,7 @@ public class EditorWindow {
             if (moduleCtx != null) {
                 moduleRegistry.addLoader(new spn.lang.FilesystemModuleLoader(
                         moduleCtx.getRoot(), moduleCtx.getNamespace(), null, symbolTable));
+                guiState.setModuleRoot(moduleCtx.getRoot());
             }
 
             String fullPath = currentFile != null ? currentFile.toAbsolutePath().toString() : "untitled";
@@ -844,12 +849,34 @@ public class EditorWindow {
     }
 
     private void updateTitle() {
-        EditorTab et = getActiveEditorTab();
-        String name = "untitled";
-        if (et != null && et.getFilePath() != null) {
-            name = et.getFilePath().getFileName().toString();
+        String label = titleForActiveTab();
+        glfwSetWindowTitle(handle, label + " - Symbols+Numbers");
+    }
+
+    /** Build the descriptive label shown in the OS window title.
+     *  For editor tabs with a detected module, formats as
+     *  {@code <namespace> / <relative-path>}. Falls back to the filename
+     *  (or "untitled") when no module context is available, and to a
+     *  generic label for non-editor tabs (log, trace, etc.). */
+    private String titleForActiveTab() {
+        Tab active = tabView.getActiveTab();
+        if (!(active instanceof EditorTab et)) {
+            return active != null ? active.label() : "untitled";
         }
-        glfwSetWindowTitle(handle, name + " - Symbols+Numbers");
+        if (et.getFilePath() == null) return "untitled";
+        java.nio.file.Path path = et.getFilePath();
+        ModuleContext ctx = et.getModuleContext();
+        if (ctx != null && ctx.getNamespace() != null && !ctx.getNamespace().isEmpty()) {
+            try {
+                java.nio.file.Path rel = ctx.getRoot().toAbsolutePath().normalize()
+                        .relativize(path.toAbsolutePath().normalize());
+                String relStr = rel.toString().replace('\\', '/');
+                return ctx.getNamespace() + " / " + relStr;
+            } catch (Exception ignore) {
+                // Fall through to filename-only below.
+            }
+        }
+        return path.getFileName().toString();
     }
 
     // ---- Callbacks — translate GLFW to InputEvent, dispatch to frame -----

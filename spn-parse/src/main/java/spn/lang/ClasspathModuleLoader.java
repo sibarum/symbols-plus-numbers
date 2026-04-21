@@ -74,6 +74,12 @@ public final class ClasspathModuleLoader implements ModuleLoader {
                     .extra("promotions", parser.getPromotionRegistry())
                     .extra("signatures", parser.getSignatureRegistry())
                     .extra("qualifiedKeys", parser.getQualifiedKeyRegistry())
+                    .extra("typeDeclarations", parser.buildTypeDeclarations())
+                    .extra("factoryDeclarations", parser.buildFactoryDeclarations())
+                    .extra("constantDeclarations", parser.buildConstantDeclarations())
+                    .extra("methodDeclarations", parser.buildMethodDeclarations())
+                    .extra("fieldDeclarations", parser.buildFieldDeclarations())
+                    .extra("operatorDeclarations", parser.buildOperatorDeclarations())
                     .build();
 
             return Optional.of(module);

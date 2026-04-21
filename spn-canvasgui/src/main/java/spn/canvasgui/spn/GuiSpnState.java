@@ -3,6 +3,10 @@ package spn.canvasgui.spn;
 import com.oracle.truffle.api.CallTarget;
 import spn.fonts.SdfFontRenderer;
 
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Thread-local accumulator for GUI state during SPN execution.
  *
@@ -51,6 +55,26 @@ public final class GuiSpnState {
         this.onRunEnter = onRunEnter;
         this.onRunExit = onRunExit;
     }
+
+    // ── Module-relative resource loading ───────────────────────────────
+    // The module root of the .spn file that's currently running. Populated
+    // by EditorWindow before SPN execution; used to resolve relative paths
+    // passed to `guiLoadFont(...)` and similar builtins.
+    private Path moduleRoot;
+    public Path moduleRoot() { return moduleRoot; }
+    public void setModuleRoot(Path p) { this.moduleRoot = p; }
+
+    // ── Deferred font loads ────────────────────────────────────────────
+    // `guiLoadFont(:sym, "path")` queues a load request while SPN is running
+    // (no GL context available yet). The host processes these after opening
+    // the window, before the first frame.
+    public record PendingFontLoad(String symbolName, String path) {}
+    private final List<PendingFontLoad> pendingFontLoads = new ArrayList<>();
+
+    public void queueFontLoad(String symbolName, String path) {
+        pendingFontLoads.add(new PendingFontLoad(symbolName, path));
+    }
+    public List<PendingFontLoad> pendingFontLoads() { return pendingFontLoads; }
 
     // ── window ─────────────────────────────────────────────────────────
     public void requestWindow(int w, int h, String title) {

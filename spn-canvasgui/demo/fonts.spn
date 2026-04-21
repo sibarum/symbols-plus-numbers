@@ -1,0 +1,44 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Font demo — bundled families + bold/italic + module-relative loading.
+-- ═══════════════════════════════════════════════════════════════════════
+-- Builtins :mono / :serif / :sans load from spn-fonts's bundled TTFs
+-- (Ubuntu Sans Mono / Noto Serif / Noto Sans — regular + bold + italic).
+-- guiLoadFont(:fancy, "fonts/fancy.ttf") loads from the module root
+-- (the folder containing this .spn file). Missing variants fall back
+-- to the closest available match (e.g. bold+italic → bold if no
+-- boldItalic TTF exists).
+-- ═══════════════════════════════════════════════════════════════════════
+
+import CanvasGui
+
+stateful type Demo(x: int)
+
+Demo(0) {
+  guiLoadFont(:fancy, "fonts/fancy.ttf")
+
+  let render = do() {
+    guiRender(
+      guiVBox([
+        guiText("default — The quick brown fox"),
+
+        guiText("mono   regular"             ).font(:mono),
+        guiText("mono   bold"                ).font(:mono).bold(true),
+        guiText("mono   italic"              ).font(:mono).italic(true),
+        guiText("mono   bold + italic"       ).font(:mono).bold(true).italic(true),
+
+        guiText("serif  regular"             ).font(:serif),
+        guiText("serif  bold"                ).font(:serif).bold(true),
+        guiText("serif  italic"              ).font(:serif).italic(true),
+
+        guiText("sans   regular"             ).font(:sans),
+        guiText("sans   bold"                ).font(:sans).bold(true),
+        guiText("sans   italic"              ).font(:sans).italic(true),
+
+        guiText("fancy (loaded via guiLoadFont)").font(:fancy),
+      ]).padding(0.75)
+    )
+  }
+
+  guiWindow("Fonts", 640, 520)
+  guiRun(30.0, render)
+}

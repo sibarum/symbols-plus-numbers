@@ -1,27 +1,29 @@
 -- ═══════════════════════════════════════════════════════════════════════
--- Slider demo — drag to change a value, label echoes it.
+-- Slider + Dial demo.
 -- ═══════════════════════════════════════════════════════════════════════
--- Stateless slider: value is bound from this.x each frame; the on:change
--- handler updates this.x with the new value, which the next frame reads
--- back. Try arrow keys after focusing the slider with Tab.
+-- Both widgets are stateless: value passed each frame, on:change updates
+-- the stateful instance. Tab between them; arrow keys / drag adjust.
 -- ═══════════════════════════════════════════════════════════════════════
 
 import CanvasGui
 import String (formatNum)
 
-stateful type Knob(x: float)
+stateful type Knob(x: float, angle: float)
 
-Knob(0.5) {
+Knob(0.5, 0.5) {
   let render = do() {
     guiRender(
       guiVBox([
-        guiText("value = " ++ formatNum(this.x))
+        guiText("slider = " ++ formatNum(this.x))
             .padding(0.5).bg(0.18, 0.20, 0.26),
         guiSlider(0.0, 1.0, this.x).on(:change, do(v) { this.x = v }),
+        guiText("dial = " ++ formatNum(this.angle))
+            .padding(0.5).bg(0.18, 0.20, 0.26),
+        guiDial(0.0, 1.0, this.angle).on(:change, do(v) { this.angle = v }),
       ]).padding(0.75)
     )
   }
 
-  guiWindow("Slider", 360, 160)
+  guiWindow("Slider + Dial", 400, 360)
   guiRun(30.0, render)
 }

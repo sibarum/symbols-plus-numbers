@@ -11,7 +11,7 @@ import java.util.Set;
 public class SpnLexer {
 
     private static final Set<String> KEYWORDS = Set.of(
-            "type", "where", "with", "data", "struct",
+            "type", "where", "with", "data", "struct", "stateful",
             "pure", "action", "let", "const", "while", "do", "match", "yield",
             "import", "module", "version", "require", "return",
             "int", "float", "string", "bool", "promote", "macro", "emit", "register",

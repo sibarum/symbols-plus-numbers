@@ -418,6 +418,99 @@ public class SpnParser {
         return result;
     }
 
+    /** Map each locally-declared factory's CallTarget to its source position.
+     *  Factories are overloaded (same type name, different signatures), so the
+     *  CallTarget identity is the disambiguator an importing parser uses to
+     *  pick the right declaration for a given call-site resolution. */
+    public java.util.IdentityHashMap<CallTarget, spn.language.TypeDeclPos>
+            buildFactoryDeclarations() {
+        java.util.IdentityHashMap<CallTarget, spn.language.TypeDeclPos> result =
+                new java.util.IdentityHashMap<>();
+        for (List<FactoryEntry> entries : factoryRegistry.values()) {
+            for (FactoryEntry fe : entries) {
+                if (fe.callTarget() == null) continue;
+                TypeGraph.Node n = typeGraph.byCallTarget(fe.callTarget());
+                if (n == null || n.file() == null || !n.nameRange().isKnown()) continue;
+                result.putIfAbsent(fe.callTarget(),
+                        new spn.language.TypeDeclPos(n.file(), n.nameRange()));
+            }
+        }
+        return result;
+    }
+
+    /** Map each locally-declared constant's composite name
+     *  ("TypeName.constName") to its source position. */
+    public Map<String, spn.language.TypeDeclPos> buildConstantDeclarations() {
+        Map<String, spn.language.TypeDeclPos> result = new LinkedHashMap<>();
+        for (TypeGraph.Node n : typeGraph.byKind(TypeGraph.Kind.CONSTANT)) {
+            if (n.file() == null || !n.nameRange().isKnown()) continue;
+            result.putIfAbsent(n.name(),
+                    new spn.language.TypeDeclPos(n.file(), n.nameRange()));
+        }
+        return result;
+    }
+
+    /** Map each locally-declared method's CallTarget to its source position.
+     *  Methods are overloaded across receiver types, so CallTarget identity is
+     *  the disambiguator. */
+    public java.util.IdentityHashMap<CallTarget, spn.language.TypeDeclPos>
+            buildMethodDeclarations() {
+        java.util.IdentityHashMap<CallTarget, spn.language.TypeDeclPos> result =
+                new java.util.IdentityHashMap<>();
+        for (TypeGraph.Node n : typeGraph.byKind(TypeGraph.Kind.METHOD)) {
+            if (n.callTarget() == null || n.file() == null || !n.nameRange().isKnown()) continue;
+            result.putIfAbsent(n.callTarget(),
+                    new spn.language.TypeDeclPos(n.file(), n.nameRange()));
+        }
+        return result;
+    }
+
+    /** Map each locally-declared field's composite name to its source position.
+     *  Includes both named fields ("Point.x") and positional components
+     *  ("Rational.0"). */
+    public Map<String, spn.language.TypeDeclPos> buildFieldDeclarations() {
+        Map<String, spn.language.TypeDeclPos> result = new LinkedHashMap<>();
+        for (TypeGraph.Node n : typeGraph.byKind(TypeGraph.Kind.FIELD)) {
+            if (n.file() == null || !n.nameRange().isKnown()) continue;
+            result.putIfAbsent(n.name(),
+                    new spn.language.TypeDeclPos(n.file(), n.nameRange()));
+        }
+        return result;
+    }
+
+    /** Map each locally-declared operator overload's CallTarget to its source
+     *  position. Operators are overloaded across operand types, so CallTarget
+     *  identity is the disambiguator. */
+    public java.util.IdentityHashMap<CallTarget, spn.language.TypeDeclPos>
+            buildOperatorDeclarations() {
+        java.util.IdentityHashMap<CallTarget, spn.language.TypeDeclPos> result =
+                new java.util.IdentityHashMap<>();
+        for (TypeGraph.Node n : typeGraph.byKind(TypeGraph.Kind.OPERATOR)) {
+            if (n.callTarget() == null || n.file() == null || !n.nameRange().isKnown()) continue;
+            result.putIfAbsent(n.callTarget(),
+                    new spn.language.TypeDeclPos(n.file(), n.nameRange()));
+        }
+        return result;
+    }
+
+    /** Look up the declaration position for an arbitrary resolved CallTarget,
+     *  covering both same-module (via the TypeGraph's byCallTarget index) and
+     *  cross-module (via the importedOperator/Method/Factory maps). Used by
+     *  {@link IncrementalParser} to fill in dispatch-annotation targets. */
+    public spn.language.TypeDeclPos lookupCallTargetDecl(CallTarget ct) {
+        if (ct == null) return null;
+        TypeGraph.Node n = typeGraph.byCallTarget(ct);
+        if (n != null && n.file() != null && n.nameRange().isKnown()) {
+            return new spn.language.TypeDeclPos(n.file(), n.nameRange());
+        }
+        spn.language.TypeDeclPos pos = importedOperatorDeclarations.get(ct);
+        if (pos != null) return pos;
+        pos = importedMethodDeclarations.get(ct);
+        if (pos != null) return pos;
+        pos = importedFactoryDeclarations.get(ct);
+        return pos;
+    }
+
     // ── Top-level parsing ──────────────────────────────────────────────────
 
     private SpnStatementNode parseTopLevel() {
@@ -1468,6 +1561,41 @@ public class SpnParser {
                 importedTypeDeclarations.putIfAbsent(entry.getKey(), entry.getValue());
             }
         }
+        Map<CallTarget, spn.language.TypeDeclPos> factoryDecls =
+                module.getExtra("factoryDeclarations");
+        if (factoryDecls != null) {
+            for (var entry : factoryDecls.entrySet()) {
+                importedFactoryDeclarations.putIfAbsent(entry.getKey(), entry.getValue());
+            }
+        }
+        Map<String, spn.language.TypeDeclPos> constDecls =
+                module.getExtra("constantDeclarations");
+        if (constDecls != null) {
+            for (var entry : constDecls.entrySet()) {
+                importedConstantDeclarations.putIfAbsent(entry.getKey(), entry.getValue());
+            }
+        }
+        Map<CallTarget, spn.language.TypeDeclPos> methodDecls =
+                module.getExtra("methodDeclarations");
+        if (methodDecls != null) {
+            for (var entry : methodDecls.entrySet()) {
+                importedMethodDeclarations.putIfAbsent(entry.getKey(), entry.getValue());
+            }
+        }
+        Map<String, spn.language.TypeDeclPos> fieldDecls =
+                module.getExtra("fieldDeclarations");
+        if (fieldDecls != null) {
+            for (var entry : fieldDecls.entrySet()) {
+                importedFieldDeclarations.putIfAbsent(entry.getKey(), entry.getValue());
+            }
+        }
+        Map<CallTarget, spn.language.TypeDeclPos> opDecls =
+                module.getExtra("operatorDeclarations");
+        if (opDecls != null) {
+            for (var entry : opDecls.entrySet()) {
+                importedOperatorDeclarations.putIfAbsent(entry.getKey(), entry.getValue());
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -1526,38 +1654,82 @@ public class SpnParser {
     /** Import methods, factories, constants, and operator overloads associated with a type. */
     @SuppressWarnings("unchecked")
     private void importTypeAssociations(SpnModule module, String typeName) {
+        // Fields: keys like "TypeName.fieldName" or "TypeName.0" for positional.
+        // Pull in just the fields of the type being imported.
+        Map<String, spn.language.TypeDeclPos> fieldDecls =
+                module.getExtra("fieldDeclarations");
+        if (fieldDecls != null) {
+            String prefix = typeName + ".";
+            for (var entry : fieldDecls.entrySet()) {
+                if (entry.getKey().startsWith(prefix)) {
+                    importedFieldDeclarations.putIfAbsent(entry.getKey(), entry.getValue());
+                }
+            }
+        }
+
         // Methods: keys like "TypeName.methodName"
         Map<String, MethodEntry> methods = module.getExtra("methods");
+        Map<CallTarget, spn.language.TypeDeclPos> methodDecls =
+                module.getExtra("methodDeclarations");
         if (methods != null) {
             for (var entry : methods.entrySet()) {
                 if (entry.getKey().startsWith(typeName + ".")) {
-                    methodRegistry.put(entry.getKey(), entry.getValue());
+                    MethodEntry me = entry.getValue();
+                    methodRegistry.put(entry.getKey(), me);
+                    if (methodDecls != null && me.callTarget() != null) {
+                        spn.language.TypeDeclPos pos = methodDecls.get(me.callTarget());
+                        if (pos != null) {
+                            importedMethodDeclarations.putIfAbsent(me.callTarget(), pos);
+                        }
+                    }
                 }
             }
         }
 
         // Factories: keyed by type name
         Map<String, List<FactoryEntry>> factories = module.getExtra("factories");
+        Map<CallTarget, spn.language.TypeDeclPos> factoryDecls =
+                module.getExtra("factoryDeclarations");
         if (factories != null) {
             List<FactoryEntry> typeFactories = factories.get(typeName);
             if (typeFactories != null) {
                 factoryRegistry.computeIfAbsent(typeName, k -> new ArrayList<>())
                         .addAll(typeFactories);
+                // Pull in source positions for the factories we just imported so
+                // ctrl+click on `TypeName(args)` lands on the correct overload.
+                if (factoryDecls != null) {
+                    for (FactoryEntry fe : typeFactories) {
+                        spn.language.TypeDeclPos pos = factoryDecls.get(fe.callTarget());
+                        if (pos != null) {
+                            importedFactoryDeclarations.putIfAbsent(fe.callTarget(), pos);
+                        }
+                    }
+                }
             }
         }
 
         // Constants: keys like "TypeName.constName"
         Map<String, ConstantEntry> constants = module.getExtra("constants");
+        Map<String, spn.language.TypeDeclPos> constDecls =
+                module.getExtra("constantDeclarations");
         if (constants != null) {
             for (var entry : constants.entrySet()) {
                 if (entry.getKey().startsWith(typeName + ".")) {
                     constantRegistry.put(entry.getKey(), entry.getValue());
+                    if (constDecls != null) {
+                        spn.language.TypeDeclPos pos = constDecls.get(entry.getKey());
+                        if (pos != null) {
+                            importedConstantDeclarations.putIfAbsent(entry.getKey(), pos);
+                        }
+                    }
                 }
             }
         }
 
         // Operator overloads: import any overload where the type participates
         Map<String, List<OperatorOverload>> operators = module.getExtra("operators");
+        Map<CallTarget, spn.language.TypeDeclPos> opDecls =
+                module.getExtra("operatorDeclarations");
         if (operators != null) {
             for (var entry : operators.entrySet()) {
                 for (OperatorOverload ov : entry.getValue()) {
@@ -1569,6 +1741,12 @@ public class SpnParser {
                     if (involves) {
                         operatorRegistry.computeIfAbsent(entry.getKey(), k -> new ArrayList<>())
                                 .add(ov);
+                        if (opDecls != null && ov.callTarget() != null) {
+                            spn.language.TypeDeclPos pos = opDecls.get(ov.callTarget());
+                            if (pos != null) {
+                                importedOperatorDeclarations.putIfAbsent(ov.callTarget(), pos);
+                            }
+                        }
                     }
                 }
             }
@@ -1714,10 +1892,14 @@ public class SpnParser {
                     structBuilder.field(compName, ft);
                     recordFieldNode(name, compName, compTok);
                 } else {
+                    // Positional component: capture the type token's position so
+                    // ctrl+click on `r.<index>` lands on the declared component.
+                    SpnParseToken compTypeTok = tokens.peek();
                     FieldType ft = parseFieldType();
                     String compName = "_" + position;
                     builder.component(compName, ft);
                     structBuilder.field(compName, ft);
+                    recordFieldNode(name, String.valueOf(position), compTypeTok);
                 }
                 position++;
                 tokens.match(",");
@@ -1957,7 +2139,8 @@ public class SpnParser {
         SpnParseToken typeTok = tokens.expectType(TokenType.TYPE_NAME);
         String typeName = typeTok.text();
         tokens.expect(".");
-        String constName = tokens.expectType(TokenType.IDENTIFIER).text();
+        SpnParseToken constTok = tokens.expectType(TokenType.IDENTIFIER);
+        String constName = constTok.text();
         tokens.expect("=");
 
         SpnExpressionNode value = parseExpression();
@@ -1976,6 +2159,12 @@ public class SpnParser {
         CallTarget callTarget = fnRoot.getCallTarget();
 
         constantRegistry.put(key, new ConstantEntry(callTarget, inferredType));
+
+        // Record for IDE go-to-def. Store under the composite "Type.name" key
+        // so parsePrimary can match a ctrl+click on `Type.const` access.
+        typeGraph.add(TypeGraph.Node.builder(key, TypeGraph.Kind.CONSTANT)
+                .file(sourceName).nameRange(constTok.range())
+                .returnType(inferredType).callTarget(callTarget).build());
     }
 
     /** Parse 'struct' as an alias for 'type' — both produce the same result. */
@@ -2643,13 +2832,25 @@ public class SpnParser {
         if (nameTok == null || receiverType == null || fieldName == null) return;
         String typeName = resolver.resolveTypeName(receiverType);
         if (typeName == null) return;
-        TypeGraph.Node decl = typeGraph.lookupFirst(typeName + "." + fieldName);
-        if (decl == null || !decl.nameRange().isKnown() || decl.file() == null) return;
+        String key = typeName + "." + fieldName;
+        // Same-module lookup first; fall back to imported map for fields
+        // whose declaring type came from another module's source.
+        String targetFile = null;
+        spn.source.SourceRange targetRange = null;
+        TypeGraph.Node decl = typeGraph.lookupFirst(key);
+        if (decl != null && decl.nameRange().isKnown() && decl.file() != null) {
+            targetFile = decl.file();
+            targetRange = decl.nameRange();
+        } else {
+            spn.language.TypeDeclPos pos = importedFieldDeclarations.get(key);
+            if (pos != null && pos.range() != null && pos.range().isKnown()) {
+                targetFile = pos.file();
+                targetRange = pos.range();
+            }
+        }
+        if (targetFile == null || targetRange == null) return;
         fieldAccessSites.add(new FieldAccessSite(
-                nameTok.range(),
-                typeName + "." + fieldName,
-                decl.file(),
-                decl.nameRange()));
+                nameTok.range(), key, targetFile, targetRange));
     }
 
     /**
@@ -2688,8 +2889,137 @@ public class SpnParser {
      *  type can open the defining file instead of just the import line. */
     private final Map<String, spn.language.TypeDeclPos> importedTypeDeclarations = new LinkedHashMap<>();
 
+    /** Maps an imported factory's CallTarget to the factory declaration's
+     *  source position. Factories are overloaded (same type name, different
+     *  signatures) so CallTarget identity is the disambiguator. Populated
+     *  from the module's {@code factoryDeclarations} extra. */
+    private final java.util.IdentityHashMap<CallTarget, spn.language.TypeDeclPos>
+            importedFactoryDeclarations = new java.util.IdentityHashMap<>();
+
+    /** Maps an imported constant's composite name (e.g. "Rational.zero") to
+     *  the declaration's source position. Populated from the module's
+     *  {@code constantDeclarations} extra. */
+    private final Map<String, spn.language.TypeDeclPos>
+            importedConstantDeclarations = new LinkedHashMap<>();
+
+    /** Maps an imported method's CallTarget to the method declaration's
+     *  source position. Populated from the module's {@code methodDeclarations}
+     *  extra. CallTarget identity is the disambiguator across overloads. */
+    private final java.util.IdentityHashMap<CallTarget, spn.language.TypeDeclPos>
+            importedMethodDeclarations = new java.util.IdentityHashMap<>();
+
+    /** Maps an imported field's composite name (e.g. "Rational.num" or
+     *  "Rational.0" for positional) to its declaration source position.
+     *  Populated from the module's {@code fieldDeclarations} extra. */
+    private final Map<String, spn.language.TypeDeclPos>
+            importedFieldDeclarations = new LinkedHashMap<>();
+
+    /** Maps an imported operator overload's CallTarget to its source position.
+     *  Populated from the module's {@code operatorDeclarations} extra; used by
+     *  {@link IncrementalParser#extractDispatches} as a fallback when
+     *  {@link TypeGraph#byCallTarget} misses for a cross-module operator. */
+    private final java.util.IdentityHashMap<CallTarget, spn.language.TypeDeclPos>
+            importedOperatorDeclarations = new java.util.IdentityHashMap<>();
+
     public List<TypeReferenceSite> getTypeReferenceSites() {
         return typeReferenceSites;
+    }
+
+    /** Record a factory call use site for IDE go-to-def. Called from
+     *  {@link #parseTypeConstructor} once overload resolution has picked a
+     *  specific {@link FactoryEntry} — the {@code nameTok} is the TypeName
+     *  token at the call site, and {@code fe.callTarget()} identifies the
+     *  chosen overload. Navigation lands on that factory's declaration, not
+     *  the type declaration, because a ctrl+click on a constructor call
+     *  reads as "where is this constructor?". */
+    private void recordFactoryCall(SpnParseToken nameTok, String typeName, FactoryEntry fe) {
+        if (nameTok == null || fe == null || fe.callTarget() == null) return;
+        String targetFile = null;
+        spn.source.SourceRange targetRange = null;
+        // Same-module: the factory lives in this file's TypeGraph, keyed by
+        // its CallTarget. Cross-module: consult the imported map populated
+        // by applyFullImport/applySelectiveImport.
+        TypeGraph.Node decl = typeGraph.byCallTarget(fe.callTarget());
+        if (decl != null && decl.file() != null && decl.nameRange().isKnown()) {
+            targetFile = decl.file();
+            targetRange = decl.nameRange();
+        } else {
+            spn.language.TypeDeclPos pos = importedFactoryDeclarations.get(fe.callTarget());
+            if (pos != null && pos.range() != null && pos.range().isKnown()) {
+                targetFile = pos.file();
+                targetRange = pos.range();
+            }
+        }
+        spn.source.SourceRange importRange = importedTypeRanges.get(typeName);
+        if (targetFile == null && targetRange == null && importRange == null) return;
+        typeReferenceSites.add(new TypeReferenceSite(
+                nameTok.range(), typeName, targetFile, targetRange, importRange));
+    }
+
+    /** Record an instance method call ({@code expr.method(args)}) as a use
+     *  site over the method-name token. Called from {@link #parsePostfix}
+     *  once {@code resolveMethod} has picked the {@link MethodEntry}. The
+     *  receiver type tells us which owning type's import statement to use
+     *  for the cross-module fallback. */
+    private void recordMethodCall(SpnParseToken methodNameTok, FieldType receiverType,
+                                  String methodName, MethodEntry method) {
+        if (methodNameTok == null || method == null || method.callTarget() == null) return;
+        String targetFile = null;
+        spn.source.SourceRange targetRange = null;
+        TypeGraph.Node decl = typeGraph.byCallTarget(method.callTarget());
+        if (decl != null && decl.file() != null && decl.nameRange().isKnown()) {
+            targetFile = decl.file();
+            targetRange = decl.nameRange();
+        } else {
+            spn.language.TypeDeclPos pos = importedMethodDeclarations.get(method.callTarget());
+            if (pos != null && pos.range() != null && pos.range().isKnown()) {
+                targetFile = pos.file();
+                targetRange = pos.range();
+            }
+        }
+        // For the import-line fallback, attribute the method to its owning
+        // type's import statement (methods don't have their own import).
+        spn.source.SourceRange importRange = null;
+        String typeName = resolver.resolveTypeName(receiverType);
+        if (typeName != null) importRange = importedTypeRanges.get(typeName);
+        if (targetFile == null && targetRange == null && importRange == null) return;
+        String key = (typeName != null ? typeName + "." : "") + methodName;
+        typeReferenceSites.add(new TypeReferenceSite(
+                methodNameTok.range(), key, targetFile, targetRange, importRange));
+    }
+
+    /** Record a qualified constant access ({@code Type.name}) as two separate
+     *  use sites — one over the type token (navigates to the type declaration)
+     *  and one over the constant name token (navigates to the constant
+     *  declaration). Called from {@link #parsePrimary} once a ConstantEntry
+     *  has been resolved. */
+    private void recordConstantAccess(SpnParseToken typeTok, String typeName,
+                                      SpnParseToken constTok, String constName) {
+        // (1) the type token: reuse the type-reference machinery.
+        recordTypeReference(typeTok, typeName);
+
+        // (2) the const name token: locate its declaration position.
+        if (constTok == null) return;
+        String key = typeName + "." + constName;
+        String targetFile = null;
+        spn.source.SourceRange targetRange = null;
+        TypeGraph.Node decl = typeGraph.lookupFirst(key);
+        if (decl != null && decl.file() != null && decl.nameRange().isKnown()) {
+            targetFile = decl.file();
+            targetRange = decl.nameRange();
+        } else {
+            spn.language.TypeDeclPos pos = importedConstantDeclarations.get(key);
+            if (pos != null && pos.range() != null && pos.range().isKnown()) {
+                targetFile = pos.file();
+                targetRange = pos.range();
+            }
+        }
+        // An imported constant has no dedicated import statement, so fall
+        // back to the import that brought in its owning type.
+        spn.source.SourceRange importRange = importedTypeRanges.get(typeName);
+        if (targetFile == null && targetRange == null && importRange == null) return;
+        typeReferenceSites.add(new TypeReferenceSite(
+                constTok.range(), key, targetFile, targetRange, importRange));
     }
 
     /** Record a type use site for IDE go-to-def. Called from {@link TypeParser}
@@ -3401,6 +3731,7 @@ public class SpnParser {
                         }
                     }
                     if (method != null) {
+                        recordMethodCall(nameTok, receiverType, memberName, method);
                         // Promote args to match method parameter types.
                         // Method descriptors have 'this' as param[0], so we promote
                         // against params[1:] (skipping the receiver).
@@ -3498,6 +3829,11 @@ public class SpnParser {
             SpnExpressionNode node = spn.node.struct.SpnFieldAccessNodeGen.create(expr, index);
             FieldType ft = sd.fieldType(index);
             if (ft != null) trackType(node, ft);
+            // Record for go-to-def: jump to the i-th component in the type
+            // declaration. Reuses the field-access machinery — positional
+            // components are stored in the TypeGraph under composite key
+            // "TypeName.<index>".
+            recordFieldAccess(tok, receiverType, String.valueOf(index));
             return node;
         }
         // Fallback: generic field access by index
@@ -3632,6 +3968,7 @@ public class SpnParser {
                         tokens.advance(); // TypeName
                         tokens.advance(); // .
                         tokens.advance(); // name
+                        recordConstantAccess(tok, tok.text(), nameAfterDot, nameAfterDot.text());
                         SpnExpressionNode callNode = new spn.node.func.SpnInvokeNode(
                                 constEntry.callTarget());
                         if (constEntry.type() != null) trackType(callNode, constEntry.type());
@@ -3943,6 +4280,7 @@ public class SpnParser {
                     }
                 }
                 if (match) {
+                    recordFactoryCall(nameTok, name, fe);
                     SpnExpressionNode callNode = new spn.node.func.SpnInvokeNode(
                             fe.callTarget(), args.toArray(new SpnExpressionNode[0]));
                     if (fe.descriptor().hasTypedReturn()) {
@@ -3955,6 +4293,7 @@ public class SpnParser {
             // Arity match with promotion
             for (FactoryEntry fe : factories) {
                 if (fe.arity() == args.size()) {
+                    recordFactoryCall(nameTok, name, fe);
                     String qualifiedName = name + "/" + args.size();
                     promoteArgs(args, qualifiedName);
                     SpnExpressionNode callNode = new spn.node.func.SpnInvokeNode(

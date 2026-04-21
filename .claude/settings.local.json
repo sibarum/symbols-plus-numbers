@@ -84,7 +84,12 @@
       "Bash(mvn -pl spn-parse,spn-gui -am compile -q)",
       "Bash(mvn -pl spn-parse,spn-gui -am compile)",
       "Bash(mvn -pl spn-parse,spn-gui -am clean compile)",
-      "Bash(mvn -pl spn-parse,spn-gui test)"
+      "Bash(mvn -pl spn-parse,spn-gui test)",
+      "Bash(mvn -pl spn-parse -am compile -q)",
+      "Bash(grep -n \"parseConstDecl\\\\|const\\\\\\\\s*Type\\\\\\\\.\\\\|TypeName\\\\\\\\s*\\\\\\\\.\\\\\\\\s*constName\\\\|constantRegistry\" C:/Users/Owner/IdeaProjects/spn-parent/spn-parse/src/main/java/spn/lang/SpnParser.java)",
+      "Bash(grep -n \"TypeName.*method\\\\|static.*method\\\\|Type.*\\\\\\\\.method\" \"C:\\\\Users\\\\Owner\\\\IdeaProjects\\\\spn-parent\\\\spn-parse\\\\src\\\\main\\\\java\\\\spn\\\\lang\\\\SpnParser.java\")",
+      "Bash(mvn -pl spn-fonts compile)",
+      "Bash(mvn -pl spn-gui -am compile)"
     ]
   }
 }

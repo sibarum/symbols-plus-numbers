@@ -23,7 +23,14 @@ class HelpMode implements Mode {
     private static final float DETAIL_SCALE = 0.30f;
     private static final float PAD = 30f;
     private static final float ROW_HEIGHT_FACTOR = 1.4f;
-    private static final int MAX_VISIBLE_ROWS = 20;
+    /** Upper cap on visible rows; the actual count is clamped by window height. */
+    private static final int MAX_VISIBLE_ROWS = 40;
+    private static final float SCROLLBAR_WIDTH = 6f;
+    private static final float SCROLLBAR_MIN_THUMB = 20f;
+
+    /** Visible row count as computed on the last render frame. Used by the
+     *  scroll handler so the cap stays in sync with the actual window size. */
+    private int lastVisibleRows = 1;
 
     // Colors
     private static final float BG_R = 0.10f, BG_G = 0.10f, BG_B = 0.12f;
@@ -36,6 +43,8 @@ class HelpMode implements Mode {
     private static final float CURSOR_R = 0.90f, CURSOR_G = 0.90f, CURSOR_B = 0.30f;
     private static final float PROMPT_R = 0.55f, PROMPT_G = 0.55f, PROMPT_B = 0.60f;
     private static final float HEADING_R = 0.45f, HEADING_G = 0.60f, HEADING_B = 0.85f;
+    private static final float TRACK_R = 0.18f, TRACK_G = 0.18f, TRACK_B = 0.22f;
+    private static final float THUMB_R = 0.45f, THUMB_G = 0.45f, THUMB_B = 0.55f;
 
     private final EditorWindow window;
     private final SdfFontRenderer font;
@@ -167,7 +176,7 @@ class HelpMode implements Mode {
     @Override
     public boolean onScroll(double xoff, double yoff) {
         scrollOffset = Math.max(0, Math.min(scrollOffset - ListScroll.delta(yoff),
-                Math.max(0, filtered.size() - MAX_VISIBLE_ROWS)));
+                Math.max(0, filtered.size() - lastVisibleRows)));
         return true;
     }
 
@@ -208,15 +217,34 @@ class HelpMode implements Mode {
 
         y += inputH + 8f;
 
+        // Fit the result list to the actual window height, not a hard cap.
+        // Reserve space at the bottom for the "N-M of T" indicator so it never
+        // overlaps the last visible row.
+        float listTop = y;
+        float reservedBottom = smallHeight + PAD;
+        float listHeight = Math.max(rowHeight, height - listTop - reservedBottom);
+        int fitRows = Math.max(1, (int) Math.floor(listHeight / rowHeight));
+        int visibleRows = Math.min(MAX_VISIBLE_ROWS, fitRows);
+        lastVisibleRows = visibleRows;
+
+        // Keep the scroll cap consistent with the render window. Without this,
+        // scrollOffset could stay stuck past the last reachable value when the
+        // window shrinks or the filtered list shortens.
+        int maxScroll = Math.max(0, filtered.size() - visibleRows);
+        if (scrollOffset > maxScroll) scrollOffset = maxScroll;
+
         // Results
-        int visibleCount = Math.min(MAX_VISIBLE_ROWS, filtered.size() - scrollOffset);
+        int visibleCount = Math.min(visibleRows, filtered.size() - scrollOffset);
+        boolean hasScrollbar = filtered.size() > visibleRows;
+        float rowRight = paletteWidth - (hasScrollbar ? SCROLLBAR_WIDTH + 4f : 0f);
+
         for (int i = 0; i < visibleCount; i++) {
             int idx = scrollOffset + i;
             Action a = filtered.get(idx);
             float rowY = y + i * rowHeight;
 
             if (idx == selectedIndex) {
-                font.drawRect(paletteX, rowY, paletteWidth, rowHeight, SEL_R, SEL_G, SEL_B);
+                font.drawRect(paletteX, rowY, rowRight, rowHeight, SEL_R, SEL_G, SEL_B);
             }
 
             float itemY = rowY + rowHeight - 4f;
@@ -235,12 +263,27 @@ class HelpMode implements Mode {
 
             // Category tag (right-aligned, dim)
             float catW = font.getTextWidth(a.category(), SMALL_SCALE);
-            font.drawText(a.category(), paletteX + paletteWidth - 12f - catW, itemY,
+            font.drawText(a.category(), paletteX + rowRight - 12f - catW, itemY,
                     SMALL_SCALE, CAT_R, CAT_G, CAT_B);
         }
 
-        // Scroll indicator
-        if (filtered.size() > MAX_VISIBLE_ROWS) {
+        // Scrollbar — thin vertical track + proportional thumb on the right
+        // edge of the palette. Drawn only when there's more than one screenful.
+        if (hasScrollbar) {
+            float trackX = paletteX + paletteWidth - SCROLLBAR_WIDTH;
+            float trackTop = y;
+            float trackHeight = visibleRows * rowHeight;
+            font.drawRect(trackX, trackTop, SCROLLBAR_WIDTH, trackHeight,
+                    TRACK_R, TRACK_G, TRACK_B);
+            float thumbH = Math.max(SCROLLBAR_MIN_THUMB,
+                    trackHeight * ((float) visibleRows / filtered.size()));
+            float scrollSpan = trackHeight - thumbH;
+            float thumbY = trackTop + (maxScroll > 0
+                    ? scrollSpan * ((float) scrollOffset / maxScroll) : 0f);
+            font.drawRect(trackX, thumbY, SCROLLBAR_WIDTH, thumbH,
+                    THUMB_R, THUMB_G, THUMB_B);
+
+            // Textual position indicator stays as a secondary cue below the list.
             String info = (scrollOffset + 1) + "-" + (scrollOffset + visibleCount)
                     + " of " + filtered.size();
             float infoW = font.getTextWidth(info, SMALL_SCALE);
@@ -311,8 +354,8 @@ class HelpMode implements Mode {
 
     private void ensureVisible() {
         if (selectedIndex < scrollOffset) scrollOffset = selectedIndex;
-        else if (selectedIndex >= scrollOffset + MAX_VISIBLE_ROWS)
-            scrollOffset = selectedIndex - MAX_VISIBLE_ROWS + 1;
+        else if (selectedIndex >= scrollOffset + lastVisibleRows)
+            scrollOffset = selectedIndex - lastVisibleRows + 1;
     }
 
     private int rowAtY(double my) {

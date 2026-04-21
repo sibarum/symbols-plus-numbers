@@ -53,6 +53,9 @@ public final class CanvasGuiBuiltins {
         builder.function("guiSpacer", buildSpacerCallTarget(guiCmdType));
         builder.function("guiMask",   buildMaskCallTarget(guiCmdType));
         builder.function("guiSlider", buildSliderCallTarget(guiCmdType));
+        builder.function("guiDial",   buildDialCallTarget(guiCmdType));
+        builder.function("guiTabs",   buildTabsCallTarget(guiCmdType));
+        builder.function("guiScrollable", buildScrollableCallTarget(guiCmdType));
 
         // Return-type descriptors — the parser uses these to track that
         // `guiButton(...)` evaluates to a GuiCmd, which enables `.on(...)`
@@ -85,6 +88,19 @@ public final class CanvasGuiBuiltins {
                 .param("max", FieldType.DOUBLE)
                 .param("value", FieldType.DOUBLE)
                 .returns(guiCmdType).build());
+        descriptors.put("guiDial", SpnFunctionDescriptor.pure("guiDial")
+                .param("min", FieldType.DOUBLE)
+                .param("max", FieldType.DOUBLE)
+                .param("value", FieldType.DOUBLE)
+                .returns(guiCmdType).build());
+        descriptors.put("guiTabs", SpnFunctionDescriptor.pure("guiTabs")
+                .param("activeIdx", FieldType.LONG)
+                .param("labels", FieldType.ofArray(FieldType.UNTYPED))
+                .param("pages", FieldType.ofArray(FieldType.UNTYPED))
+                .returns(guiCmdType).build());
+        descriptors.put("guiScrollable", SpnFunctionDescriptor.pure("guiScrollable")
+                .param("child", guiCmdType)
+                .returns(guiCmdType).build());
         builder.extra("descriptors", descriptors);
 
         // Method on GuiCmd — enables `cmd.on(:click, fn)` dispatch.
@@ -104,6 +120,14 @@ public final class CanvasGuiBuiltins {
         addStyleMethod(methods, "padding", buildPaddingCallTarget(guiCmdType), guiCmdType);
         addBorderMethod(methods, buildBorderCallTarget(guiCmdType), guiCmdType);
         addBgMethod(methods, buildBgCallTarget(guiCmdType), guiCmdType);
+        addSelectedMethod(methods, buildSelectedCallTarget(guiCmdType), guiCmdType);
+        addBoolMethod(methods, "editable", buildEditableCallTarget(guiCmdType), guiCmdType);
+        addBoolMethod(methods, "selectable", buildSelectableCallTarget(guiCmdType), guiCmdType);
+        addBoolMethod(methods, "multiline", buildMultilineCallTarget(guiCmdType), guiCmdType);
+        addBoolMethod(methods, "wordWrap", buildWordWrapCallTarget(guiCmdType), guiCmdType);
+        addBoolMethod(methods, "bold", buildBoldCallTarget(guiCmdType), guiCmdType);
+        addBoolMethod(methods, "italic", buildItalicCallTarget(guiCmdType), guiCmdType);
+        addFontMethod(methods, buildFontMethodCallTarget(guiCmdType), guiCmdType);
 
         builder.extra("methods", methods);
 
@@ -113,6 +137,7 @@ public final class CanvasGuiBuiltins {
         factories.put("guiWindow", args -> SpnGuiWindowNodeGen.create(args[0], args[1], args[2]));
         factories.put("guiRender", args -> SpnGuiRenderNodeGen.create(args[0]));
         factories.put("guiRun",    args -> SpnGuiRunNodeGen.create(args[0], args[1]));
+        factories.put("guiLoadFont", args -> SpnGuiLoadFontNodeGen.create(args[0], args[1]));
         factories.forEach(builder::builtinFactory);
 
         // Flag the lifecycle triad as impure so pure functions can't call them.
@@ -120,6 +145,7 @@ public final class CanvasGuiBuiltins {
         impure.add("guiWindow");
         impure.add("guiRender");
         impure.add("guiRun");
+        impure.add("guiLoadFont");
         builder.extra("impureFunctions", impure);
 
         registry.register("CanvasGui", builder.build());
@@ -236,6 +262,116 @@ public final class CanvasGuiBuiltins {
         methods.put("GuiCmd.bg", new spn.language.MethodEntry(ct, desc));
     }
 
+    private static void addSelectedMethod(Map<String, spn.language.MethodEntry> methods,
+                                          CallTarget ct, FieldType guiCmdType) {
+        SpnFunctionDescriptor desc = SpnFunctionDescriptor.pure("selected")
+                .param("this", guiCmdType)
+                .param("value", FieldType.BOOLEAN)
+                .returns(guiCmdType).build();
+        methods.put("GuiCmd.selected", new spn.language.MethodEntry(ct, desc));
+    }
+
+    private static CallTarget buildSelectedCallTarget(FieldType guiCmdType) {
+        var fdb = FrameDescriptor.newBuilder();
+        int sCmd = fdb.addSlot(FrameSlotKind.Object, "this", null);
+        int sVal = fdb.addSlot(FrameSlotKind.Object, "value", null);
+        var desc = SpnFunctionDescriptor.pure("selected")
+                .param("this", guiCmdType)
+                .param("value", FieldType.BOOLEAN)
+                .returns(guiCmdType).build();
+        SpnExpressionNode body = SpnGuiSelectedNodeGen.create(
+                SpnReadLocalVariableNodeGen.create(sCmd),
+                SpnReadLocalVariableNodeGen.create(sVal));
+        return new SpnFunctionRootNode(null, fdb.build(), desc,
+                new int[]{sCmd, sVal}, body).getCallTarget();
+    }
+
+    // Generic `bool-method` helper used by editable/selectable. Keeps the per-node
+    // wiring tiny while still getting a real CallTarget per method.
+    @FunctionalInterface
+    private interface BoolMethodBodyFactory {
+        SpnExpressionNode make(SpnExpressionNode cmd, SpnExpressionNode val);
+    }
+
+    private static void addBoolMethod(Map<String, spn.language.MethodEntry> methods,
+                                      String name, CallTarget ct, FieldType guiCmdType) {
+        SpnFunctionDescriptor desc = SpnFunctionDescriptor.pure(name)
+                .param("this", guiCmdType)
+                .param("value", FieldType.BOOLEAN)
+                .returns(guiCmdType).build();
+        methods.put("GuiCmd." + name, new spn.language.MethodEntry(ct, desc));
+    }
+
+    private static CallTarget buildBoolMethodCallTarget(String name, FieldType guiCmdType,
+                                                        BoolMethodBodyFactory factory) {
+        var fdb = FrameDescriptor.newBuilder();
+        int sCmd = fdb.addSlot(FrameSlotKind.Object, "this", null);
+        int sVal = fdb.addSlot(FrameSlotKind.Object, "value", null);
+        var desc = SpnFunctionDescriptor.pure(name)
+                .param("this", guiCmdType)
+                .param("value", FieldType.BOOLEAN)
+                .returns(guiCmdType).build();
+        SpnExpressionNode body = factory.make(
+                SpnReadLocalVariableNodeGen.create(sCmd),
+                SpnReadLocalVariableNodeGen.create(sVal));
+        return new SpnFunctionRootNode(null, fdb.build(), desc,
+                new int[]{sCmd, sVal}, body).getCallTarget();
+    }
+
+    private static CallTarget buildEditableCallTarget(FieldType guiCmdType) {
+        return buildBoolMethodCallTarget("editable", guiCmdType,
+                (cmd, val) -> SpnGuiEditableNodeGen.create(cmd, val));
+    }
+
+    private static CallTarget buildSelectableCallTarget(FieldType guiCmdType) {
+        return buildBoolMethodCallTarget("selectable", guiCmdType,
+                (cmd, val) -> SpnGuiSelectableNodeGen.create(cmd, val));
+    }
+
+    private static CallTarget buildMultilineCallTarget(FieldType guiCmdType) {
+        return buildBoolMethodCallTarget("multiline", guiCmdType,
+                (cmd, val) -> SpnGuiMultilineNodeGen.create(cmd, val));
+    }
+
+    private static CallTarget buildWordWrapCallTarget(FieldType guiCmdType) {
+        return buildBoolMethodCallTarget("wordWrap", guiCmdType,
+                (cmd, val) -> SpnGuiWordWrapNodeGen.create(cmd, val));
+    }
+
+    private static CallTarget buildBoldCallTarget(FieldType guiCmdType) {
+        return buildBoolMethodCallTarget("bold", guiCmdType,
+                (cmd, val) -> SpnGuiBoldNodeGen.create(cmd, val));
+    }
+
+    private static CallTarget buildItalicCallTarget(FieldType guiCmdType) {
+        return buildBoolMethodCallTarget("italic", guiCmdType,
+                (cmd, val) -> SpnGuiItalicNodeGen.create(cmd, val));
+    }
+
+    private static void addFontMethod(Map<String, spn.language.MethodEntry> methods,
+                                      CallTarget ct, FieldType guiCmdType) {
+        SpnFunctionDescriptor desc = SpnFunctionDescriptor.pure("font")
+                .param("this", guiCmdType)
+                .param("symbol", FieldType.SYMBOL)
+                .returns(guiCmdType).build();
+        methods.put("GuiCmd.font", new spn.language.MethodEntry(ct, desc));
+    }
+
+    private static CallTarget buildFontMethodCallTarget(FieldType guiCmdType) {
+        var fdb = FrameDescriptor.newBuilder();
+        int sCmd = fdb.addSlot(FrameSlotKind.Object, "this", null);
+        int sSym = fdb.addSlot(FrameSlotKind.Object, "symbol", null);
+        var desc = SpnFunctionDescriptor.pure("font")
+                .param("this", guiCmdType)
+                .param("symbol", FieldType.SYMBOL)
+                .returns(guiCmdType).build();
+        SpnExpressionNode body = SpnGuiFontNodeGen.create(
+                SpnReadLocalVariableNodeGen.create(sCmd),
+                SpnReadLocalVariableNodeGen.create(sSym));
+        return new SpnFunctionRootNode(null, fdb.build(), desc,
+                new int[]{sCmd, sSym}, body).getCallTarget();
+    }
+
     private static CallTarget buildMarginCallTarget(FieldType guiCmdType) {
         var fdb = FrameDescriptor.newBuilder();
         int sCmd = fdb.addSlot(FrameSlotKind.Object, "this", null);
@@ -325,6 +461,54 @@ public final class CanvasGuiBuiltins {
                 SpnReadLocalVariableNodeGen.create(sVal));
         return new SpnFunctionRootNode(null, fdb.build(), desc,
                 new int[]{sMin, sMax, sVal}, body).getCallTarget();
+    }
+
+    private static CallTarget buildDialCallTarget(FieldType guiCmdType) {
+        var fdb = FrameDescriptor.newBuilder();
+        int sMin = fdb.addSlot(FrameSlotKind.Object, "min", null);
+        int sMax = fdb.addSlot(FrameSlotKind.Object, "max", null);
+        int sVal = fdb.addSlot(FrameSlotKind.Object, "value", null);
+        var desc = SpnFunctionDescriptor.pure("guiDial")
+                .param("min", FieldType.DOUBLE)
+                .param("max", FieldType.DOUBLE)
+                .param("value", FieldType.DOUBLE)
+                .returns(guiCmdType).build();
+        SpnExpressionNode body = SpnCmdDialNodeGen.create(
+                SpnReadLocalVariableNodeGen.create(sMin),
+                SpnReadLocalVariableNodeGen.create(sMax),
+                SpnReadLocalVariableNodeGen.create(sVal));
+        return new SpnFunctionRootNode(null, fdb.build(), desc,
+                new int[]{sMin, sMax, sVal}, body).getCallTarget();
+    }
+
+    private static CallTarget buildTabsCallTarget(FieldType guiCmdType) {
+        var fdb = FrameDescriptor.newBuilder();
+        int sIdx = fdb.addSlot(FrameSlotKind.Object, "activeIdx", null);
+        int sLabels = fdb.addSlot(FrameSlotKind.Object, "labels", null);
+        int sPages = fdb.addSlot(FrameSlotKind.Object, "pages", null);
+        var desc = SpnFunctionDescriptor.pure("guiTabs")
+                .param("activeIdx", FieldType.LONG)
+                .param("labels", FieldType.ofArray(FieldType.UNTYPED))
+                .param("pages", FieldType.ofArray(FieldType.UNTYPED))
+                .returns(guiCmdType).build();
+        SpnExpressionNode body = SpnCmdTabsNodeGen.create(
+                SpnReadLocalVariableNodeGen.create(sIdx),
+                SpnReadLocalVariableNodeGen.create(sLabels),
+                SpnReadLocalVariableNodeGen.create(sPages));
+        return new SpnFunctionRootNode(null, fdb.build(), desc,
+                new int[]{sIdx, sLabels, sPages}, body).getCallTarget();
+    }
+
+    private static CallTarget buildScrollableCallTarget(FieldType guiCmdType) {
+        var fdb = FrameDescriptor.newBuilder();
+        int sChild = fdb.addSlot(FrameSlotKind.Object, "child", null);
+        var desc = SpnFunctionDescriptor.pure("guiScrollable")
+                .param("child", guiCmdType)
+                .returns(guiCmdType).build();
+        SpnExpressionNode body = SpnCmdScrollableNodeGen.create(
+                SpnReadLocalVariableNodeGen.create(sChild));
+        return new SpnFunctionRootNode(null, fdb.build(), desc,
+                new int[]{sChild}, body).getCallTarget();
     }
 
     private static CallTarget buildMaskCallTarget(FieldType guiCmdType) {

@@ -5,10 +5,10 @@ import Math (toFloat)
 type Rational (int, int)
 
 -- Canonical form: every Rational has a single representation per value.
---   (0, 0)       → (1, 1)    -- 0/0 = 1  (wheel-theoretic same-direction limit)
---   (0, d), d≠0  → (0, 1)    -- canonical zero
---   (n, 0), n≠0  → (1, 0)    -- canonical omega (single point at infinity)
---   (n, d) else  → reduce by gcd, sign carried in the numerator
+--   (0, 0)       -> (1, 1)    -- 0/0 = 1  (wheel-theoretic same-direction limit)
+--   (0, d), d≠0  -> (0, 1)    -- canonical zero
+--   (n, 0), n≠0  -> (1, 0)    -- canonical omega (single point at infinity)
+--   (n, d) else  -> reduce by gcd, sign carried in the numerator
 -- This lets == be pure structural equality, so Dict keys, structEq, and
 -- hashing all agree with ==.
 pure Rational(int, int) -> Rational = (n, d) {

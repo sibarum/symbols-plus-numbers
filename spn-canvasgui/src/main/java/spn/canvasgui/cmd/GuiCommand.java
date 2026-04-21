@@ -1,6 +1,7 @@
 package spn.canvasgui.cmd;
 
 import spn.canvas.DrawCommand;
+import spn.fonts.SdfFontRenderer;
 
 /**
  * GUI layer command ADT, distinct from and richer than {@link DrawCommand}.
@@ -29,7 +30,18 @@ public sealed interface GuiCommand {
     /** Pop the most recent clip. */
     record PopClip() implements GuiCommand {}
 
-    /** Single-color text run. Styled spans come in a later phase. */
+    /**
+     * Single-color text run. {@code font} is the already-resolved renderer
+     * for this run (widget picks the right family/weight/style variant and
+     * emits the renderer directly). {@code null} means "use the registry's
+     * default" — the paint renderer substitutes.
+     *
+     * <p>Styled spans come in a later phase.
+     */
     record TextRun(float x, float y, String text, float scale,
-                   float r, float g, float b) implements GuiCommand {}
+                   float r, float g, float b, SdfFontRenderer font) implements GuiCommand {
+        public TextRun(float x, float y, String text, float scale, float r, float g, float b) {
+            this(x, y, text, scale, r, g, b, null);
+        }
+    }
 }

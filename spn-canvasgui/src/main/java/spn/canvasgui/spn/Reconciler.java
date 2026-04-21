@@ -6,11 +6,14 @@ import spn.canvasgui.layout.Box;
 import spn.canvasgui.layout.Grid;
 import spn.canvasgui.layout.HBox;
 import spn.canvasgui.layout.Mask;
+import spn.canvasgui.layout.Scrollable;
 import spn.canvasgui.layout.Spacer;
 import spn.canvasgui.layout.VBox;
 import spn.canvasgui.theme.Theme;
 import spn.canvasgui.widget.Button;
+import spn.canvasgui.widget.Dial;
 import spn.canvasgui.widget.Slider;
+import spn.canvasgui.widget.Tabs;
 import spn.canvasgui.widget.Text;
 import spn.type.SpnSymbol;
 
@@ -35,11 +38,22 @@ public final class Reconciler {
     public Component build(GuiCmd cmd) {
         return switch (cmd) {
             case GuiCmd.Button b -> {
-                Button btn = new Button(b.label(), theme);
+                Button btn = new Button(b.label(), theme).setSelected(b.selected());
                 bindHandlers(btn, b.handlers());
                 yield btn;
             }
-            case GuiCmd.Text t -> new Text(t.content(), theme);
+            case GuiCmd.Text t -> {
+                Text txt = new Text(t.content(), theme);
+                txt.setEditable(t.editable());
+                txt.setSelectable(t.selectable());
+                txt.setMultiline(t.multiline());
+                txt.setWordWrap(t.wordWrap());
+                txt.setFontSymbol(t.font());
+                txt.setBold(t.bold());
+                txt.setItalic(t.italic());
+                bindTextHandlers(txt, t.handlers());
+                yield txt;
+            }
             case GuiCmd.HBox h -> {
                 HBox box = new HBox();
                 for (GuiCmd child : h.children()) box.add(build(child));
@@ -61,6 +75,19 @@ public final class Reconciler {
                 bindSliderHandlers(slider, sl.handlers());
                 yield slider;
             }
+            case GuiCmd.Dial d -> {
+                Dial dial = new Dial(theme).setRange(d.min(), d.max()).setValue(d.value());
+                bindDialHandlers(dial, d.handlers());
+                yield dial;
+            }
+            case GuiCmd.Tabs t -> {
+                Tabs tabs = new Tabs(theme).setLabels(t.labels()).setActiveIndex(t.activeIndex());
+                if (!t.pages().isEmpty() && t.activeIndex() >= 0 && t.activeIndex() < t.pages().size()) {
+                    tabs.setActivePage(build(t.pages().get(t.activeIndex())));
+                }
+                bindTabsHandlers(tabs, t.handlers());
+                yield tabs;
+            }
             case GuiCmd.Mask m -> {
                 Mask mask = new Mask(m.widthRem(), m.heightRem());
                 if (m.child() != null) mask.setChild(build(m.child()));
@@ -71,6 +98,11 @@ public final class Reconciler {
                 applyBoxStyling(box, b);
                 if (b.child() != null) box.setChild(build(b.child()));
                 yield box;
+            }
+            case GuiCmd.Scrollable sc -> {
+                Scrollable scroll = new Scrollable(theme);
+                if (sc.child() != null) scroll.setChild(build(sc.child()));
+                yield scroll;
             }
         };
     }
@@ -92,6 +124,7 @@ public final class Reconciler {
         return switch (cmd) {
             case GuiCmd.Button b -> {
                 if (existing instanceof Button btn && btn.label().equals(b.label())) {
+                    btn.setSelected(b.selected());
                     bindHandlers(btn, b.handlers());
                     yield btn;
                 }
@@ -100,6 +133,14 @@ public final class Reconciler {
             case GuiCmd.Text t -> {
                 if (existing instanceof Text txt) {
                     txt.setText(t.content());
+                    txt.setEditable(t.editable());
+                    txt.setSelectable(t.selectable());
+                    txt.setMultiline(t.multiline());
+                    txt.setWordWrap(t.wordWrap());
+                    txt.setFontSymbol(t.font());
+                    txt.setBold(t.bold());
+                    txt.setItalic(t.italic());
+                    bindTextHandlers(txt, t.handlers());
                     yield txt;
                 }
                 yield build(cmd);
@@ -135,6 +176,33 @@ public final class Reconciler {
                 }
                 yield build(cmd);
             }
+            case GuiCmd.Dial d -> {
+                if (existing instanceof Dial dial) {
+                    dial.setRange(d.min(), d.max()).setValue(d.value());
+                    bindDialHandlers(dial, d.handlers());
+                    yield dial;
+                }
+                yield build(cmd);
+            }
+            case GuiCmd.Tabs t -> {
+                if (existing instanceof Tabs tabs) {
+                    tabs.setLabels(t.labels());
+                    int prevIndex = tabs.activeIndex();
+                    tabs.setActiveIndex(t.activeIndex());
+                    if (!t.pages().isEmpty() && t.activeIndex() >= 0 && t.activeIndex() < t.pages().size()) {
+                        GuiCmd activeCmd = t.pages().get(t.activeIndex());
+                        Component newPage = (prevIndex == t.activeIndex() && tabs.activePage() != null)
+                                ? update(tabs.activePage(), activeCmd)
+                                : build(activeCmd);
+                        tabs.setActivePage(newPage);
+                    } else {
+                        tabs.setActivePage(null);
+                    }
+                    bindTabsHandlers(tabs, t.handlers());
+                    yield tabs;
+                }
+                yield build(cmd);
+            }
             case GuiCmd.Mask m -> {
                 if (existing instanceof Mask mask) {
                     mask.setSizeRem(m.widthRem(), m.heightRem());
@@ -151,6 +219,16 @@ public final class Reconciler {
                             : null;
                     box.setChild(newChild);
                     yield box;
+                }
+                yield build(cmd);
+            }
+            case GuiCmd.Scrollable sc -> {
+                if (existing instanceof Scrollable scroll) {
+                    Component newChild = sc.child() != null
+                            ? (scroll.child() != null ? update(scroll.child(), sc.child()) : build(sc.child()))
+                            : null;
+                    scroll.setChild(newChild);
+                    yield scroll;
                 }
                 yield build(cmd);
             }
@@ -188,16 +266,50 @@ public final class Reconciler {
     }
 
     private void bindSliderHandlers(Slider slider, Map<SpnSymbol, CallTarget> handlers) {
-        CallTarget change = null;
-        for (var e : handlers.entrySet()) {
-            if (e.getKey().name().equals("change")) change = e.getValue();
-        }
+        CallTarget change = lookup(handlers, "change");
         if (change != null) {
             CallTarget ct = change;
             slider.onChange(v -> ct.call(v));
         } else {
             slider.onChange(v -> {});
         }
+    }
+
+    private void bindDialHandlers(Dial dial, Map<SpnSymbol, CallTarget> handlers) {
+        CallTarget change = lookup(handlers, "change");
+        if (change != null) {
+            CallTarget ct = change;
+            dial.onChange(v -> ct.call(v));
+        } else {
+            dial.onChange(v -> {});
+        }
+    }
+
+    private void bindTextHandlers(Text txt, Map<SpnSymbol, CallTarget> handlers) {
+        CallTarget change = lookup(handlers, "change");
+        if (change != null) {
+            CallTarget ct = change;
+            txt.onChange(v -> ct.call(v));
+        } else {
+            txt.onChange(v -> {});
+        }
+    }
+
+    private void bindTabsHandlers(Tabs tabs, Map<SpnSymbol, CallTarget> handlers) {
+        CallTarget select = lookup(handlers, "select");
+        if (select != null) {
+            CallTarget ct = select;
+            tabs.setOnSelect(i -> ct.call((long) i));
+        } else {
+            tabs.setOnSelect(i -> {});
+        }
+    }
+
+    private static CallTarget lookup(Map<SpnSymbol, CallTarget> handlers, String name) {
+        for (var e : handlers.entrySet()) {
+            if (e.getKey().name().equals(name)) return e.getValue();
+        }
+        return null;
     }
 
     @FunctionalInterface interface ReplaceFn { void replace(int idx, Component c); }

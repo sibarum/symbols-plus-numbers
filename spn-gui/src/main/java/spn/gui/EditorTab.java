@@ -320,10 +320,28 @@ public class EditorTab extends ScrollableTab {
         int row = pos[0], col = pos[1];
         String name = textArea.wordAt(row, col);
 
-        // (1)/(2): compile-time dispatch is authoritative when the click
-        // falls inside a recorded call site — this covers operators like
-        // `+` where there's no word under the cursor. Use the overload the
-        // parser chose, not a name-only TypeGraph lookup.
+        spn.lang.TypeGraph tg = diagnosticEngine.getTypeGraph();
+        String absFile = filePath != null
+                ? filePath.toAbsolutePath().normalize().toString() : null;
+
+        // Local scope takes precedence when the click is on a word identifier.
+        // Binary-operator dispatch annotations can span [op, rhs_end], which
+        // would otherwise hijack clicks on RHS identifiers (e.g., `q2` in
+        // `q1 - q2`). Locals are the most specific possible target for a
+        // word click, so they win over call-site dispatch.
+        if (name != null && !name.isEmpty() && tg != null && absFile != null) {
+            spn.lang.TypeGraph.Node local = tg.findLocalInScope(
+                    absFile, row + 1, col, name);
+            if (local != null && local.nameRange().isKnown()) {
+                var r = local.nameRange().toEditorCoords();
+                selectNameAt(textArea, r.startLine(), r.startCol(), name);
+                return;
+            }
+        }
+
+        // Compile-time dispatch covers operator tokens (no word under the
+        // cursor) and method-call sites whose resolution we want to honor.
+        // Use the overload the parser chose, not a name-only TypeGraph lookup.
         var disp = diagnosticEngine.dispatchAnnotationAt(row, col);
         if (disp != null && disp.targetFile() != null && disp.targetRange() != null) {
             var tr = disp.targetRange();
@@ -367,24 +385,6 @@ public class EditorTab extends ScrollableTab {
         if (name == null || name.isEmpty()) {
             activateTypeInfoAt(row);
             return;
-        }
-
-        // Local scope first: `let NAME = ...`, tuple destructuring, or a
-        // function parameter within the enclosing declaration. Locals live
-        // in the TypeGraph (kind LOCAL_BINDING / PARAMETER), so the lookup
-        // uses parser-verified positions and stops at scope boundaries.
-        spn.lang.TypeGraph tg = diagnosticEngine.getTypeGraph();
-        String absFile = filePath != null
-                ? filePath.toAbsolutePath().normalize().toString() : null;
-        if (tg != null && absFile != null) {
-            // Parser is 1-based line, editor is 0-based: convert.
-            spn.lang.TypeGraph.Node local = tg.findLocalInScope(
-                    absFile, row + 1, col, name);
-            if (local != null && local.nameRange().isKnown()) {
-                var r = local.nameRange().toEditorCoords();
-                selectNameAt(textArea, r.startLine(), r.startCol(), name);
-                return;
-            }
         }
 
         // Fall back to TypeGraph by name. Covers type annotations, bare

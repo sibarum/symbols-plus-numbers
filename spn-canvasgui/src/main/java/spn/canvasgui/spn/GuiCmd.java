@@ -24,19 +24,49 @@ public sealed interface GuiCmd {
     /** Return a copy with the given handler added (or replaced). */
     GuiCmd withHandler(SpnSymbol event, CallTarget handler);
 
-    record Button(String label, Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
-        public Button(String label) { this(label, Map.of()); }
+    record Button(String label, boolean selected, Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
+        public Button(String label) { this(label, false, Map.of()); }
+        public Button withSelected(boolean s) {
+            return new Button(label, s, handlers);
+        }
         @Override
         public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
-            return new Button(label, merge(handlers, event, handler));
+            return new Button(label, selected, merge(handlers, event, handler));
         }
     }
 
-    record Text(String content, Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
-        public Text(String content) { this(content, Map.of()); }
+    record Text(String content, boolean editable, boolean selectable,
+                boolean multiline, boolean wordWrap, SpnSymbol font,
+                boolean bold, boolean italic,
+                Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
+        public Text(String content) {
+            this(content, false, false, false, false, null, false, false, Map.of());
+        }
+        public Text withEditable(boolean e) {
+            return new Text(content, e, selectable, multiline, wordWrap, font, bold, italic, handlers);
+        }
+        public Text withSelectable(boolean s) {
+            return new Text(content, editable, s, multiline, wordWrap, font, bold, italic, handlers);
+        }
+        public Text withMultiline(boolean m) {
+            return new Text(content, editable, selectable, m, wordWrap, font, bold, italic, handlers);
+        }
+        public Text withWordWrap(boolean w) {
+            return new Text(content, editable, selectable, multiline, w, font, bold, italic, handlers);
+        }
+        public Text withFont(SpnSymbol f) {
+            return new Text(content, editable, selectable, multiline, wordWrap, f, bold, italic, handlers);
+        }
+        public Text withBold(boolean b) {
+            return new Text(content, editable, selectable, multiline, wordWrap, font, b, italic, handlers);
+        }
+        public Text withItalic(boolean i) {
+            return new Text(content, editable, selectable, multiline, wordWrap, font, bold, i, handlers);
+        }
         @Override
         public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
-            return new Text(content, merge(handlers, event, handler));
+            return new Text(content, editable, selectable, multiline, wordWrap, font, bold, italic,
+                    merge(handlers, event, handler));
         }
     }
 
@@ -82,12 +112,45 @@ public sealed interface GuiCmd {
         }
     }
 
+    record Dial(double min, double max, double value,
+                Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
+        public Dial(double min, double max, double value) { this(min, max, value, Map.of()); }
+        @Override
+        public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
+            return new Dial(min, max, value, merge(handlers, event, handler));
+        }
+    }
+
+    record Tabs(int activeIndex, List<String> labels, List<GuiCmd> pages,
+                Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
+        public Tabs(int activeIndex, List<String> labels, List<GuiCmd> pages) {
+            this(activeIndex, labels, pages, Map.of());
+        }
+        @Override
+        public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
+            return new Tabs(activeIndex, labels, pages, merge(handlers, event, handler));
+        }
+    }
+
+    record Scrollable(GuiCmd child, Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
+        public Scrollable(GuiCmd child) { this(child, Map.of()); }
+        @Override
+        public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
+            // Routes to child; Scrollable's own scroll handling is internal
+            // and doesn't surface as an SPN-level event.
+            return new Scrollable(child == null ? null : child.withHandler(event, handler),
+                    handlers);
+        }
+    }
+
     record Mask(GuiCmd child, float widthRem, float heightRem,
                 Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
         public Mask(GuiCmd child, float w, float h) { this(child, w, h, Map.of()); }
         @Override
         public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
-            return new Mask(child, widthRem, heightRem, merge(handlers, event, handler));
+            // Mask is a clip wrapper with no semantic events — route to child.
+            return new Mask(child == null ? null : child.withHandler(event, handler),
+                    widthRem, heightRem, handlers);
         }
     }
 
@@ -134,10 +197,13 @@ public sealed interface GuiCmd {
 
         @Override
         public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
-            return new Box(child, marginRem, paddingRem, borderRem,
+            // Box is a pure style wrapper; route handlers to the wrapped
+            // widget so `guiText(...).padding(0.5).on(:change, h)` attaches
+            // `:change` to the Text, not the Box.
+            return new Box(child == null ? null : child.withHandler(event, handler),
+                    marginRem, paddingRem, borderRem,
                     borderR, borderG, borderB, hasBorder,
-                    bgR, bgG, bgB, hasBg,
-                    merge(handlers, event, handler));
+                    bgR, bgG, bgB, hasBg, handlers);
         }
     }
 

@@ -7,6 +7,8 @@ import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.opengl.GL;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -49,7 +51,8 @@ public class Main {
         GL.createCapabilities();
 
         font = new SdfFontRenderer();
-        font.init("C:/Windows/Fonts/consola.ttf", 64f);
+        font.init(loadBundledFont("fonts/mono/ubuntusansmono-regular.ttf"), 64f,
+                "ubuntusansmono-regular.ttf");
 
         first.initComponents(font);
         centerOnScreen(first.getHandle());
@@ -113,6 +116,19 @@ public class Main {
         w.show();
         pendingWindows.add(w);
         return w;
+    }
+
+    /** Load a TTF bundled in spn-fonts's classpath resources. */
+    private static byte[] loadBundledFont(String resourcePath) {
+        try (InputStream in = SdfFontRenderer.class.getClassLoader()
+                .getResourceAsStream(resourcePath)) {
+            if (in == null) {
+                throw new RuntimeException("Bundled font not found on classpath: " + resourcePath);
+            }
+            return in.readAllBytes();
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to read bundled font: " + resourcePath, e);
+        }
     }
 
     private static void centerOnScreen(long window) {

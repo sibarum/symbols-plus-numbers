@@ -180,8 +180,8 @@ public final class IncrementalParser {
         // Extract dispatch annotations — declarations parsed before any error
         // still have valid dispatch info. Field-access sites are merged in so
         // the editor can go-to-def on `state.counter`-style member names.
-        lastDispatches = extractDispatches(parser.getResolver(), parser.getTypeGraph(),
-                parser.getFieldAccessSites());
+        lastDispatches = extractDispatches(parser, parser.getResolver(),
+                parser.getTypeGraph(), parser.getFieldAccessSites());
         lastTypeRefs = extractTypeRefs(parser.getTypeReferenceSites());
 
         // Retain parser artifacts so the IDE can answer go-to-def queries
@@ -223,7 +223,9 @@ public final class IncrementalParser {
      *  (0-based line, 0-based col) here so downstream consumers don't have to.
      *  Field-access sites (state.counter) are merged in with their target set
      *  to the FIELD node's declaration position. */
-    private List<DispatchAnnotation> extractDispatches(TypeResolver resolver, TypeGraph typeGraph,
+    private List<DispatchAnnotation> extractDispatches(SpnParser parser,
+                                                        TypeResolver resolver,
+                                                        TypeGraph typeGraph,
                                                         List<SpnParser.FieldAccessSite> fieldSites) {
         List<DispatchAnnotation> result = new ArrayList<>();
 
@@ -250,13 +252,16 @@ public final class IncrementalParser {
 
                 // Cross-reference CallTarget → declaration site. Builtins have
                 // no TypeGraph node (no source); they get null target fields.
+                // Same-module first via TypeGraph.byCallTarget; cross-module
+                // falls through to the parser's imported-declaration maps
+                // (operators, methods, factories).
                 String targetFile = null;
                 SourceRange targetRange = null;
-                TypeGraph.Node decl = typeGraph != null
-                        ? typeGraph.byCallTarget(record.callTarget()) : null;
-                if (decl != null && decl.file() != null && decl.nameRange().isKnown()) {
-                    targetFile = decl.file();
-                    targetRange = decl.nameRange().toEditorCoords();
+                spn.language.TypeDeclPos pos = parser != null
+                        ? parser.lookupCallTargetDecl(record.callTarget()) : null;
+                if (pos != null && pos.range() != null && pos.range().isKnown()) {
+                    targetFile = pos.file();
+                    targetRange = pos.range().toEditorCoords();
                 }
                 result.add(new DispatchAnnotation(callSite, desc, targetFile, targetRange));
             }

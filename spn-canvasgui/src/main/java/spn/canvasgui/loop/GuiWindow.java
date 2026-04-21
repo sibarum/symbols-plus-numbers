@@ -7,7 +7,7 @@ import org.lwjgl.glfw.GLFWMouseButtonCallback;
 import org.lwjgl.glfw.GLFWScrollCallback;
 import org.lwjgl.opengl.GL;
 import spn.canvas.CanvasRenderer;
-import spn.fonts.SdfFontRenderer;
+import spn.canvasgui.font.FontRegistry;
 import spn.stdui.input.InputEvent;
 import spn.stdui.input.Key;
 import spn.stdui.input.Mod;
@@ -38,11 +38,12 @@ public final class GuiWindow {
     public GuiRoot root() { return root; }
 
     /**
-     * Open the window. {@code font} must be initialized on a shared context so
-     * this window can use it after becoming current.
+     * Open the window. {@code fonts} is this window's font registry — its
+     * renderers must be initialized on a shared GL context so the atlases
+     * and shaders work once this window is current.
      */
     public void open(String title, int width, int height, long shareWith,
-                     SdfFontRenderer font, float remPx) {
+                     FontRegistry fonts, float remPx) {
         this.width = width;
         this.height = height;
 
@@ -66,7 +67,7 @@ public final class GuiWindow {
         canvasRenderer = new CanvasRenderer();
         canvasRenderer.init();
 
-        root = new GuiRoot(font, remPx, canvasRenderer);
+        root = new GuiRoot(fonts, remPx, canvasRenderer);
 
         installCallbacks();
         glfwShowWindow(handle);

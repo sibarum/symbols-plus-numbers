@@ -78,11 +78,26 @@ public class SdfFontRenderer implements Renderer {
      * @param fontSize pixel height to rasterize the SDF at (48+ recommended)
      */
     public void init(String fontPath, float fontSize) {
+        initFromBuffer(loadFileToDirectBuffer(fontPath), fontSize, fontPath);
+    }
+
+    /**
+     * Like {@link #init(String, float)} but from an already-loaded byte array
+     * (classpath resource, network, memory, etc.). The bytes are copied into
+     * a native direct buffer internally.
+     */
+    public void init(byte[] fontBytes, float fontSize, String displayName) {
+        ByteBuffer buf = MemoryUtil.memAlloc(fontBytes.length);
+        buf.put(fontBytes).flip();
+        initFromBuffer(buf, fontSize, displayName);
+    }
+
+    private void initFromBuffer(ByteBuffer buffer, float fontSize, String displayName) {
         fontInfo = STBTTFontinfo.create();
-        fontData = loadFileToDirectBuffer(fontPath);
+        fontData = buffer;
 
         if (!stbtt_InitFont(fontInfo, fontData)) {
-            throw new RuntimeException("Failed to initialise font: " + fontPath);
+            throw new RuntimeException("Failed to initialise font: " + displayName);
         }
 
         pixelScale = stbtt_ScaleForPixelHeight(fontInfo, fontSize);

@@ -24,6 +24,7 @@ public class Button extends Component {
     private final String label;
     private final Theme theme;
     private Runnable onClick = () -> {};
+    private boolean selected;
 
     public Button(String label, Theme theme) {
         this.label = label;
@@ -34,6 +35,16 @@ public class Button extends Component {
         this.onClick = action;
         return this;
     }
+
+    public Button setSelected(boolean s) {
+        if (selected != s) {
+            selected = s;
+            invalidate();
+        }
+        return this;
+    }
+
+    public boolean isSelected() { return selected; }
 
     public String label() { return label; }
 
@@ -56,6 +67,7 @@ public class Button extends Component {
 
         float br, bg, bb;
         if (pressed()) { br = theme.buttonPressR; bg = theme.buttonPressG; bb = theme.buttonPressB; }
+        else if (selected) { br = theme.buttonSelectedR; bg = theme.buttonSelectedG; bb = theme.buttonSelectedB; }
         else if (hovered()) { br = theme.buttonHoverR; bg = theme.buttonHoverG; bb = theme.buttonHoverB; }
         else { br = theme.buttonR; bg = theme.buttonG; bb = theme.buttonB; }
 

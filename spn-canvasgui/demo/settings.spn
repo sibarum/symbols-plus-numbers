@@ -1,0 +1,64 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Settings demo — exercises Tabs, radio-style buttons, Slider, Dial, Scrollable.
+-- ═══════════════════════════════════════════════════════════════════════
+-- Three tabs:
+--   • Controls — slider and dial
+--   • Colors   — radio-style button group (mutual exclusion via state)
+--   • Items    — scrollable list (wheel to scroll)
+-- ═══════════════════════════════════════════════════════════════════════
+
+import CanvasGui
+import String (formatNum)
+
+stateful type Settings(tab: int, choice: _, volume: float, angle: float)
+
+Settings(0, :red, 0.5, 0.5) {
+  let render = do() {
+    guiRender(
+      guiTabs(this.tab, ["Controls", "Colors", "Items"], [
+        -- Tab 0: Slider + Dial
+        guiVBox([
+          guiText("Volume: " ++ formatNum(this.volume)),
+          guiSlider(0.0, 1.0, this.volume).on(:change, do(v) { this.volume = v }),
+          guiText("Angle: " ++ formatNum(this.angle)),
+          guiDial(0.0, 1.0, this.angle).on(:change, do(v) { this.angle = v }),
+        ]).padding(0.75),
+
+        -- Tab 1: radio-style button group
+        guiVBox([
+          guiText("Pick a color:"),
+          guiHBox([
+            guiButton("Red")
+                .selected(this.choice == :red)
+                .on(:click, do() { this.choice = :red }),
+            guiButton("Green")
+                .selected(this.choice == :green)
+                .on(:click, do() { this.choice = :green }),
+            guiButton("Blue")
+                .selected(this.choice == :blue)
+                .on(:click, do() { this.choice = :blue }),
+          ]),
+        ]).padding(0.75),
+
+        -- Tab 2: scrollable list
+        guiScrollable(
+          guiVBox([
+            guiText("Item 01 — lorem"), guiText("Item 02 — ipsum"),
+            guiText("Item 03 — dolor"), guiText("Item 04 — sit"),
+            guiText("Item 05 — amet"),  guiText("Item 06 — consectetur"),
+            guiText("Item 07 — adipiscing"), guiText("Item 08 — elit"),
+            guiText("Item 09 — sed"),   guiText("Item 10 — do"),
+            guiText("Item 11 — eiusmod"), guiText("Item 12 — tempor"),
+            guiText("Item 13 — incididunt"), guiText("Item 14 — ut"),
+            guiText("Item 15 — labore"), guiText("Item 16 — et"),
+            guiText("Item 17 — dolore"), guiText("Item 18 — magna"),
+            guiText("Item 19 — aliqua"), guiText("Item 20 — end"),
+          ])
+        ),
+      ]).on(:select, do(i) { this.tab = i })
+    )
+  }
+
+  guiWindow("Settings", 480, 360)
+  guiRun(30.0, render)
+}
