@@ -137,7 +137,9 @@ public class EditorWindow {
         actionRegistry.register("Save File",     "File",   "Ctrl+S",       "Save the active editor tab to disk.",                   () -> saveFile(false));
         actionRegistry.register("Save As",       "File",   "Ctrl+Shift+S", "Save the active editor tab to a new file path.",        () -> saveFile(true));
         actionRegistry.register("Run",           "Run",    "F5",           "Parse and execute the active tab's SPN source. Canvas output opens a separate window.", this::runCurrentFile);
+        actionRegistry.register("Execute",       "Run",    "Ctrl+E",       "Same as Run (F5). Alternative keybinding.",                              this::runCurrentFile);
         actionRegistry.register("Run with Trace","Run",    "Shift+F5",     "Execute with full tracing. Records all function calls, then opens an interactive trace viewer.", this::runWithTrace);
+        actionRegistry.register("Reload from Disk","File", "Ctrl+R",       "Reload the active tab's file from disk. If the tab has unsaved changes, prompts to Reload/Overwrite/Save As.", this::reloadActiveTabFromDisk);
         actionRegistry.register("Undo",          "Edit",   "Ctrl+Z",       "Undo the last edit in the active editor.",              () -> { TextArea ta = getTextArea(); if (ta != null) ta.performUndo(); });
         actionRegistry.register("Redo",          "Edit",   "Ctrl+Y",       "Redo a previously undone edit.",                        () -> { TextArea ta = getTextArea(); if (ta != null) ta.performRedo(); });
         actionRegistry.register("Find",          "Edit",   "Ctrl+F",       "Search within the current file. Enter next, Shift+Enter prev, Tab to replace mode, Esc to close.", this::openFindInActiveTab);
@@ -280,8 +282,8 @@ public class EditorWindow {
         // Editor tab: check dirty
         if (active instanceof EditorTab et) {
             if (et.isDirty()) {
-                // Tab-close path: dialog dismisses without closing the window
-                pushLegacyMode(new ConfirmExitMode(this, false));
+                // Tab-close path: save/discard, then close the tab (never the window)
+                pushLegacyMode(new ConfirmExitMode(this, ConfirmExitMode.AfterAction.CLOSE_TAB));
             } else {
                 tabView.closeActiveTab();
                 if (tabView.tabCount() == 0) {
@@ -359,7 +361,21 @@ public class EditorWindow {
         }
 
         // Unsaved changes from X button — close the window after Save/Discard
-        pushLegacyMode(new ConfirmExitMode(this, true));
+        pushLegacyMode(new ConfirmExitMode(this, ConfirmExitMode.AfterAction.CLOSE_WINDOW));
+    }
+
+    /**
+     * Close the currently active tab unconditionally (dirty state is assumed
+     * to have been resolved). If it was the last tab, open a fresh untitled
+     * one so the window is never empty.
+     * <p>Called from ConfirmExitMode after Save/Discard on the tab-close path.
+     */
+    void closeActiveTabDiscardingDirty() {
+        tabView.closeActiveTab();
+        if (tabView.tabCount() == 0) {
+            openNewTab();
+        }
+        updateTitle();
     }
 
     // ---- Rendering (delegates to WindowFrame) ----------------------------
@@ -423,11 +439,21 @@ public class EditorWindow {
 
         spn.canvas.CanvasState canvasState = new spn.canvas.CanvasState();
         spn.canvas.CanvasState.set(canvasState);
+        spn.canvasgui.spn.GuiSpnState guiState = new spn.canvasgui.spn.GuiSpnState();
+        spn.canvasgui.spn.GuiSpnState.set(guiState);
+        // Provide host resources so an inline `guiRun` call can open the
+        // GUI window (sharing this editor's GL context) without returning
+        // to Java-land first — otherwise the enclosing stateful block
+        // body would finish before the loop starts.
+        guiState.setHostResources(font, handle,
+                () -> canvasActive = true,
+                () -> { canvasActive = false; makeCurrent(); });
         try {
             SpnSymbolTable symbolTable = new SpnSymbolTable();
             spn.language.SpnModuleRegistry moduleRegistry = new spn.language.SpnModuleRegistry();
             registerStdlibModules(moduleRegistry);
             spn.canvas.CanvasBuiltins.registerModule(moduleRegistry);
+            spn.canvasgui.spn.CanvasGuiBuiltins.registerModule(moduleRegistry);
             moduleRegistry.addLoader(new spn.lang.ClasspathModuleLoader(null, symbolTable));
 
             // Add filesystem loader for local module imports
@@ -440,7 +466,28 @@ public class EditorWindow {
 
             String fullPath = currentFile != null ? currentFile.toAbsolutePath().toString() : "untitled";
             SpnParser parser = new SpnParser(source, fullPath, null, symbolTable, moduleRegistry);
-            SpnRootNode root = parser.parse();
+            SpnRootNode root;
+            try {
+                root = parser.parse();
+            } catch (spn.lang.SpnParseException pe) {
+                // Parser collects all errors it encountered but throws only the
+                // first. Surface the full list so users can see every issue at
+                // once — single errors still flash as before; multiple errors
+                // get written to the log and the log tab opens.
+                java.util.List<spn.lang.SpnParseException> errs = parser.getErrors();
+                if (errs.size() > 1) {
+                    logBuffer.append("[" + fileName + "] " + errs.size()
+                            + " parse errors:", true);
+                    for (spn.lang.SpnParseException e : errs) {
+                        logBuffer.append("  " + e.formatMessage(), true);
+                    }
+                    openLogTab();
+                    flash(errs.size() + " parse errors — see log", true);
+                } else {
+                    flash(pe.formatMessage(), true);
+                }
+                return;
+            }
             Object result = root.getCallTarget().call();
 
             if (canvasState.isCanvasRequested()) {
@@ -460,19 +507,20 @@ public class EditorWindow {
                     makeCurrent();
                 }
             } else {
+                // guiRun runs inline; if it was invoked, the loop has already
+                // finished by the time we get here. No post-SPN dispatch needed.
                 String display = result == null ? "(no result)" : result.toString();
                 flash("[" + fileName + "] => " + display, false);
             }
         } catch (spn.language.SpnException se) {
             flash(se.formatMessage(), true);
-        } catch (spn.lang.SpnParseException pe) {
-            flash(pe.formatMessage(), true);
         } catch (Exception e) {
             String msg = e.getMessage();
             if (msg == null) msg = e.getClass().getSimpleName();
             flash("[" + fileName + "] Error: " + msg, true);
         } finally {
             spn.canvas.CanvasState.clear();
+            spn.canvasgui.spn.GuiSpnState.clear();
         }
     }
 
@@ -490,12 +538,18 @@ public class EditorWindow {
 
         spn.canvas.CanvasState canvasState = new spn.canvas.CanvasState();
         spn.canvas.CanvasState.set(canvasState);
+        spn.canvasgui.spn.GuiSpnState guiState = new spn.canvasgui.spn.GuiSpnState();
+        spn.canvasgui.spn.GuiSpnState.set(guiState);
+        guiState.setHostResources(font, handle,
+                () -> canvasActive = true,
+                () -> { canvasActive = false; makeCurrent(); });
         spn.trace.TraceRecorder recorder = spn.trace.TraceRecorder.begin();
         try {
             SpnSymbolTable symbolTable = new SpnSymbolTable();
             spn.language.SpnModuleRegistry moduleRegistry = new spn.language.SpnModuleRegistry();
             registerStdlibModules(moduleRegistry);
             spn.canvas.CanvasBuiltins.registerModule(moduleRegistry);
+            spn.canvasgui.spn.CanvasGuiBuiltins.registerModule(moduleRegistry);
             moduleRegistry.addLoader(new spn.lang.ClasspathModuleLoader(null, symbolTable));
 
             ModuleContext moduleCtx = et.getModuleContext();
@@ -554,6 +608,7 @@ public class EditorWindow {
         } finally {
             spn.trace.TraceRecorder.end();
             spn.canvas.CanvasState.clear();
+            spn.canvasgui.spn.GuiSpnState.clear();
         }
     }
 
@@ -723,6 +778,40 @@ public class EditorWindow {
             org.lwjgl.util.tinyfd.TinyFileDialogs.tinyfd_messageBox(
                     "Error", "Could not read file:\n" + e.getMessage(), "ok", "error", true);
         }
+    }
+
+    /**
+     * Reload the active tab's file from disk.
+     * <ul>
+     *   <li>No file path yet: flash an error.</li>
+     *   <li>Clean tab + disk matches baseline: flash "already up to date".</li>
+     *   <li>Clean tab + disk differs: replace tab content with disk content.</li>
+     *   <li>Dirty tab: push RefreshConflictMode to let the user choose
+     *       between Reload, Overwrite, or Save As.</li>
+     * </ul>
+     */
+    public void reloadActiveTabFromDisk() {
+        EditorTab et = getActiveEditorTab();
+        if (et == null) { flash("No active editor tab", true); return; }
+        Path p = et.getFilePath();
+        if (p == null) { flash("This tab has no file on disk yet", true); return; }
+        String disk;
+        try {
+            disk = Files.readString(p);
+        } catch (IOException e) {
+            flash("Could not read " + p.getFileName() + ": " + e.getMessage(), true);
+            return;
+        }
+        if (et.isDirty()) {
+            pushLegacyMode(new RefreshConflictMode(this, p, disk));
+            return;
+        }
+        if (et.diskContentMatchesBaseline(disk)) {
+            flash("Already up to date: " + p.getFileName(), false);
+            return;
+        }
+        et.loadContent(disk);
+        flash("Reloaded " + p.getFileName() + " from disk", false);
     }
 
     public void saveFile(boolean saveAs) {

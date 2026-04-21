@@ -18,7 +18,7 @@ import java.util.Arrays;
  *   drop([1, 2, 3, 4, 5], 2) -> [3, 4, 5]
  * </pre>
  */
-@SpnBuiltin(name = "drop", module = "Array", params = {"array", "count"}, returns = "Array")
+@SpnBuiltin(name = "drop", module = "Array", params = {"array", "count"}, returns = "Array", receiver = "Array")
 @NodeChild("array")
 @NodeChild("count")
 @NodeInfo(shortName = "drop")

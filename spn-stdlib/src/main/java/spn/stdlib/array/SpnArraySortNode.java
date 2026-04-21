@@ -25,7 +25,7 @@ import java.util.Arrays;
  *   sort([3, 1, 2], compare) -> [1, 2, 3]
  * </pre>
  */
-@SpnBuiltin(name = "sort", module = "Array", params = {"array"}, returns = "Array")
+@SpnBuiltin(name = "sort", module = "Array", params = {"array"}, returns = "Array", receiver = "Array")
 @SpnParamHint(name = "comparator", function = true)
 @NodeChild("array")
 @NodeInfo(shortName = "sort")

@@ -15,7 +15,7 @@ import spn.type.SpnSetValue;
  * Returns the length/size of a collection or string.
  * Polymorphic: works on Array, String, Set, Dict.
  */
-@SpnBuiltin(name = "length", module = "Array", params = {"value"}, returns = "Long")
+@SpnBuiltin(name = "length", module = "Array", params = {"value"}, returns = "Long", receiver = "Array")
 @NodeChild("value")
 @NodeInfo(shortName = "length")
 public abstract class SpnLengthNode extends SpnExpressionNode {

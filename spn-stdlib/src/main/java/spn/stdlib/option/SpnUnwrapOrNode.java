@@ -17,7 +17,7 @@ import spn.type.SpnStructValue;
  *   unwrapOr(None, 0)     -> 0
  * </pre>
  */
-@SpnBuiltin(name = "unwrapOr", module = "Option", params = {"option", "defaultValue"})
+@SpnBuiltin(name = "unwrapOr", module = "Option", params = {"option", "defaultValue"}, receiver = "Option")
 @NodeChild("option")
 @NodeChild("defaultValue")
 @NodeInfo(shortName = "unwrapOr")

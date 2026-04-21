@@ -43,8 +43,18 @@ public final class StdlibRegistryGenerator {
             boolean hasCallTargetCtor,  // constructor takes CallTarget
             String ctorParamName,       // name of the CallTarget param in @SpnParamHint
             boolean isAbstract,         // true = DSL node (use Gen class), false = concrete (use directly)
-            List<String> inferredParamTypes  // SPN type names inferred from @Specialization methods
-    ) {}
+            List<String> inferredParamTypes,  // SPN type names inferred from @Specialization methods
+            String receiver,            // receiver type name if this is a method (empty = flat fn)
+            String methodName           // method name on receiver (defaults to name() if empty)
+    ) {
+        /** True if this builtin should also be registered as a method. */
+        boolean isMethod() { return !receiver.isEmpty(); }
+
+        /** Method name on the receiver type; falls back to the flat function name. */
+        String effectiveMethodName() {
+            return methodName.isEmpty() ? name : methodName;
+        }
+    }
 
     record ParamHintInfo(String name, String type, boolean function) {}
 
@@ -160,7 +170,8 @@ public final class StdlibRegistryGenerator {
                             annotation.name(), annotation.module(), annotation.pure(),
                             resolvedReturn, className, genClassName,
                             nodeChildren, hints, hasCallTargetCtor, ctorParamName,
-                            isAbstract, inferredParamTypes));
+                            isAbstract, inferredParamTypes,
+                            annotation.receiver(), annotation.method()));
 
                 } catch (ClassNotFoundException | NoClassDefFoundError e) {
                     // Skip classes that can't be loaded
@@ -266,6 +277,11 @@ public final class StdlibRegistryGenerator {
 
     /** Generates a factory method for one builtin. */
     private static void generateFactoryMethod(BuiltinInfo b, PrintWriter out) {
+        // First emit a descriptor-only helper. Higher-order callers need the
+        // descriptor without constructing an AST (which would NPE on null
+        // function args), so `describe_X()` skips the node construction.
+        generateDescriptorMethod(b, out);
+
         String methodName = "create_" + b.name();
         boolean isHigherOrder = b.hasCallTargetCtor();
 
@@ -287,6 +303,10 @@ public final class StdlibRegistryGenerator {
             out.println("        var fdBuilder = FrameDescriptor.newBuilder();");
             out.println("        var desc = SpnFunctionDescriptor."
                     + (b.pure() ? "pure" : "impure") + "(\"" + b.name() + "\")");
+            String returnFieldType0 = resolveReturnFieldType(b.returns());
+            if (returnFieldType0 != null) {
+                out.println("            .returns(" + returnFieldType0 + ")");
+            }
             out.println("            .build();");
             out.println("        var body = new " + b.nodeClassName() + "("
                     + (isHigherOrder ? b.ctorParamName() : "") + ");");
@@ -348,6 +368,37 @@ public final class StdlibRegistryGenerator {
 
         out.println("        return new BuiltinEntry(\"" + b.name() + "\", \""
                 + b.module() + "\", desc, root.getCallTarget());");
+        out.println("    }");
+        out.println();
+    }
+
+    /** Emits a describe_X() method that returns just the SpnFunctionDescriptor
+     *  for a builtin, without constructing a CallTarget. Used by the module
+     *  loader to record descriptors for higher-order methods without having
+     *  to pass a throwaway function argument. */
+    private static void generateDescriptorMethod(BuiltinInfo b, PrintWriter out) {
+        out.println("    /** Descriptor for '" + b.name() + "' (type info only). */");
+        out.println("    public static spn.type.SpnFunctionDescriptor describe_" + b.name() + "() {");
+        out.print("        var desc = SpnFunctionDescriptor.");
+        out.print(b.pure() ? "pure" : "impure");
+        out.println("(\"" + b.name() + "\")");
+        for (String child : b.nodeChildren()) {
+            String fieldType = inferFieldType(b, child);
+            if (fieldType != null) {
+                out.println("            .param(\"" + child + "\", " + fieldType + ")");
+            } else {
+                out.println("            .param(\"" + child + "\")");
+            }
+        }
+        if (b.hasCallTargetCtor()) {
+            out.println("            .param(\"" + b.ctorParamName() + "\")");
+        }
+        String returnFieldType = resolveReturnFieldType(b.returns());
+        if (returnFieldType != null) {
+            out.println("            .returns(" + returnFieldType + ")");
+        }
+        out.println("            .build();");
+        out.println("        return desc;");
         out.println("    }");
         out.println();
     }
@@ -423,6 +474,11 @@ public final class StdlibRegistryGenerator {
             }
         }
         return result;
+    }
+
+    /** Stable variable name for a builtin's BuiltinEntry when emitted inline. */
+    private static String entryVar(BuiltinInfo b) {
+        return b.name() + "Entry";
     }
 
     /** Maps a Java parameter type to an SPN type name. */
@@ -519,12 +575,17 @@ public final class StdlibRegistryGenerator {
         out.println("package spn.stdlib.gen;");
         out.println();
         out.println("import com.oracle.truffle.api.CallTarget;");
+        out.println("import spn.language.MethodEntry;");
         out.println("import spn.language.SpnModule;");
         out.println("import spn.language.SpnModuleRegistry;");
         out.println("import spn.node.BuiltinFactory;");
         out.println("import spn.node.SpnExpressionNode;");
         out.println("import spn.node.func.SpnFunctionRefNode;");
         out.println("import spn.node.func.SpnInvokeNode;");
+        out.println("import spn.type.SpnFunctionDescriptor;");
+        out.println();
+        out.println("import java.util.LinkedHashMap;");
+        out.println("import java.util.Map;");
         out.println();
         out.println("/**");
         out.println(" * Auto-generated loader that registers stdlib modules into SpnModuleRegistry.");
@@ -541,25 +602,65 @@ public final class StdlibRegistryGenerator {
             String module = entry.getKey();
             List<BuiltinInfo> fns = entry.getValue();
             String varName = module.toLowerCase() + "Builder";
+            String methodsVar = module.toLowerCase() + "Methods";
+            String methodFacsVar = module.toLowerCase() + "MethodFactories";
 
             boolean hasImpure = fns.stream().anyMatch(b -> !b.pure());
             out.println("        var " + varName + " = SpnModule.builder(\"" + module + "\")"
                     + (hasImpure ? ".impure()" : "") + ";");
 
+            // Method registries for this module.
+            boolean hasSimpleMethods = fns.stream()
+                    .anyMatch(b -> b.isMethod() && !b.hasCallTargetCtor());
+            boolean hasMethodFactories = fns.stream()
+                    .anyMatch(b -> b.isMethod() && b.hasCallTargetCtor());
+            boolean hasSimpleFns = fns.stream().anyMatch(b -> !b.hasCallTargetCtor());
+            if (hasSimpleMethods) {
+                out.println("        Map<String, MethodEntry> " + methodsVar
+                        + " = new LinkedHashMap<>();");
+            }
+            if (hasMethodFactories) {
+                out.println("        Map<String, BuiltinFactory> " + methodFacsVar
+                        + " = new LinkedHashMap<>();");
+                out.println("        Map<String, SpnFunctionDescriptor> " + methodFacsVar
+                        + "Descs = new LinkedHashMap<>();");
+            }
+            String descriptorsVar = module.toLowerCase() + "Descriptors";
+            if (hasSimpleFns) {
+                out.println("        Map<String, SpnFunctionDescriptor> " + descriptorsVar
+                        + " = new LinkedHashMap<>();");
+            }
+
             for (BuiltinInfo b : fns) {
                 if (!b.hasCallTargetCtor()) {
-                    // Simple builtin — pre-compiled CallTarget
+                    // Simple builtin — pre-compiled CallTarget.
+                    out.println("        var " + entryVar(b) + " = SpnStdlibRegistry.create_"
+                            + b.name() + "();");
                     out.println("        " + varName + ".function(\"" + b.name()
-                            + "\", SpnStdlibRegistry.create_" + b.name() + "().callTarget());");
+                            + "\", " + entryVar(b) + ".callTarget());");
+                    out.println("        " + descriptorsVar + ".put(\"" + b.name()
+                            + "\", " + entryVar(b) + ".descriptor());");
+                    if (b.isMethod()) {
+                        out.println("        " + methodsVar + ".put(\""
+                                + b.receiver() + "." + b.effectiveMethodName()
+                                + "\", new MethodEntry(" + entryVar(b) + ".callTarget(), "
+                                + entryVar(b) + ".descriptor()));");
+                    }
                 }
             }
 
-            // Higher-order builtins as BuiltinFactory
+            // Higher-order builtins as BuiltinFactory.
             for (BuiltinInfo b : fns) {
                 if (b.hasCallTargetCtor()) {
-                    out.println("        " + varName + ".builtinFactory(\"" + b.name()
-                            + "\", args -> {");
+                    String facVar = b.name() + "Factory";
+                    String descVar = b.name() + "Desc";
                     int valueArgCount = b.nodeChildren().size();
+                    // Capture the descriptor for IDE/typing use. The
+                    // per-call-site CallTarget is built lazily in the factory
+                    // below; the descriptor shape is the same either way.
+                    out.println("        SpnFunctionDescriptor " + descVar
+                            + " = SpnStdlibRegistry.describe_" + b.name() + "();");
+                    out.println("        BuiltinFactory " + facVar + " = args -> {");
                     out.println("            CallTarget fn = ((SpnFunctionRefNode) args["
                             + valueArgCount + "]).getCallTarget();");
                     out.println("            var entry = SpnStdlibRegistry.create_"
@@ -569,8 +670,38 @@ public final class StdlibRegistryGenerator {
                     out.println("            System.arraycopy(args, 0, valueArgs, 0, "
                             + valueArgCount + ");");
                     out.println("            return new SpnInvokeNode(entry.callTarget(), valueArgs);");
-                    out.println("        });");
+                    out.println("        };");
+                    out.println("        " + varName + ".builtinFactory(\"" + b.name()
+                            + "\", " + facVar + ");");
+                    // Descriptors for flat-form dispatch tracking.
+                    out.println("        " + descriptorsVar + ".put(\"" + b.name()
+                            + "\", " + descVar + ");");
+                    if (b.isMethod()) {
+                        // Same factory handles both invocation forms — arr.map(fn)
+                        // and map(arr, fn) pass args in the same order (value
+                        // args first, function last).
+                        out.println("        " + methodFacsVar + ".put(\""
+                                + b.receiver() + "." + b.effectiveMethodName()
+                                + "\", " + facVar + ");");
+                        out.println("        " + methodFacsVar + "Descs.put(\""
+                                + b.receiver() + "." + b.effectiveMethodName()
+                                + "\", " + descVar + ");");
+                    }
                 }
+            }
+
+            if (hasSimpleMethods) {
+                out.println("        " + varName + ".extra(\"methods\", " + methodsVar + ");");
+            }
+            if (hasMethodFactories) {
+                out.println("        " + varName + ".extra(\"methodFactories\", "
+                        + methodFacsVar + ");");
+                out.println("        " + varName + ".extra(\"methodFactoryDescriptors\", "
+                        + methodFacsVar + "Descs);");
+            }
+            if (hasSimpleFns) {
+                out.println("        " + varName + ".extra(\"descriptors\", "
+                        + descriptorsVar + ");");
             }
 
             out.println("        registry.register(\"" + module + "\", " + varName + ".build());");

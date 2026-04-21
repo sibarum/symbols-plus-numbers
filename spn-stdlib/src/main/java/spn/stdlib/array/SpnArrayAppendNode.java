@@ -14,7 +14,7 @@ import spn.type.SpnArrayValue;
  * Appends a single element to an array: append([1, 2], 3) -> [1, 2, 3]
  * Returns a new array — the original is not modified.
  */
-@SpnBuiltin(name = "append", module = "Array", params = {"array", "element"}, returns = "Array")
+@SpnBuiltin(name = "append", module = "Array", params = {"array", "element"}, returns = "Array", receiver = "Array")
 @NodeChild("array")
 @NodeChild("element")
 @NodeInfo(shortName = "append")

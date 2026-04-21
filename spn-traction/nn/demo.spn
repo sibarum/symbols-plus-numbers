@@ -1,0 +1,368 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- MLP Training Demo — digit addition
+-- ═══════════════════════════════════════════════════════════════════════
+-- A tiny 2 → 5 → 1 network learns to predict single-digit addition.
+-- Inputs are a/10, b/10 where a, b ∈ {1..9}; the target is (a+b)/18.
+-- Both domains sit comfortably inside the sigmoid's well-behaved range.
+--
+-- The scene:
+--   - Three columns of neurons (2 input, 5 hidden, 1 output), with every
+--     weight drawn as a line. Green = positive, red = negative, thickness
+--     scales with |w|. Neuron brightness reflects activation on the
+--     currently displayed example.
+--   - The equation being shown cycles through the training set at ~2/sec,
+--     decoupled from training speed so the network's live prediction for
+--     a varying input is visible.
+--   - A loss curve along the bottom tracks average MSE across all
+--     examples over the course of training.
+--
+-- The frame callback re-runs training from step 0 each call (deterministic
+-- and cheap at this size). Training saturates at MAX_STEPS so per-frame
+-- work doesn't grow unbounded.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import Canvas
+import Math (toFloat, round)
+import Array (append, concat, length)
+import String (formatNum)
+import spn.canvas.draw
+import nn.network
+
+-- ── Deterministic PRNG (LCG) ────────────────────────────────────────────
+-- Matches the kuramoto demo's pattern. Independent streams for distinct
+-- salts; `seed()` re-rolls the entire demo.
+
+pure seed() -> int = () { 137 }
+
+pure lcgHash(int, int, int) -> int = (s, i, salt) {
+  let m = 2147483648       -- 2^31
+  let a = 1103515245
+  let c = 12345
+  let s1 = (a * s + c) % m
+  let s2 = (a * (s1 + i) + c) % m
+  (a * (s2 + salt) + c) % m
+}
+
+pure rand01(int, int, int) -> float = (s, i, salt) {
+  toFloat(lcgHash(s, i, salt)) / 2147483648.0
+}
+
+-- ── Training set: single-digit sums ─────────────────────────────────────
+
+pure numExamples() -> int = () { 16 }
+
+pure exampleA(int) -> int = (i) { 1 + (lcgHash(seed(), i, 1) % 9) }
+pure exampleB(int) -> int = (i) { 1 + (lcgHash(seed(), i, 2) % 9) }
+
+pure inputA(int) -> float = (i) { toFloat(exampleA(i)) / 10.0 }
+pure inputB(int) -> float = (i) { toFloat(exampleB(i)) / 10.0 }
+pure targetOut(int) -> float = (i) {
+  toFloat(exampleA(i) + exampleB(i)) / 18.0
+}
+
+pure exampleInput(int) -> Array<float> = (i) {
+  append(append([], inputA(i)), inputB(i))
+}
+pure exampleTarget(int) -> Array<float> = (i) {
+  append([], targetOut(i))
+}
+
+-- ── Network initialization ──────────────────────────────────────────────
+-- Small uniform-random weights in [−0.3, 0.3] and tiny biases.
+
+pure randWeight(int, int, int, int) -> float = (s, layer, i, j) {
+  (rand01(s, layer * 1000 + i * 100 + j, 7) - 0.5) * 0.6
+}
+
+pure initLayer(int, int, int, int) -> Layer = (layerIdx, inDim, outDim, s) {
+  let w = []
+  let i = 0
+  while {i < outDim} do {
+    let row = []
+    let j = 0
+    while {j < inDim} do {
+      row = append(row, randWeight(s, layerIdx, i, j))
+      j = j + 1
+    }
+    w = append(w, row)
+    i = i + 1
+  }
+  let b = []
+  let k = 0
+  while {k < outDim} do {
+    b = append(b, (rand01(s, layerIdx * 1000 + k, 99) - 0.5) * 0.1)
+    k = k + 1
+  }
+  Layer(w, b)
+}
+
+pure initNetwork() -> Network = () {
+  let l1 = initLayer(0, 2, 5, seed())
+  let l2 = initLayer(1, 5, 1, seed())
+  Network(append(append([], l1), l2))
+}
+
+-- ── Training loop ───────────────────────────────────────────────────────
+
+-- Average MSE across the whole training set. Cheap with 16 examples.
+pure avgLoss(Network) -> float = (net) {
+  let total = 0.0
+  let k = 0
+  let n = numExamples()
+  while {k < n} do {
+    total = total + mse(forward(net, exampleInput(k)), exampleTarget(k))
+    k = k + 1
+  }
+  total / toFloat(n)
+}
+
+-- Run `steps` SGD iterations, cycling through examples. Returns the final
+-- network and a sampled loss history (one sample per `sampleEvery` steps).
+pure runTraining(int, float) -> (Network, Array<float>)
+    = (steps, lr) {
+  let net = initNetwork()
+  let history = append([], avgLoss(net))
+  let sampleEvery = 5
+  let s = 0
+  while {s < steps} do {
+    let idx = s % numExamples()
+    net = trainStep(net, exampleInput(idx), exampleTarget(idx), lr)
+    match
+    | (s + 1) % sampleEvery == 0 -> {
+        history = append(history, avgLoss(net))
+      }
+    | _ -> { 0 }
+    s = s + 1
+  }
+  (net, history)
+}
+
+-- ── Layout helpers ──────────────────────────────────────────────────────
+
+pure layerX(int) -> float = (layer) {
+  match
+  | layer == 0 -> 220.0
+  | layer == 1 -> 540.0
+  | _          -> 860.0
+}
+
+pure neuronY(int, int, float) -> float = (idx, total, centerY) {
+  let spacing = 85.0
+  let topY = centerY - spacing * toFloat(total - 1) / 2.0
+  topY + spacing * toFloat(idx)
+}
+
+pure absF(float) -> float = (x) {
+  match | x < 0.0 -> -x | _ -> x
+}
+
+pure clamp01(float) -> float = (x) {
+  match
+  | x < 0.0 -> 0.0
+  | x > 1.0 -> 1.0
+  | _       -> x
+}
+
+-- ── Weight rendering ────────────────────────────────────────────────────
+
+-- Green for positive, red for negative. Brightness saturates at |w|=2.
+pure weightColor(float) -> (float, float, float) = (w) {
+  let t = clamp01(absF(w) / 2.0)
+  let base = 0.25 + 0.65 * t
+  match
+  | w >= 0.0 -> (0.22, base, 0.35)
+  | _        -> (base, 0.22, 0.25)
+}
+
+pure weightWidth(float) -> float = (w) {
+  0.8 + 2.8 * clamp01(absF(w) / 2.0)
+}
+
+pure drawLayerWeights(Array<Array<float>>, int, int, int, float) -> Array
+    = (mat, srcLayerIdx, inDim, outDim, centerY) {
+  let cmds = []
+  let dstIdx = 0
+  while {dstIdx < outDim} do {
+    let row = mat[dstIdx]
+    let x2 = layerX(srcLayerIdx + 1)
+    let y2 = neuronY(dstIdx, outDim, centerY)
+    let srcIdx = 0
+    while {srcIdx < inDim} do {
+      let w = row[srcIdx]
+      let x1 = layerX(srcLayerIdx)
+      let y1 = neuronY(srcIdx, inDim, centerY)
+      let (cr, cg, cb) = weightColor(w)
+      cmds = append(cmds, CmdStroke(cr, cg, cb))
+      cmds = append(cmds, CmdStrokeWeight(weightWidth(w)))
+      cmds = append(cmds, CmdLine(x1, y1, x2, y2))
+      srcIdx = srcIdx + 1
+    }
+    dstIdx = dstIdx + 1
+  }
+  cmds
+}
+
+-- ── Neuron rendering ────────────────────────────────────────────────────
+
+pure drawNeuron(float, float, float, float) -> Array = (x, y, r, activation) {
+  let brightness = 0.25 + 0.65 * clamp01(activation)
+  let ringR = r + 3.0
+  concat(
+    [CmdFill(0.55, 0.58, 0.68), CmdCircle(x, y, ringR)],
+    [CmdFill(brightness, brightness * 0.95, brightness * 0.75),
+     CmdCircle(x, y, r)]
+  )
+}
+
+pure drawLayer(Array<float>, int, float, float) -> Array
+    = (acts, layerIdx, centerY, radius) {
+  let n = length(acts)
+  let cmds = []
+  let i = 0
+  while {i < n} do {
+    let x = layerX(layerIdx)
+    let y = neuronY(i, n, centerY)
+    cmds = concat(cmds, drawNeuron(x, y, radius, acts[i]))
+    i = i + 1
+  }
+  cmds
+}
+
+pure drawNetwork(Network, Array<Array<float>>, float) -> Array
+    = (net, acts, centerY) {
+  let cmds = []
+  let numLayers = length(net.layers)
+  let l = 0
+  while {l < numLayers} do {
+    let layer = net.layers[l]
+    let inDim = length(layer.weights[0])
+    let outDim = length(layer.weights)
+    cmds = concat(cmds,
+        drawLayerWeights(layer.weights, l, inDim, outDim, centerY))
+    l = l + 1
+  }
+  let nActLayers = length(acts)
+  let li = 0
+  while {li < nActLayers} do {
+    cmds = concat(cmds, drawLayer(acts[li], li, centerY, 22.0))
+    li = li + 1
+  }
+  cmds
+}
+
+-- ── Loss plot ───────────────────────────────────────────────────────────
+
+pure drawLossPlot(Array<float>, float, float, float, float) -> Array
+    = (history, x0, y0, w, h) {
+  let n = length(history)
+  let cmds = [
+    CmdStroke(0.3, 0.32, 0.38), CmdStrokeWeight(1.0),
+    CmdLine(x0, y0, x0 + w, y0),
+    CmdLine(x0, y0 - h, x0 + w, y0 - h),
+    CmdLine(x0, y0, x0, y0 - h),
+    CmdFill(0.75, 0.75, 0.8),
+    CmdText(x0, y0 + 16.0, "average MSE  vs  training step", 0.22)
+  ]
+  -- Scale by the first sample so the curve always fills the plot area.
+  -- history is always non-empty (seeded with the initial loss).
+  let firstL = history[0]
+  let maxL = match
+    | firstL > 0.0001 -> firstL
+    | _               -> 0.0001
+  cmds = concat(cmds, [CmdStroke(0.85, 0.6, 0.3), CmdStrokeWeight(2.0)])
+  let i = 1
+  while {i < n} do {
+    let x1 = x0 + w * toFloat(i - 1) / toFloat(n - 1)
+    let y1 = y0 - h * clamp01(history[i - 1] / maxL)
+    let x2 = x0 + w * toFloat(i) / toFloat(n - 1)
+    let y2 = y0 - h * clamp01(history[i] / maxL)
+    cmds = append(cmds, CmdLine(x1, y1, x2, y2))
+    i = i + 1
+  }
+  cmds
+}
+
+-- ── Frame builder ───────────────────────────────────────────────────────
+
+pure simStepsForElapsed(float, float, int) -> int = (elapsed, dt, maxSteps) {
+  let raw = round(elapsed / dt)
+  match
+  | raw < 0        -> 0
+  | raw > maxSteps -> maxSteps
+  | _              -> raw
+}
+
+action drawFrame(float) -> int = (elapsed) {
+  let dt = 0.033
+  let maxSteps = 1500           -- ~50 s to reach at 30 fps
+  let steps = simStepsForElapsed(elapsed, dt, maxSteps)
+  let (net, history) = runTraining(steps, 1.0)
+
+  -- Current equation cycles every 0.5 s, independent of training pace.
+  let exampleIdx = round(elapsed * 2.0) % numExamples()
+  let curA = exampleA(exampleIdx)
+  let curB = exampleB(exampleIdx)
+  let input = exampleInput(exampleIdx)
+  let acts = forwardWithActivations(net, input)
+  let predNormalized = forward(net, input)[0]
+  let prediction = predNormalized * 18.0
+
+  let centerY = 380.0
+  let cmds = [CmdClear(0.07, 0.08, 0.10)]
+
+  -- Title + legend
+  cmds = concat(cmds, [
+    CmdFill(0.92, 0.92, 0.96),
+    CmdText(260.0, 38.0, "MLP training — digit addition", 0.34),
+    CmdFill(0.6, 0.62, 0.7),
+    CmdText(230.0, 64.0,
+      "green = positive weight    red = negative    thickness = magnitude",
+      0.22)
+  ])
+
+  -- Current equation banner
+  let eqStr = formatNum(curA) ++ " + " ++ formatNum(curB) ++ " = " ++ formatNum(curA + curB)
+  let predStr = "network predicts  " ++ formatNum(prediction)
+  cmds = concat(cmds, [
+    CmdFill(0.88, 0.92, 0.98),
+    CmdText(90.0, 120.0, eqStr, 0.52),
+    CmdFill(0.7, 0.78, 0.88),
+    CmdText(90.0, 150.0, predStr, 0.28)
+  ])
+
+  -- Step counter
+  let stepStr = "step  " ++ formatNum(steps) ++ "  /  " ++ formatNum(maxSteps)
+  cmds = concat(cmds, [
+    CmdFill(0.55, 0.6, 0.7),
+    CmdText(720.0, 120.0, stepStr, 0.28)
+  ])
+
+  -- Input labels beside the input neurons
+  cmds = concat(cmds, [
+    CmdFill(0.75, 0.78, 0.85),
+    CmdText(140.0, neuronY(0, 2, centerY) + 6.0,
+      "a = " ++ formatNum(inputA(exampleIdx)), 0.22),
+    CmdText(140.0, neuronY(1, 2, centerY) + 6.0,
+      "b = " ++ formatNum(inputB(exampleIdx)), 0.22)
+  ])
+
+  -- Output label beside the output neuron
+  cmds = concat(cmds, [
+    CmdFill(0.75, 0.78, 0.85),
+    CmdText(900.0, centerY + 6.0,
+      "out = " ++ formatNum(predNormalized), 0.22)
+  ])
+
+  -- Network diagram
+  cmds = concat(cmds, drawNetwork(net, acts, centerY))
+
+  -- Loss curve
+  cmds = concat(cmds, drawLossPlot(history, 80.0, 650.0, 820.0, 80.0))
+
+  render(cmds)
+  0
+}
+
+canvas(980, 720)
+animate(30.0, drawFrame)
+show()

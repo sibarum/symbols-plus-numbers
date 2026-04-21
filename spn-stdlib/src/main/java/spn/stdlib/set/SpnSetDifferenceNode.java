@@ -16,7 +16,7 @@ import spn.type.SpnSetValue;
  *   difference({1, 2, 3}, {2, 3, 4}) -> {1}
  * </pre>
  */
-@SpnBuiltin(name = "difference", module = "Set", params = {"left", "right"}, returns = "Set")
+@SpnBuiltin(name = "difference", module = "Set", params = {"left", "right"}, returns = "Set", receiver = "Set")
 @NodeChild("left")
 @NodeChild("right")
 @NodeInfo(shortName = "difference")

@@ -8,7 +8,7 @@ import spn.node.SpnExpressionNode;
 import spn.node.builtin.SpnBuiltin;
 import spn.type.SpnStructValue;
 
-@SpnBuiltin(name = "isSome", module = "Option", params = {"option"}, returns = "Boolean")
+@SpnBuiltin(name = "isSome", module = "Option", params = {"option"}, returns = "Boolean", receiver = "Option")
 @NodeChild("option")
 @NodeInfo(shortName = "isSome")
 public abstract class SpnIsSomeNode extends SpnExpressionNode {

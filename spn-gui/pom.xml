@@ -40,6 +40,11 @@
         </dependency>
         <dependency>
             <groupId>sibarum.spn.core</groupId>
+            <artifactId>spn-canvasgui</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>sibarum.spn.core</groupId>
             <artifactId>spn-fonts</artifactId>
             <version>${project.version}</version>
         </dependency>

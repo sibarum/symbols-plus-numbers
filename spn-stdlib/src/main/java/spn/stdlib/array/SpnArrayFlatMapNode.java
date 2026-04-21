@@ -20,7 +20,7 @@ import java.util.ArrayList;
  * Maps each element to an array, then flattens one level.
  * flatMap([1, 2, 3], fn) where fn(x) -> [x, x*2] gives [1, 2, 2, 4, 3, 6]
  */
-@SpnBuiltin(name = "arrayFlatMap", module = "Array", params = {"array"}, returns = "Array")
+@SpnBuiltin(name = "arrayFlatMap", module = "Array", params = {"array"}, returns = "Array", receiver = "Array", method = "flatMap")
 @SpnParamHint(name = "function", function = true)
 @NodeChild("array")
 @NodeInfo(shortName = "flatMap")

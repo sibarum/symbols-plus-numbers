@@ -1,6 +1,7 @@
 package spn.lang;
 
 import spn.language.SpnModuleRegistry;
+import spn.source.SourceRange;
 import spn.type.SpnSymbolTable;
 
 import java.util.ArrayList;
@@ -36,11 +37,27 @@ public final class IncrementalParser {
         this.registry = registry;
     }
 
-    /** A parse error with location info. */
+    /** A parse error with location info (editor convention: 0-based line, 0-based col). */
     public record ParseError(int line, int col, String message) {}
 
-    /** A compile-time dispatch annotation for IDE display. */
-    public record DispatchAnnotation(int line, int col, int endLine, int endCol, String description) {}
+    /**
+     * A compile-time dispatch annotation for IDE display.
+     *
+     * <p>{@code callSite} is the range in the current file where the operator
+     * or call appears. {@code targetRange} / {@code targetFile} point at the
+     * declaration this call site was resolved to — so go-to-def lands on the
+     * exact overload the parser chose, not the first name match. Both ranges
+     * are in <b>editor coordinates</b> (0-based line, 0-based col); consumers
+     * like the editor can use them directly.
+     *
+     * <p>{@code targetFile} is null when the dispatch resolved to a builtin
+     * (Java-implemented) — the declaration has no source to jump to.
+     */
+    public record DispatchAnnotation(
+            SourceRange callSite,
+            String description,
+            String targetFile,
+            SourceRange targetRange) {}
 
     /** Result of an incremental parse. */
     public record Result(
@@ -139,8 +156,16 @@ public final class IncrementalParser {
         }
 
         // Extract dispatch annotations — declarations parsed before any error
-        // still have valid dispatch info.
-        lastDispatches = extractDispatches(parser.getResolver());
+        // still have valid dispatch info. Field-access sites are merged in so
+        // the editor can go-to-def on `state.counter`-style member names.
+        lastDispatches = extractDispatches(parser.getResolver(), parser.getTypeGraph(),
+                parser.getFieldAccessSites());
+
+        // Retain parser artifacts so the IDE can answer go-to-def queries
+        // without re-parsing. A fresh parser is built on every invocation, so
+        // holding its TypeGraph + builtin names is the simplest path.
+        lastTypeGraph = parser.getTypeGraph();
+        lastBuiltinNames = Set.copyOf(parser.getBuiltinRegistry().keySet());
 
         return new Result(errors, lastDispatches, true, spans.size(), invalidated);
     }
@@ -148,33 +173,84 @@ public final class IncrementalParser {
     /** Cached dispatch annotations from the last successful parse. */
     private List<DispatchAnnotation> lastDispatches = List.of();
 
-    /** Extract dispatch annotations from a resolver into position-indexed records. */
-    private List<DispatchAnnotation> extractDispatches(TypeResolver resolver) {
-        if (resolver == null) return List.of();
-        var dispatches = resolver.allDispatches();
-        if (dispatches.isEmpty()) return List.of();
+    /** TypeGraph from the last parse. Null before any parse completes. */
+    private TypeGraph lastTypeGraph;
+
+    /** Names of every builtin available after the last parse's imports. */
+    private Set<String> lastBuiltinNames = Set.of();
+
+    /** Get the TypeGraph from the most recent parse (null before any parse). */
+    public TypeGraph getTypeGraph() {
+        return lastTypeGraph;
+    }
+
+    /** True if the given name is a stdlib builtin (Java-implemented) in the
+     *  current parse context. Only meaningful after at least one parse. */
+    public boolean isBuiltin(String name) {
+        return lastBuiltinNames.contains(name);
+    }
+
+    /** Extract dispatch annotations from a resolver into position-indexed records.
+     *  Cross-references each resolved CallTarget against the TypeGraph to
+     *  record the exact declaration site so the IDE can jump to the overload
+     *  chosen at compile time. Positions are converted to editor coordinates
+     *  (0-based line, 0-based col) here so downstream consumers don't have to.
+     *  Field-access sites (state.counter) are merged in with their target set
+     *  to the FIELD node's declaration position. */
+    private List<DispatchAnnotation> extractDispatches(TypeResolver resolver, TypeGraph typeGraph,
+                                                        List<SpnParser.FieldAccessSite> fieldSites) {
         List<DispatchAnnotation> result = new ArrayList<>();
-        for (var entry : dispatches.entrySet()) {
-            var node = entry.getKey();
-            var record = entry.getValue();
-            if (node.hasSourcePosition()) {
-                // Convert from 1-based parser lines to 0-based editor lines
-                int line = node.getSourceLine() - 1;
-                int col = node.getSourceCol();
-                int endLine = node.hasSourceSpan() ? node.getSourceEndLine() - 1 : line;
-                int endCol = node.hasSourceSpan() ? node.getSourceEndCol() : col + 1;
+
+        if (resolver != null) {
+            for (var entry : resolver.allDispatches().entrySet()) {
+                var node = entry.getKey();
+                var record = entry.getValue();
+                if (!node.hasSourcePosition()) continue;
+
+                // AST nodes use parser convention (1-based line, 0-based col);
+                // SourceRange.toEditorCoords() is the single conversion point.
+                SourceRange callRange = node.hasSourceSpan()
+                        ? new SourceRange(node.getSourceLine(), node.getSourceCol(),
+                                          node.getSourceEndLine(), node.getSourceEndCol())
+                        : SourceRange.ofToken(node.getSourceLine(), node.getSourceCol(),
+                                              node.getSourceCol() + 1);
+                SourceRange callSite = callRange.toEditorCoords();
+
                 // Build description: "+(Rational, Rational)" or "+(Rational, Rational) [int→Rational]"
                 String desc = record.resolvedTarget();
                 if (record.promotionDetail() != null) {
                     desc += " [" + record.promotionDetail() + "]";
                 }
-                result.add(new DispatchAnnotation(line, col, endLine, endCol, desc));
+
+                // Cross-reference CallTarget → declaration site. Builtins have
+                // no TypeGraph node (no source); they get null target fields.
+                String targetFile = null;
+                SourceRange targetRange = null;
+                TypeGraph.Node decl = typeGraph != null
+                        ? typeGraph.byCallTarget(record.callTarget()) : null;
+                if (decl != null && decl.file() != null && decl.nameRange().isKnown()) {
+                    targetFile = decl.file();
+                    targetRange = decl.nameRange().toEditorCoords();
+                }
+                result.add(new DispatchAnnotation(callSite, desc, targetFile, targetRange));
             }
         }
+
+        // Field-access annotations: target is the FIELD node's declaration.
+        if (fieldSites != null) {
+            for (SpnParser.FieldAccessSite fs : fieldSites) {
+                result.add(new DispatchAnnotation(
+                        fs.accessRange().toEditorCoords(),
+                        fs.description(),
+                        fs.targetFile(),
+                        fs.targetRange().toEditorCoords()));
+            }
+        }
+
         // Sort by line then col for binary search in the GUI
-        result.sort((a, b) -> a.line() != b.line()
-                ? Integer.compare(a.line(), b.line())
-                : Integer.compare(a.col(), b.col()));
+        result.sort((a, b) -> a.callSite().startLine() != b.callSite().startLine()
+                ? Integer.compare(a.callSite().startLine(), b.callSite().startLine())
+                : Integer.compare(a.callSite().startCol(), b.callSite().startCol()));
         return List.copyOf(result);
     }
 

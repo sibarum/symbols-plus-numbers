@@ -13,7 +13,7 @@ import spn.type.SpnSymbol;
 /**
  * Tests if a dictionary contains a key: hasKey({:a 1}, :a) -> true
  */
-@SpnBuiltin(name = "hasKey", module = "Dict", params = {"dict", "key"}, returns = "Boolean")
+@SpnBuiltin(name = "hasKey", module = "Dict", params = {"dict", "key"}, returns = "Boolean", receiver = "Dict")
 @NodeChild("dict")
 @NodeChild("key")
 @NodeInfo(shortName = "hasKey")

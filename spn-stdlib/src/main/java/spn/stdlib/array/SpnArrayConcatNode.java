@@ -13,7 +13,7 @@ import spn.type.SpnArrayValue;
 /**
  * Concatenates two arrays: concat([1, 2], [3, 4]) -> [1, 2, 3, 4]
  */
-@SpnBuiltin(name = "concat", module = "Array", params = {"left", "right"}, returns = "Array")
+@SpnBuiltin(name = "concat", module = "Array", params = {"left", "right"}, returns = "Array", receiver = "Array")
 @NodeChild("left")
 @NodeChild("right")
 @NodeInfo(shortName = "concat")

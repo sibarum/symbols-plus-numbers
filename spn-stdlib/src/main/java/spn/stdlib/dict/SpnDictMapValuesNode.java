@@ -25,7 +25,7 @@ import java.util.Map;
  *   mapValues({:a 1, :b 2}, double) -> {:a 2, :b 4}
  * </pre>
  */
-@SpnBuiltin(name = "mapValues", module = "Dict", params = {"dict"}, returns = "Dict")
+@SpnBuiltin(name = "mapValues", module = "Dict", params = {"dict"}, returns = "Dict", receiver = "Dict")
 @SpnParamHint(name = "function", function = true)
 @NodeChild("dict")
 @NodeInfo(shortName = "mapValues")

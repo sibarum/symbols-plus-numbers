@@ -9,7 +9,7 @@ import spn.node.SpnExpressionNode;
 import spn.node.builtin.SpnBuiltin;
 import spn.type.SpnArrayValue;
 
-@SpnBuiltin(name = "arrayMin", module = "Array", params = {"array"})
+@SpnBuiltin(name = "arrayMin", module = "Array", params = {"array"}, receiver = "Array", method = "min")
 @NodeChild("array")
 @NodeInfo(shortName = "arrayMin")
 public abstract class SpnArrayMinNode extends SpnExpressionNode {

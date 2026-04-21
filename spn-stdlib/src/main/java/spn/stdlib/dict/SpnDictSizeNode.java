@@ -15,7 +15,7 @@ import spn.type.SpnDictionaryValue;
  * Named dictSize (not size) so it doesn't collide with Set's size in the
  * stdlib registry, which keys factory methods by bare name.
  */
-@SpnBuiltin(name = "dictSize", module = "Dict", params = {"dict"}, returns = "Long")
+@SpnBuiltin(name = "dictSize", module = "Dict", params = {"dict"}, returns = "Long", receiver = "Dict", method = "size")
 @NodeChild("dict")
 @NodeInfo(shortName = "dictSize")
 public abstract class SpnDictSizeNode extends SpnExpressionNode {

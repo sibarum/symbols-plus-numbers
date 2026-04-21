@@ -21,7 +21,7 @@ import spn.type.SpnArrayValue;
  *   map([1, 2, 3], double) -> [2, 4, 6]
  * </pre>
  */
-@SpnBuiltin(name = "map", module = "Array", params = {"array"}, returns = "Array")
+@SpnBuiltin(name = "map", module = "Array", params = {"array"}, returns = "Array", receiver = "Array")
 @SpnParamHint(name = "function", function = true)
 @NodeChild("array")
 @NodeInfo(shortName = "map")

@@ -17,7 +17,7 @@ import spn.type.SpnStructValue;
  *   unwrap(None)     -> error!
  * </pre>
  */
-@SpnBuiltin(name = "unwrap", module = "Option", params = {"option"})
+@SpnBuiltin(name = "unwrap", module = "Option", params = {"option"}, receiver = "Option")
 @NodeChild("option")
 @NodeInfo(shortName = "unwrap")
 public abstract class SpnUnwrapNode extends SpnExpressionNode {

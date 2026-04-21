@@ -22,21 +22,21 @@ class ConfirmExitMode implements Mode {
     private static final String[] LABELS = { "Discard Changes", "Save", "Save As", "Cancel" };
     private static final String[] KEY_HINTS = { "1", "2", "3", "4/Esc" };
 
+    /**
+     * What the dialog should do after the user picks Save or Discard.
+     * Cancel always just dismisses the dialog, regardless of AfterAction.
+     */
+    enum AfterAction { NONE, CLOSE_WINDOW, CLOSE_TAB }
+
     private final EditorWindow window;
     private final SdfFontRenderer font;
-    private final boolean closeWindowAfter;
+    private final AfterAction afterAction;
     private int selected = 0;
 
-    /**
-     * @param closeWindowAfter whether to close the window after Save/Discard.
-     *                         Only true when the dialog was triggered by the
-     *                         window's X button; false for other triggers
-     *                         (e.g. tab close), which only dismiss the dialog.
-     */
-    ConfirmExitMode(EditorWindow window, boolean closeWindowAfter) {
+    ConfirmExitMode(EditorWindow window, AfterAction afterAction) {
         this.window = window;
         this.font = window.getFont();
-        this.closeWindowAfter = closeWindowAfter;
+        this.afterAction = afterAction;
     }
 
     @Override
@@ -132,23 +132,18 @@ class ConfirmExitMode implements Mode {
 
     private void execute(int option) {
         switch (option) {
-            case 0 -> { // Discard
-                window.popMode();
-                if (closeWindowAfter) window.requestClose();
-            }
-            case 1 -> { // Save
-                window.saveFile(false);
-                window.popMode();
-                if (closeWindowAfter) window.requestClose();
-            }
-            case 2 -> { // Save As
-                window.saveFile(true);
-                window.popMode();
-                if (closeWindowAfter) window.requestClose();
-            }
-            case 3 -> { // Cancel
-                window.popMode();
-            }
+            case 0 -> { window.popMode(); performAfterAction(); }                        // Discard
+            case 1 -> { window.saveFile(false); window.popMode(); performAfterAction(); } // Save
+            case 2 -> { window.saveFile(true);  window.popMode(); performAfterAction(); } // Save As
+            case 3 -> { window.popMode(); }                                               // Cancel
+        }
+    }
+
+    private void performAfterAction() {
+        switch (afterAction) {
+            case CLOSE_WINDOW -> window.requestClose();
+            case CLOSE_TAB    -> window.closeActiveTabDiscardingDirty();
+            case NONE         -> { /* nothing */ }
         }
     }
 

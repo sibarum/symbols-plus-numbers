@@ -44,6 +44,7 @@ public class DiagnosticEngine {
         this.registry = new SpnModuleRegistry();
         spn.stdlib.gen.StdlibModuleLoader.registerAll(registry);
         spn.canvas.CanvasBuiltins.registerModule(registry);
+        spn.canvasgui.spn.CanvasGuiBuiltins.registerModule(registry);
         registry.addLoader(new ClasspathModuleLoader(null, symbolTable));
 
         this.incrementalParser = new IncrementalParser(symbolTable, registry);
@@ -128,9 +129,9 @@ public class DiagnosticEngine {
     public String dispatchesOnLine(int line) {
         var sb = new StringBuilder();
         for (var d : dispatches) {
-            if (d.line() < line) continue;
-            if (d.line() > line && d.endLine() < line) continue;
-            if (d.line() > line) break;
+            var cs = d.callSite();
+            if (cs.startLine() < line && cs.endLine() < line) continue;
+            if (cs.startLine() > line) break;
             if (!sb.isEmpty()) sb.append("  ");
             sb.append(d.description().replace('|', '/'));
         }
@@ -142,12 +143,22 @@ public class DiagnosticEngine {
      * Returns the resolved target string or null.
      */
     public String dispatchAtCursor(int line, int col) {
+        var d = dispatchAnnotationAt(line, col);
+        return d != null ? d.description() : null;
+    }
+
+    /** The full dispatch annotation at a position (or null). Carries the
+     *  resolved call site's target range, so go-to-def can jump to the exact
+     *  overload chosen at compile time. (line, col) are in editor coordinates. */
+    public spn.lang.IncrementalParser.DispatchAnnotation dispatchAnnotationAt(int line, int col) {
         for (var d : dispatches) {
-            if (d.line() > line) break;
-            // Check if cursor is within this dispatch's span
-            boolean afterStart = d.line() < line || (d.line() == line && d.col() <= col);
-            boolean beforeEnd = d.endLine() > line || (d.endLine() == line && d.endCol() >= col);
-            if (afterStart && beforeEnd) return d.description();
+            var cs = d.callSite();
+            if (cs.startLine() > line) break;
+            boolean afterStart = cs.startLine() < line
+                    || (cs.startLine() == line && cs.startCol() <= col);
+            boolean beforeEnd = cs.endLine() > line
+                    || (cs.endLine() == line && cs.endCol() >= col);
+            if (afterStart && beforeEnd) return d;
         }
         return null;
     }
@@ -155,5 +166,15 @@ public class DiagnosticEngine {
     /** Get the incremental parser for inspection (e.g., cached spans for diffing). */
     public IncrementalParser getIncrementalParser() {
         return incrementalParser;
+    }
+
+    /** The TypeGraph from the most recent parse, or null before any parse. */
+    public spn.lang.TypeGraph getTypeGraph() {
+        return incrementalParser.getTypeGraph();
+    }
+
+    /** True if the given name is a stdlib builtin imported into the last parse. */
+    public boolean isBuiltin(String name) {
+        return incrementalParser.isBuiltin(name);
     }
 }

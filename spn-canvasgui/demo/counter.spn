@@ -1,0 +1,30 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Counter demo — stateful block + do() closures.
+-- ═══════════════════════════════════════════════════════════════════════
+-- AppState is a stateful type: heap-allocated, mutable, block-scoped.
+-- The block body sets up the UI; do() closures capture `this` and mutate
+-- fields in response to events. The render closure rebuilds the tree
+-- each frame; guiRun drives the loop.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import CanvasGui
+import String (formatNum)
+
+stateful type AppState(counter: int)
+
+AppState(0) {
+  let render = do() {
+    guiRender(
+      guiVBox([
+        guiText("Counter: " ++ formatNum(this.counter)),
+        guiHBox([
+          guiButton("−").on(:click, do() { this.counter = this.counter - 1 }),
+          guiButton("+").on(:click, do() { this.counter = this.counter + 1 }),
+        ]),
+      ])
+    )
+  }
+
+  guiWindow("Counter", 480, 200)
+  guiRun(30.0, render)
+}

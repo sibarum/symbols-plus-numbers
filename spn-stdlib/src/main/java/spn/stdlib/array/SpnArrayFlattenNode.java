@@ -15,7 +15,7 @@ import java.util.ArrayList;
 /**
  * Flattens a nested array one level: flatten([[1, 2], [3]]) -> [1, 2, 3]
  */
-@SpnBuiltin(name = "flatten", module = "Array", params = {"array"}, returns = "Array")
+@SpnBuiltin(name = "flatten", module = "Array", params = {"array"}, returns = "Array", receiver = "Array")
 @NodeChild("array")
 @NodeInfo(shortName = "flatten")
 public abstract class SpnArrayFlattenNode extends SpnExpressionNode {

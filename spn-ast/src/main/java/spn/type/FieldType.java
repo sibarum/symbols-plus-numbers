@@ -191,6 +191,10 @@ public sealed interface FieldType {
         public boolean accepts(Object value) {
             if (!(value instanceof SpnArrayValue arr)) return false;
             if (elementType instanceof Untyped) return true;
+            // Lenient: arrays tagged Untyped (e.g. built via append([], ...)) are
+            // accepted into typed slots. The caller is trusted to have the right
+            // elements; errors surface at the first operation that needs them.
+            if (arr.getElementType() instanceof Untyped) return true;
             return elementType.equals(arr.getElementType());
         }
 
@@ -209,6 +213,7 @@ public sealed interface FieldType {
         public boolean accepts(Object value) {
             if (!(value instanceof SpnSetValue sv)) return false;
             if (elementType instanceof Untyped) return true;
+            if (sv.getElementType() instanceof Untyped) return true;
             return elementType.equals(sv.getElementType());
         }
 

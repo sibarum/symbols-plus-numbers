@@ -17,7 +17,7 @@ import spn.type.SpnSetValue;
  *   toArray({:red, :green, :blue}) -> [:red, :green, :blue]
  * </pre>
  */
-@SpnBuiltin(name = "toArray", module = "Set", params = {"set"}, returns = "Array")
+@SpnBuiltin(name = "toArray", module = "Set", params = {"set"}, returns = "Array", receiver = "Set")
 @NodeChild("set")
 @NodeInfo(shortName = "toArray")
 public abstract class SpnSetToArrayNode extends SpnExpressionNode {

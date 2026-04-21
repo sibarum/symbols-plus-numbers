@@ -1039,7 +1039,35 @@ public class TextArea {
     // Coordinate mapping
     // ------------------------------------------------------------------
 
-    private int[] screenToDocPos(double mx, double my) {
+    /** Returns the identifier at (row, col), or null if the position isn't on
+     *  a word char. Used by go-to-definition to pick the symbol under a click. */
+    public String wordAt(int row, int col) {
+        if (row < 0 || row >= buffer.lineCount()) return null;
+        int[] bounds = wordBoundsAt(row, col);
+        if (bounds[0] == bounds[1]) return null;
+        return buffer.getLine(row).substring(bounds[0], bounds[1]);
+    }
+
+    /** Returns {startCol, endCol} for the identifier at (row, col), or null. */
+    public int[] wordBoundsPublic(int row, int col) {
+        if (row < 0 || row >= buffer.lineCount()) return null;
+        int[] bounds = wordBoundsAt(row, col);
+        if (bounds[0] == bounds[1]) return null;
+        return bounds;
+    }
+
+    /** Places the cursor at (row, col) and extends the selection back to the
+     *  given anchor. Scrolls the viewport so the cursor is visible. */
+    public void selectRange(int anchorRow, int anchorCol, int cursorRow, int cursorCol) {
+        int rows = buffer.lineCount();
+        this.selAnchorRow = Math.max(0, Math.min(anchorRow, rows - 1));
+        this.selAnchorCol = Math.max(0, Math.min(anchorCol, buffer.lineLength(this.selAnchorRow)));
+        this.cursorRow = Math.max(0, Math.min(cursorRow, rows - 1));
+        this.cursorCol = Math.max(0, Math.min(cursorCol, buffer.lineLength(this.cursorRow)));
+        scrollToCursor = true;
+    }
+
+    public int[] screenToDocPos(double mx, double my) {
         if (cellWidth == 0 || cellHeight == 0) return new int[]{0, 0};
         float gutter = gutterWidth();
         // Account for highlight offset so clicks align with the visual text position

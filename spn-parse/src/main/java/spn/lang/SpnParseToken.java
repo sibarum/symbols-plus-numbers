@@ -1,5 +1,7 @@
 package spn.lang;
 
+import spn.source.SourceRange;
+
 /**
  * A token with full source position, text, and type.
  * Produced by SpnTokenizer from the line-local SpnLexer output.
@@ -14,6 +16,17 @@ public record SpnParseToken(int line, int col, int endCol, String text, TokenTyp
 
     public String location() {
         return "line " + line + ", col " + col;
+    }
+
+    /** This token's span as a {@link SourceRange}. Parser convention:
+     *  1-based line, 0-based col, end exclusive. */
+    public SourceRange range() {
+        return SourceRange.ofToken(line, col, endCol);
+    }
+
+    /** A {@link SourceRange} spanning from this token's start to {@code end}'s end. */
+    public SourceRange rangeTo(SpnParseToken end) {
+        return new SourceRange(line, col, end.line(), end.endCol());
     }
 
     @Override

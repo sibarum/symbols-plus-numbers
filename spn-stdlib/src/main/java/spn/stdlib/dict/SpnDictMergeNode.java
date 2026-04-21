@@ -16,7 +16,7 @@ import spn.type.SpnDictionaryValue;
  *   merge({:a 1}, {:b 2}) -> {:a 1, :b 2}
  * </pre>
  */
-@SpnBuiltin(name = "merge", module = "Dict", params = {"left", "right"}, returns = "Dict")
+@SpnBuiltin(name = "merge", module = "Dict", params = {"left", "right"}, returns = "Dict", receiver = "Dict")
 @NodeChild("left")
 @NodeChild("right")
 @NodeInfo(shortName = "merge")

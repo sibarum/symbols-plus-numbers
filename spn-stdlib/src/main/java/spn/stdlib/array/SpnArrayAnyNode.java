@@ -20,7 +20,7 @@ import spn.type.SpnArrayValue;
  *   any([1, 2, 3], isEven) -> true
  * </pre>
  */
-@SpnBuiltin(name = "any", module = "Array", params = {"array"}, returns = "Boolean")
+@SpnBuiltin(name = "any", module = "Array", params = {"array"}, returns = "Boolean", receiver = "Array")
 @SpnParamHint(name = "predicate", function = true)
 @NodeChild("array")
 @NodeInfo(shortName = "any")

@@ -13,7 +13,7 @@ import spn.type.SpnArrayValue;
 /**
  * Returns a sub-array from start (inclusive) to end (exclusive).
  */
-@SpnBuiltin(name = "slice", module = "Array", params = {"array", "start", "end"}, returns = "Array")
+@SpnBuiltin(name = "slice", module = "Array", params = {"array", "start", "end"}, returns = "Array", receiver = "Array")
 @NodeChild("array")
 @NodeChild("start")
 @NodeChild("end")

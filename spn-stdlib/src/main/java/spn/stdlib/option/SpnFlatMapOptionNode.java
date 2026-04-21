@@ -22,7 +22,7 @@ import spn.type.SpnStructValue;
  *   flatMap(None, safeDivide)    -> None
  * </pre>
  */
-@SpnBuiltin(name = "flatMap", module = "Option", params = {"option"})
+@SpnBuiltin(name = "flatMap", module = "Option", params = {"option"}, receiver = "Option")
 @SpnParamHint(name = "function", function = true)
 @NodeChild("option")
 @NodeInfo(shortName = "flatMap")

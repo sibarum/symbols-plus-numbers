@@ -4,6 +4,7 @@ import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import spn.language.ImportDirective;
+import spn.language.MethodEntry;
 import spn.language.SpnLanguage;
 import spn.language.SpnModule;
 import spn.language.SpnModuleRegistry;
@@ -65,9 +66,22 @@ public class SpnParser {
     private final Map<String, spn.node.BuiltinFactory> builtinRegistry = new LinkedHashMap<>();
     private final Set<String> impureBuiltins = new HashSet<>();
 
-    // Method registry: "TypeName.methodName" → (CallTarget, SpnFunctionDescriptor)
-    record MethodEntry(CallTarget callTarget, SpnFunctionDescriptor descriptor) {}
+    // Method registry: "TypeName.methodName" → (CallTarget, SpnFunctionDescriptor).
+    // MethodEntry lives in spn.language so stdlib's generated module loader can
+    // construct registrations without depending on spn-parse.
     private final Map<String, MethodEntry> methodRegistry = new LinkedHashMap<>();
+
+    // Method factory registry: "TypeName.methodName" → BuiltinFactory. Used for
+    // higher-order methods like arr.map(fn) where the function argument must
+    // be baked into a fresh CallTarget per call site (same pattern as flat
+    // higher-order builtins). Populated from stdlib modules' "methodFactories"
+    // extras. Checked as a fallback when methodRegistry has no entry.
+    private final Map<String, spn.node.BuiltinFactory> methodFactories = new LinkedHashMap<>();
+
+    // Return-type descriptors paired with methodFactories entries — lets the
+    // parser track the method result's type so chained calls like
+    // arr.map(fn).length() can dispatch. Same key format.
+    private final Map<String, SpnFunctionDescriptor> methodFactoryDescriptors = new LinkedHashMap<>();
 
     // Factory registry: "TypeName" → list of (CallTarget, arity) for overloaded factories
     record FactoryEntry(CallTarget callTarget, int arity, SpnFunctionDescriptor descriptor) {}
@@ -399,6 +413,7 @@ public class SpnParser {
             case "version" -> { skipVersionDecl(); yield null; }
             case "require" -> { skipRequireDecl(); yield null; }
             case "type" -> { parseTypeDecl(); yield null; }
+            case "stateful" -> { parseStatefulTypeDecl(); yield null; }
             case "data" -> { parseDataDecl(); yield null; }
             case "struct" -> { parseStructAsType(); yield null; }
             case "pure" -> parseFuncDecl(true);
@@ -713,7 +728,7 @@ public class SpnParser {
         if (sd != null) {
             structRegistry.put(targetName, sd);
             typeGraph.add(TypeGraph.Node.builder(targetName, TypeGraph.Kind.TYPE)
-                    .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                    .file(sourceName).nameRange(nameTok.range())
                     .structDescriptor(sd).build());
         }
 
@@ -1358,9 +1373,17 @@ public class SpnParser {
             impureBuiltins.addAll(module.getBuiltinFactories().keySet());
             impureBuiltins.addAll(module.getFunctions().keySet());
         }
+        // Per-function impurity: modules that are mostly-pure can still flag
+        // specific builtins as impure via the "impureFunctions" extras set.
+        Set<String> perFnImpure = module.getExtra("impureFunctions");
+        if (perFnImpure != null) impureBuiltins.addAll(perFnImpure);
         // Import extended registries (methods, factories, operators, descriptors)
         Map<String, MethodEntry> methods = module.getExtra("methods");
         if (methods != null) methodRegistry.putAll(methods);
+        Map<String, spn.node.BuiltinFactory> methodFacs = module.getExtra("methodFactories");
+        if (methodFacs != null) methodFactories.putAll(methodFacs);
+        Map<String, SpnFunctionDescriptor> methodFacDescs = module.getExtra("methodFactoryDescriptors");
+        if (methodFacDescs != null) methodFactoryDescriptors.putAll(methodFacDescs);
         Map<String, List<FactoryEntry>> factories = module.getExtra("factories");
         if (factories != null) {
             for (var entry : factories.entrySet()) {
@@ -1491,6 +1514,42 @@ public class SpnParser {
 
     // ── Type declarations ──────────────────────────────────────────────────
 
+    /**
+     * Parse: {@code stateful type Name(field1: T1, field2: T2, ...)}
+     *
+     * <p>Registers the type name as stateful. Construction is only allowed
+     * via the block form {@code Name(args) { body }} — not as a bare call.
+     * Inside the block body, {@code this.*} accesses mutable fields on a
+     * heap-allocated instance whose lifetime is bounded by the block.
+     *
+     * <p>Ad-hoc fields (not in the declared list) are permitted — they're
+     * inferred sequentially during block-body parsing via {@code this.x = expr}.
+     */
+    private void parseStatefulTypeDecl() {
+        SpnParseToken statefulTok = tokens.expect("stateful");
+        tokens.expect("type");
+        SpnParseToken nameTok = tokens.expectType(TokenType.TYPE_NAME);
+        String name = nameTok.text();
+
+        tokens.expect("(");
+        LinkedHashMap<String, FieldType> declared = new LinkedHashMap<>();
+        while (!tokens.check(")")) {
+            SpnParseToken fieldTok = tokens.advance();
+            String fieldName = fieldTok.text();
+            tokens.expect(":");
+            FieldType ft = parseFieldType();
+            declared.put(fieldName, ft);
+            recordFieldNode(name, fieldName, fieldTok);
+            tokens.match(",");
+        }
+        tokens.expect(")");
+
+        statefulTypes.add(name);
+        statefulDeclaredShapes.put(name, declared);
+        typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.TYPE)
+                .file(sourceName).nameRange(nameTok.range()).build());
+    }
+
     private void parseTypeDecl() {
         SpnParseToken typeTok = tokens.expect("type");
         SpnParseToken nameTok = tokens.expectType(TokenType.TYPE_NAME);
@@ -1544,7 +1603,7 @@ public class SpnParser {
             SpnTypeDescriptor td = builder.build();
             typeRegistry.put(name, td);
             typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.TYPE)
-                    .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                    .file(sourceName).nameRange(nameTok.range())
                     .typeDescriptor(td).build());
             return;
         }
@@ -1560,7 +1619,7 @@ public class SpnParser {
             SpnTypeDescriptor td = builder.build();
             typeRegistry.put(name, td);
             typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.TYPE)
-                    .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                    .file(sourceName).nameRange(nameTok.range())
                     .typeDescriptor(td).build());
             return;
         }
@@ -1574,11 +1633,13 @@ public class SpnParser {
             while (!tokens.check(")")) {
                 SpnParseToken second = tokens.peek(1);
                 if (second != null && second.text().equals(":")) {
-                    String compName = tokens.advance().text();
+                    SpnParseToken compTok = tokens.advance();
+                    String compName = compTok.text();
                     tokens.expect(":");
                     FieldType ft = parseFieldType();
                     builder.component(compName, ft);
                     structBuilder.field(compName, ft);
+                    recordFieldNode(name, compName, compTok);
                 } else {
                     FieldType ft = parseFieldType();
                     String compName = "_" + position;
@@ -1597,7 +1658,7 @@ public class SpnParser {
             typeRegistry.put(name, td);
             structRegistry.put(name, sd);
             typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.TYPE)
-                    .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                    .file(sourceName).nameRange(nameTok.range())
                     .typeDescriptor(td).structDescriptor(sd).build());
             return;
         }
@@ -1608,7 +1669,7 @@ public class SpnParser {
         SpnStructDescriptor sd = SpnStructDescriptor.builder(name).build();
         structRegistry.put(name, sd);
         typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.STRUCT)
-                .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                .file(sourceName).nameRange(nameTok.range())
                 .structDescriptor(sd).build());
     }
 
@@ -1660,6 +1721,7 @@ public class SpnParser {
      * Registers a promotion rule for compile-time operator dispatch.
      */
     private void parsePromoteDecl() {
+        SpnParseToken promoteTok = tokens.peek();
         tokens.expect("promote");
         FieldType sourceType = parseFieldType();
         tokens.expect("->");
@@ -1676,7 +1738,9 @@ public class SpnParser {
             typeGraph.add(TypeGraph.Node.builder(
                     "promote " + sourceType.describe() + " -> " + targetType.describe(),
                     TypeGraph.Kind.PROMOTION)
-                    .file(sourceName).callTarget(ref.getCallTarget())
+                    .file(sourceName)
+                    .nameRange(promoteTok != null ? promoteTok.range() : spn.source.SourceRange.UNKNOWN)
+                    .callTarget(ref.getCallTarget())
                     .paramTypes(sourceType).returnType(targetType)
                     .build());
         }
@@ -1695,14 +1759,17 @@ public class SpnParser {
                 // Destructured param: (a, b) — fields of sourceType
                 tokens.advance();
                 List<String> bindings = new ArrayList<>();
+                List<SpnParseToken> bindToks = new ArrayList<>();
                 while (!tokens.check(")")) {
-                    bindings.add(tokens.advance().text());
+                    SpnParseToken t = tokens.advance();
+                    bindings.add(t.text());
+                    bindToks.add(t);
                     tokens.match(",");
                 }
                 tokens.expect(")");
-                params.add(ParamDecl.destructured(bindings));
+                params.add(ParamDecl.destructured(bindings, bindToks));
             } else {
-                params.add(ParamDecl.simple(tokens.advance().text()));
+                params.add(ParamDecl.simple(tokens.advance()));
             }
             tokens.match(",");
         }
@@ -1737,6 +1804,10 @@ public class SpnParser {
                         FieldType fieldType = (desc != null && j < desc.fieldCount())
                                 ? desc.fieldType(j) : null;
                         bindSlots[j] = currentScope.addLocal(bn, fieldType);
+                        if (p.destructureToks() != null && j < p.destructureToks().size()) {
+                            recordLocalBinding(bn, p.destructureToks().get(j),
+                                    TypeGraph.Kind.PARAMETER);
+                        }
                     }
                 }
                 destructureNodes.add(new spn.node.local.SpnDestructureNode(
@@ -1745,6 +1816,7 @@ public class SpnParser {
                 FieldType ft = i < paramTypes.size() ? paramTypes.get(i) : null;
                 paramSlots[i] = currentScope.addLocal(p.name(), ft);
                 paramNames.add(p.name());
+                recordLocalBinding(p.name(), p.nameTok(), TypeGraph.Kind.PARAMETER);
             }
         }
 
@@ -1798,7 +1870,7 @@ public class SpnParser {
         SpnVariantSet vs = new SpnVariantSet(name, variants.toArray(new SpnStructDescriptor[0]));
         variantRegistry.put(name, vs);
         typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.VARIANT)
-                .file(sourceName).line(nameTok.line()).col(nameTok.col())
+                .file(sourceName).nameRange(nameTok.range())
                 .variantSet(vs).build());
     }
 
@@ -1853,7 +1925,8 @@ public class SpnParser {
         for (String tp : typeParams) structBuilder.typeParam(tp);
 
         while (!tokens.check(")")) {
-            String fieldName = tokens.expectType(TokenType.IDENTIFIER).text();
+            SpnParseToken fieldTok = tokens.expectType(TokenType.IDENTIFIER);
+            String fieldName = fieldTok.text();
             if (tokens.match(":")) {
                 FieldType ft = parseFieldType();
                 typeBuilder.component(fieldName, ft);
@@ -1862,6 +1935,7 @@ public class SpnParser {
                 typeBuilder.component(fieldName, FieldType.UNTYPED);
                 structBuilder.field(fieldName);
             }
+            recordFieldNode(name, fieldName, fieldTok);
             tokens.match(",");
         }
         tokens.expect(")");
@@ -1935,7 +2009,7 @@ public class SpnParser {
         tokens.expect("=");
         String outerMethodType = currentMethodTypeName;
         currentMethodTypeName = typeName;
-        parseFunctionBody(methodKey, paramTypes, returnType, isPure, true);
+        parseFunctionBody(methodKey, paramTypes, returnType, isPure, true, methodTok);
         currentMethodTypeName = outerMethodType;
         return null;
     }
@@ -1962,7 +2036,7 @@ public class SpnParser {
         currentFactoryTypeName = typeName;
         currentFactoryArity = paramTypes.size();
 
-        parseFunctionBody(qualifiedName, paramTypes, returnType, isPure, false);
+        parseFunctionBody(qualifiedName, paramTypes, returnType, isPure, false, nameTok);
 
         currentFactoryTypeName = outerFactory;
         currentFactoryArity = outerArity;
@@ -1993,7 +2067,7 @@ public class SpnParser {
         }
         tokens.expect("=");
 
-        parseFunctionBody(name, paramTypes, returnType, isPure, false);
+        parseFunctionBody(name, paramTypes, returnType, isPure, false, declTok);
 
         // Register operator overload + enforce the unary/binary mutex.
         if (isOperator && !paramTypes.isEmpty()) {
@@ -2019,7 +2093,8 @@ public class SpnParser {
                 operatorRegistry.computeIfAbsent(name, k -> new ArrayList<>())
                         .add(new OperatorOverload(pts, returnType, ct));
                 typeGraph.add(TypeGraph.Node.builder(name, TypeGraph.Kind.OPERATOR)
-                        .file(sourceName).callTarget(ct)
+                        .file(sourceName).nameRange(declTok.range())
+                        .callTarget(ct)
                         .paramTypes(pts).returnType(returnType).pure(isPure)
                         .build());
             }
@@ -2060,20 +2135,40 @@ public class SpnParser {
         }
     }
 
-    /** A parameter binding: either a simple name or a positional destructure (a, b, c). */
-    private record ParamDecl(String name, List<String> destructureBindings) {
+    /** A parameter binding: either a simple name or a positional destructure
+     *  (a, b, c). Tokens are retained so TypeGraph nodes can record the name
+     *  position; they may be null for synthesized params ({@code this}). */
+    private record ParamDecl(
+            String name, SpnParseToken nameTok,
+            List<String> destructureBindings, List<SpnParseToken> destructureToks) {
         boolean isDestructured() { return destructureBindings != null; }
-        static ParamDecl simple(String name) { return new ParamDecl(name, null); }
-        static ParamDecl destructured(List<String> bindings) { return new ParamDecl(null, bindings); }
+        static ParamDecl simple(String name) { return new ParamDecl(name, null, null, null); }
+        static ParamDecl simple(SpnParseToken tok) {
+            return new ParamDecl(tok.text(), tok, null, null);
+        }
+        static ParamDecl destructured(List<String> bindings, List<SpnParseToken> toks) {
+            return new ParamDecl(null, null, bindings, toks);
+        }
     }
 
     private SpnStatementNode parseFunctionBody(String name, List<FieldType> paramTypes,
                                                 FieldType returnType, boolean isPure) {
-        return parseFunctionBody(name, paramTypes, returnType, isPure, false);
+        return parseFunctionBody(name, paramTypes, returnType, isPure, false, null);
     }
 
     private SpnStatementNode parseFunctionBody(String name, List<FieldType> paramTypes,
                                                 FieldType returnType, boolean isPure, boolean isMethod) {
+        return parseFunctionBody(name, paramTypes, returnType, isPure, isMethod, null);
+    }
+
+    /**
+     * @param nameTok position of the function's name identifier. When non-null,
+     *   the TypeGraph node records the name's line/col so go-to-def lands on
+     *   the declaration name itself rather than the opening brace of the body.
+     */
+    private SpnStatementNode parseFunctionBody(String name, List<FieldType> paramTypes,
+                                                FieldType returnType, boolean isPure, boolean isMethod,
+                                                SpnParseToken nameTok) {
         tokens.expect("(");
         List<ParamDecl> params = new ArrayList<>();
 
@@ -2087,15 +2182,18 @@ public class SpnParser {
                 // Destructured param: (a, b, c) — positional, type known from signature
                 tokens.advance();
                 List<String> bindings = new ArrayList<>();
+                List<SpnParseToken> bindToks = new ArrayList<>();
                 while (!tokens.check(")")) {
-                    bindings.add(tokens.advance().text());
+                    SpnParseToken t = tokens.advance();
+                    bindings.add(t.text());
+                    bindToks.add(t);
                     tokens.match(",");
                 }
                 tokens.expect(")");
-                params.add(ParamDecl.destructured(bindings));
+                params.add(ParamDecl.destructured(bindings, bindToks));
             } else {
                 // Simple param: name
-                params.add(ParamDecl.simple(tokens.expectType(TokenType.IDENTIFIER).text()));
+                params.add(ParamDecl.simple(tokens.expectType(TokenType.IDENTIFIER)));
             }
             tokens.match(",");
         }
@@ -2135,6 +2233,10 @@ public class SpnParser {
                         FieldType fieldType = (desc != null && j < desc.fieldCount())
                                 ? desc.fieldType(j) : null;
                         bindSlots[j] = currentScope.addLocal(bn, fieldType);
+                        if (p.destructureToks() != null && j < p.destructureToks().size()) {
+                            recordLocalBinding(bn, p.destructureToks().get(j),
+                                    TypeGraph.Kind.PARAMETER);
+                        }
                     }
                 }
                 destructureNodes.add(new spn.node.local.SpnDestructureNode(
@@ -2143,6 +2245,7 @@ public class SpnParser {
                 FieldType ft = i < paramTypes.size() ? paramTypes.get(i) : null;
                 userParamSlots[i] = currentScope.addLocal(p.name(), ft);
                 paramNames.add(p.name());
+                recordLocalBinding(p.name(), p.nameTok(), TypeGraph.Kind.PARAMETER);
             }
         }
         // Yield context slot — always allocated in frame, used by yield nodes
@@ -2232,14 +2335,17 @@ public class SpnParser {
         }
         functionDescriptorRegistry.put(name, descriptor);
 
-        // Record in TypeGraph
+        // Record in TypeGraph. The name token is the canonical go-to-def
+        // landing point; bodyTok is a last-resort fallback if no caller
+        // captured a name (shouldn't happen for well-formed declarations).
         TypeGraph.Kind gKind = isMethod ? TypeGraph.Kind.METHOD : TypeGraph.Kind.FUNCTION;
-        TypeGraph.Node.Builder gb = TypeGraph.Node.builder(name, gKind)
+        SpnParseToken posTok = nameTok != null ? nameTok : bodyTok;
+        typeGraph.add(TypeGraph.Node.builder(name, gKind)
                 .file(sourceName).pure(isPure).callTarget(callTarget)
                 .functionDescriptor(descriptor).returnType(returnType)
-                .paramTypes(paramTypes.toArray(new FieldType[0]));
-        if (bodyTok != null) gb.line(bodyTok.line()).col(bodyTok.col());
-        typeGraph.add(gb.build());
+                .paramTypes(paramTypes.toArray(new FieldType[0]))
+                .nameRange(posTok != null ? posTok.range() : spn.source.SourceRange.UNKNOWN)
+                .build());
 
         // Patch any deferred self-calls
         patchDeferredCalls(name, callTarget);
@@ -2257,6 +2363,28 @@ public class SpnParser {
     private String currentMethodTypeName;  // non-null when inside a method body (for private field access)
     private int currentFactoryArity;      // arity of the factory being parsed
     private final List<SpnDeferredInvokeNode> deferredCalls = new ArrayList<>();
+
+    // Stateful types (`stateful type T(fields)`) — heap-allocated, mutable,
+    // block-scoped instances. Declared fields are stored per type; the
+    // currently-open stateful block (if any) tracks the in-scope `this`
+    // slot and the growing shape for ad-hoc field inference.
+    private final Set<String> statefulTypes = new HashSet<>();
+    private final Map<String, LinkedHashMap<String, FieldType>> statefulDeclaredShapes = new LinkedHashMap<>();
+    private StatefulBlockContext currentStatefulBlock;
+
+    private static final class StatefulBlockContext {
+        final String typeName;
+        final LinkedHashMap<String, FieldType> shape;
+        final int thisSlot;
+        boolean inDoBody;
+
+        StatefulBlockContext(String typeName, LinkedHashMap<String, FieldType> shape, int thisSlot) {
+            this.typeName = typeName;
+            this.shape = shape;
+            this.thisSlot = thisSlot;
+            this.inDoBody = false;
+        }
+    }
 
     private void patchDeferredCalls(String name, CallTarget target) {
         var it = deferredCalls.iterator();
@@ -2353,7 +2481,8 @@ public class SpnParser {
             return SpnWriteLocalVariableNodeGen.create(value, slot);
         }
 
-        String name = expectIdentifier().text();
+        SpnParseToken nameTok = expectIdentifier();
+        String name = nameTok.text();
 
         // Check: `let name = macroCall(...)` → macro handle binding.
         // Bind `name` as a compile-time namespace over the macro's emit bundle;
@@ -2386,9 +2515,68 @@ public class SpnParser {
         // Infer the type for compile-time operator dispatch
         FieldType inferredType = annotatedType != null ? annotatedType : inferType(value);
         int slot = currentScope.addLocal(name, inferredType);
+        recordLocalBinding(name, nameTok, TypeGraph.Kind.LOCAL_BINDING);
         var writeNode = SpnWriteLocalVariableNodeGen.create(value, slot);
         writeNode.setVariableName(name);
         return writeNode;
+    }
+
+    /** Emit a TypeGraph node for a local binding or parameter. Exposes the
+     *  name's source position so go-to-def can land on it without text
+     *  scanning. Only records when a nameTok is available (internal bindings
+     *  like {@code __yieldCtx__} and {@code __param_0__} are skipped). */
+    private void recordLocalBinding(String name, SpnParseToken nameTok, TypeGraph.Kind kind) {
+        if (nameTok == null || name == null || name.startsWith("__")) return;
+        typeGraph.add(TypeGraph.Node.builder(name, kind)
+                .file(sourceName)
+                .nameRange(nameTok.range())
+                .build());
+    }
+
+    /** Emit a TypeGraph FIELD node for a struct component. Stored with the
+     *  composite name {@code TypeName.fieldName} so field-access dispatches
+     *  can look it up unambiguously across types. */
+    private void recordFieldNode(String typeName, String fieldName, SpnParseToken nameTok) {
+        if (nameTok == null || typeName == null || fieldName == null) return;
+        typeGraph.add(TypeGraph.Node.builder(typeName + "." + fieldName, TypeGraph.Kind.FIELD)
+                .file(sourceName)
+                .nameRange(nameTok.range())
+                .build());
+    }
+
+    /**
+     * Annotations for field-access sites like {@code state.counter}. Parser
+     * populates this as it resolves accesses; {@link IncrementalParser} merges
+     * them into the final {@link IncrementalParser.DispatchAnnotation} list so
+     * the editor can go-to-def on field names.
+     *
+     * <p>Raw form (not yet converted to editor coords): accessRange is the
+     * field-name token's range in this file, targetRange is the field
+     * declaration's nameRange (both in parser convention).
+     */
+    record FieldAccessSite(spn.source.SourceRange accessRange, String description,
+                           String targetFile, spn.source.SourceRange targetRange) {}
+
+    private final List<FieldAccessSite> fieldAccessSites = new ArrayList<>();
+
+    public List<FieldAccessSite> getFieldAccessSites() {
+        return fieldAccessSites;
+    }
+
+    /** Record a field access for IDE go-to-def. Called from the field-access
+     *  parser once the owner type and field are resolved. No-op if the owner
+     *  type has no FIELD node in the TypeGraph (e.g., tuples, opaque types). */
+    private void recordFieldAccess(SpnParseToken nameTok, FieldType receiverType, String fieldName) {
+        if (nameTok == null || receiverType == null || fieldName == null) return;
+        String typeName = resolver.resolveTypeName(receiverType);
+        if (typeName == null) return;
+        TypeGraph.Node decl = typeGraph.lookupFirst(typeName + "." + fieldName);
+        if (decl == null || !decl.nameRange().isKnown() || decl.file() == null) return;
+        fieldAccessSites.add(new FieldAccessSite(
+                nameTok.range(),
+                typeName + "." + fieldName,
+                decl.file(),
+                decl.nameRange()));
     }
 
     /**
@@ -2399,9 +2587,11 @@ public class SpnParser {
         String typeName = tokens.advance().text(); // consume type name
         tokens.expect("(");
         List<String> bindNames = new ArrayList<>();
+        List<SpnParseToken> bindToks = new ArrayList<>();
         while (!tokens.check(")")) {
-            String bname = tokens.advance().text();
-            bindNames.add(bname);
+            SpnParseToken bindTok = tokens.advance();
+            bindNames.add(bindTok.text());
+            bindToks.add(bindTok);
             tokens.match(",");
         }
         tokens.expect(")");
@@ -2423,6 +2613,7 @@ public class SpnParser {
                     fieldType = desc.fieldType(i);
                 }
                 slots[i] = currentScope.addLocal(bn, fieldType);
+                recordLocalBinding(bn, bindToks.get(i), TypeGraph.Kind.LOCAL_BINDING);
             }
         }
 
@@ -2437,9 +2628,11 @@ public class SpnParser {
     private SpnStatementNode parseLetTupleDestructure() {
         tokens.expect("(");
         List<String> bindNames = new ArrayList<>();
+        List<SpnParseToken> bindToks = new ArrayList<>();
         while (!tokens.check(")")) {
-            String bname = tokens.advance().text();
-            bindNames.add(bname);
+            SpnParseToken bindTok = tokens.advance();
+            bindNames.add(bindTok.text());
+            bindToks.add(bindTok);
             tokens.match(",");
         }
         tokens.expect(")");
@@ -2473,6 +2666,7 @@ public class SpnParser {
                     fieldType = tupleElementTypes[i];
                 }
                 slots[i] = currentScope.addLocal(bn, fieldType);
+                recordLocalBinding(bn, bindToks.get(i), TypeGraph.Kind.LOCAL_BINDING);
             }
         }
 
@@ -2752,6 +2946,25 @@ public class SpnParser {
                 SpnExpressionNode value = parseExpression();
                 return SpnWriteLocalVariableNodeGen.create(value, wrapper.slot);
             }
+            // this.x = expr  — stateful field write. If the field is new,
+            // register it in the current shape (block-body only; do() bodies
+            // can't introduce new fields).
+            if (expr instanceof spn.node.stateful.SpnStatefulFieldReadNode fieldRead
+                    && currentStatefulBlock != null) {
+                SpnExpressionNode value = parseExpression();
+                String fieldName = fieldRead.getFieldName();
+                if (!currentStatefulBlock.shape.containsKey(fieldName)) {
+                    if (currentStatefulBlock.inDoBody) {
+                        throw tokens.error("Cannot introduce new field '" + fieldName
+                                + "' inside a do() body; add it in the block body first");
+                    }
+                    FieldType inferred = inferType(value);
+                    currentStatefulBlock.shape.put(fieldName,
+                            inferred != null ? inferred : FieldType.UNTYPED);
+                }
+                return new spn.node.stateful.SpnStatefulFieldWriteNode(
+                        fieldRead.getInstanceExpr(), fieldName, value);
+            }
             throw tokens.error("Invalid assignment target");
         }
 
@@ -2993,10 +3206,16 @@ public class SpnParser {
             // Indexing: expr[index]
             if (tokens.check("[")) {
                 requireTyped(expr, "indexing");
+                // Capture the receiver type BEFORE the access node replaces expr,
+                // so we can propagate the element type if it's known.
+                FieldType receiverType = inferType(expr);
                 tokens.advance();
                 SpnExpressionNode index = parseExpression();
                 tokens.expect("]");
                 expr = SpnArrayAccessNodeGen.create(expr, index);
+                if (receiverType instanceof FieldType.OfArray oa) {
+                    trackType(expr, oa.elementType());
+                }
                 continue;
             }
 
@@ -3054,8 +3273,37 @@ public class SpnParser {
                             trackType(expr, method.descriptor().getReturnType());
                         }
                     } else {
-                        throw tokens.error("Unknown method '" + memberName + "'"
-                                + (receiverType != null ? " on type " + receiverType.describe() : ""), nameTok);
+                        // Fallback: method factory for higher-order stdlib
+                        // methods like arr.map(fn). The factory bakes the
+                        // function arg into a per-call-site CallTarget, same
+                        // pattern as its flat-function twin.
+                        spn.node.BuiltinFactory factory = lookupMethodFactory(receiverType, memberName);
+                        if (factory == null) {
+                            String aliased = qualifiedKeyAliases.get(memberName);
+                            if (aliased != null) {
+                                factory = lookupMethodFactory(receiverType, aliased);
+                            }
+                        }
+                        if (factory != null) {
+                            SpnExpressionNode[] combined = new SpnExpressionNode[args.size() + 1];
+                            combined[0] = expr;
+                            for (int i = 0; i < args.size(); i++) combined[i + 1] = args.get(i);
+                            expr = factory.create(combined);
+                            // Track return type from the paired descriptor so
+                            // chains like arr.map(fn).length() can dispatch
+                            // on the result.
+                            String typeName = resolver.resolveTypeName(receiverType);
+                            if (typeName != null) {
+                                SpnFunctionDescriptor methodDesc =
+                                        methodFactoryDescriptors.get(typeName + "." + memberName);
+                                if (methodDesc != null && methodDesc.hasTypedReturn()) {
+                                    trackType(expr, methodDesc.getReturnType());
+                                }
+                            }
+                        } else {
+                            throw tokens.error("Unknown method '" + memberName + "'"
+                                    + (receiverType != null ? " on type " + receiverType.describe() : ""), nameTok);
+                        }
                     }
                 } else {
                     // Field access: expr.field
@@ -3065,6 +3313,10 @@ public class SpnParser {
 
                     // Track the field's type if known (from the receiver's descriptor)
                     trackFieldType(expr, memberName, receiverType);
+
+                    // Record for go-to-def so the editor can jump to the
+                    // field's declaration in the type definition.
+                    recordFieldAccess(nameTok, receiverType, memberName);
                 }
                 continue;
             }
@@ -3139,6 +3391,14 @@ public class SpnParser {
         if (ft != null) trackType(accessNode, ft);
     }
 
+    /** Look up a stdlib method factory for higher-order calls like arr.map(fn). */
+    private spn.node.BuiltinFactory lookupMethodFactory(FieldType receiverType, String methodName) {
+        if (receiverType == null || methodFactories.isEmpty()) return null;
+        String typeName = resolver.resolveTypeName(receiverType);
+        if (typeName == null) return null;
+        return methodFactories.get(typeName + "." + methodName);
+    }
+
     private MethodEntry resolveMethod(FieldType receiverType, String methodName) {
         return resolver.resolveMethod(receiverType, methodName);
     }
@@ -3192,9 +3452,21 @@ public class SpnParser {
             return parseCollectionLiteral();
         }
 
-        // Parenthesized expression or tuple
+        // Lambda expression: (params) -> body   OR   parenthesized expression / tuple
         if (tok.text().equals("(")) {
+            if (looksLikeLambda()) {
+                return parseLambda();
+            }
             return parseParenOrTuple();
+        }
+
+        // do(params) { body } — closure bound to the current stateful `this`.
+        // Only valid inside a stateful block; otherwise `do` is parsed elsewhere.
+        if (tok.text().equals("do")) {
+            SpnParseToken next = tokens.peek(1);
+            if (next != null && next.text().equals("(")) {
+                return parseDoClosure();
+            }
         }
 
         // Block: { statements... expr }
@@ -3275,6 +3547,12 @@ public class SpnParser {
         if (name.equals("true")) return new SpnBooleanLiteralNode(true);
         if (name.equals("false")) return new SpnBooleanLiteralNode(false);
 
+        // this.x inside a stateful block → read field from the in-scope instance.
+        // Writes (`this.x = expr`) are rewritten in parseExpressionStatement.
+        if (name.equals("this") && currentStatefulBlock != null && tokens.check(".")) {
+            return parseStatefulThisAccess(tok);
+        }
+
         // this(args) inside a factory body → raw construction
         if (name.equals("this") && currentFactoryTypeName != null && tokens.check("(")) {
             tokens.advance(); // consume '('
@@ -3344,7 +3622,14 @@ public class SpnParser {
             spn.node.BuiltinFactory builtin = builtinRegistry.get(name);
             if (builtin != null) {
                 checkPurityViolation(name, tok);
-                return builtin.create(args.toArray(new SpnExpressionNode[0]));
+                SpnExpressionNode node = builtin.create(args.toArray(new SpnExpressionNode[0]));
+                // Track return type from descriptor so chained calls can
+                // dispatch (e.g. arr.map(fn).length()).
+                SpnFunctionDescriptor builtinDesc = functionDescriptorRegistry.get(name);
+                if (builtinDesc != null && builtinDesc.hasTypedReturn()) {
+                    trackType(node, builtinDesc.getReturnType());
+                }
+                return node;
             }
 
             // Self-recursive call — the function is being defined right now.
@@ -3469,6 +3754,17 @@ public class SpnParser {
         }
         tokens.expect(")");
 
+        // Stateful block: T(args) { body } where T was declared `stateful type`.
+        // Only valid when followed by `{`. Bare T(args) on a stateful type is an error.
+        if (statefulTypes.contains(name)) {
+            if (!tokens.check("{")) {
+                throw tokens.error("Stateful type '" + name
+                        + "' must be constructed in block form: " + name + "(args) { body }",
+                        nameTok);
+            }
+            return parseStatefulBlock(name, args, nameTok);
+        }
+
         // Inside a factory body, TypeName(args) with same type AND arity is recursive — reject it.
         // The user should use this(args) for raw construction.
         // Different arity is fine (chaining between overloads).
@@ -3550,7 +3846,11 @@ public class SpnParser {
 
         if (tokens.check("]")) {
             tokens.advance();
-            return new SpnArrayLiteralNode(FieldType.UNTYPED);
+            SpnArrayLiteralNode empty = new SpnArrayLiteralNode(FieldType.UNTYPED);
+            // Track as Array with untyped elements so method dispatch on the
+            // literal (e.g. `[].append(1)`) finds Array.append.
+            trackType(empty, FieldType.ofArray(FieldType.UNTYPED));
+            return empty;
         }
 
         // Peek to determine: is this a dict (first element is :key value)?
@@ -3573,8 +3873,10 @@ public class SpnParser {
         }
         tokens.expect("]");
 
-        return new SpnArrayLiteralNode(FieldType.UNTYPED,
+        SpnArrayLiteralNode lit = new SpnArrayLiteralNode(FieldType.UNTYPED,
                 elements.toArray(new SpnExpressionNode[0]));
+        trackType(lit, FieldType.ofArray(FieldType.UNTYPED));
+        return lit;
     }
 
     private SpnExpressionNode parseDictLiteral() {
@@ -3593,6 +3895,220 @@ public class SpnParser {
         return new SpnDictionaryLiteralNode(FieldType.UNTYPED,
                 keys.toArray(new SpnSymbol[0]),
                 values.toArray(new SpnExpressionNode[0]));
+    }
+
+    // ── Lambda expression ──────────────────────────────────────────────────
+    //
+    // Syntax: (params) -> expr
+    //   - zero args:  () -> expr
+    //   - one arg:    (x) -> expr
+    //   - multi:      (x, y, z) -> expr
+    //
+    // Params are untyped. Body is a single expression (use a {...} block for
+    // multi-statement bodies). Lambdas do NOT close over outer locals —
+    // they run in their own frame. Referencing a name defined in the
+    // enclosing scope from inside a lambda body will fail with "Unknown
+    // variable". If you need a closure, declare a named function and pass
+    // its reference.
+
+    /**
+     * Peek ahead to decide if the current '(' begins a lambda. A lambda's
+     * header matches the grammar {@code ( ) | ( ident ( , ident )* )}
+     * and is immediately followed by {@code ->}. Anything else (typed
+     * params, expressions, tuple literals) falls back to parenOrTuple.
+     */
+    private boolean looksLikeLambda() {
+        int i = 1;
+        SpnParseToken t = tokens.peek(i);
+        if (t == null) return false;
+        if (t.text().equals(")")) {
+            SpnParseToken next = tokens.peek(i + 1);
+            return next != null && next.text().equals("->");
+        }
+        while (true) {
+            t = tokens.peek(i);
+            if (t == null) return false;
+            if (t.type() != TokenType.IDENTIFIER) return false;
+            i++;
+            t = tokens.peek(i);
+            if (t == null) return false;
+            if (t.text().equals(")")) {
+                SpnParseToken next = tokens.peek(i + 1);
+                return next != null && next.text().equals("->");
+            }
+            if (!t.text().equals(",")) return false;
+            i++;
+        }
+    }
+
+    private SpnExpressionNode parseLambda() {
+        SpnParseToken openTok = tokens.expect("(");
+        List<String> paramNames = new ArrayList<>();
+        while (!tokens.check(")")) {
+            SpnParseToken pTok = tokens.advance();
+            paramNames.add(pTok.text());
+            tokens.match(",");
+        }
+        tokens.expect(")");
+        tokens.expect("->");
+
+        pushScope();
+        int[] paramSlots = new int[paramNames.size()];
+        for (int i = 0; i < paramNames.size(); i++) {
+            paramSlots[i] = currentScope.addLocal(paramNames.get(i));
+        }
+
+        SpnExpressionNode body = parseExpression();
+
+        FrameDescriptor frame = popScope().buildFrame();
+
+        SpnFunctionDescriptor.Builder descBuilder = SpnFunctionDescriptor.pure("__lambda__");
+        for (String pn : paramNames) {
+            descBuilder.param(pn);
+        }
+        SpnFunctionDescriptor descriptor = descBuilder.build();
+
+        SpnFunctionRootNode fnRoot = new SpnFunctionRootNode(
+                language, frame, descriptor, paramSlots, body);
+        return at(new SpnFunctionRefNode(fnRoot.getCallTarget()), openTok);
+    }
+
+    // ── do(params) { body } closure ────────────────────────────────────────
+    //
+    // Produces a SpnBoundClosure over the enclosing stateful block's `this`.
+    // Body runs in its own frame where `this` is the first implicit arg.
+    // Inside the body, `this.*` reads/writes the instance; new ad-hoc fields
+    // cannot be introduced (block body only).
+
+    private SpnExpressionNode parseDoClosure() {
+        SpnParseToken doTok = tokens.expect("do");
+        if (currentStatefulBlock == null) {
+            throw tokens.error(
+                    "do() closure is only valid inside a stateful block", doTok);
+        }
+        tokens.expect("(");
+        List<String> paramNames = new ArrayList<>();
+        while (!tokens.check(")")) {
+            paramNames.add(tokens.advance().text());
+            tokens.match(",");
+        }
+        tokens.expect(")");
+        tokens.expect("{");
+
+        // Fresh scope: the closure has its own frame. `__this__` is slot 0;
+        // user params follow.
+        pushScope();
+        int bodyThisSlot = currentScope.addLocal("__this__");
+        int[] paramSlots = new int[paramNames.size()];
+        for (int i = 0; i < paramNames.size(); i++) {
+            paramSlots[i] = currentScope.addLocal(paramNames.get(i));
+        }
+        int[] allSlots = new int[paramNames.size() + 1];
+        allSlots[0] = bodyThisSlot;
+        System.arraycopy(paramSlots, 0, allSlots, 1, paramNames.size());
+
+        // Swap in a do()-body context: shape is shared (can't be extended),
+        // thisSlot points to the body-frame slot.
+        StatefulBlockContext outer = currentStatefulBlock;
+        StatefulBlockContext bodyCtx = new StatefulBlockContext(
+                outer.typeName, outer.shape, bodyThisSlot);
+        bodyCtx.inDoBody = true;
+        currentStatefulBlock = bodyCtx;
+
+        // Closure bodies are action-scoped — allow impure calls.
+        boolean outerPure = currentFunctionIsPure;
+        currentFunctionIsPure = false;
+
+        SpnExpressionNode body;
+        try {
+            body = parseBlockBody();
+        } finally {
+            currentStatefulBlock = outer;
+            currentFunctionIsPure = outerPure;
+        }
+        tokens.expect("}");
+
+        FrameDescriptor frame = popScope().buildFrame();
+
+        SpnFunctionDescriptor.Builder descBuilder = SpnFunctionDescriptor.impure("__do__");
+        descBuilder.param("__this__");
+        for (String pn : paramNames) descBuilder.param(pn);
+        SpnFunctionDescriptor desc = descBuilder.build();
+
+        SpnFunctionRootNode fnRoot = new SpnFunctionRootNode(
+                language, frame, desc, allSlots, body);
+        CallTarget target = fnRoot.getCallTarget();
+
+        // At runtime, wrap the shared CallTarget with the current this-ref.
+        SpnExpressionNode outerThisRead = SpnReadLocalVariableNodeGen.create(outer.thisSlot);
+        return at(new spn.node.stateful.SpnDoClosureNode(outerThisRead, target), doTok);
+    }
+
+    // ── this.* field access inside a stateful block ────────────────────────
+
+    private SpnExpressionNode parseStatefulThisAccess(SpnParseToken thisTok) {
+        tokens.expect(".");
+        SpnParseToken fieldTok = tokens.advance();
+        String fieldName = fieldTok.text();
+
+        // Reads reference the current shape; writes are handled in
+        // parseExpressionStatement where we still have the `=` token.
+        // Here, for reads we verify the field exists.
+        if (!currentStatefulBlock.shape.containsKey(fieldName)
+                && !tokens.check("=")) {
+            throw tokens.error("Unknown field '" + fieldName + "' on stateful "
+                    + currentStatefulBlock.typeName, fieldTok);
+        }
+
+        SpnExpressionNode instanceRead = SpnReadLocalVariableNodeGen.create(
+                currentStatefulBlock.thisSlot);
+        return at(new spn.node.stateful.SpnStatefulFieldReadNode(instanceRead, fieldName), thisTok);
+    }
+
+    // ── Stateful block: T(args) { body } ───────────────────────────────────
+
+    private SpnExpressionNode parseStatefulBlock(String typeName,
+                                                 List<SpnExpressionNode> initArgs,
+                                                 SpnParseToken nameTok) {
+        if (currentFunctionIsPure) {
+            throw tokens.error("Pure function cannot create a stateful instance of "
+                    + typeName, nameTok);
+        }
+
+        LinkedHashMap<String, FieldType> declared = statefulDeclaredShapes.get(typeName);
+        if (declared == null) {
+            throw tokens.error("Stateful type '" + typeName + "' has no declared fields",
+                    nameTok);
+        }
+        if (initArgs.size() != declared.size()) {
+            throw tokens.error("Stateful " + typeName + " expects "
+                    + declared.size() + " init args, got " + initArgs.size(), nameTok);
+        }
+
+        // Allocate a local slot in the CURRENT frame for the instance —
+        // the block body runs in the enclosing scope, not a nested one.
+        String thisSlotName = "__this_" + typeName + "_" + System.identityHashCode(nameTok);
+        int thisSlot = currentScope.addLocal(thisSlotName);
+
+        // Fresh shape = declared fields (copied — block body may extend).
+        LinkedHashMap<String, FieldType> shape = new LinkedHashMap<>(declared);
+
+        StatefulBlockContext ctx = new StatefulBlockContext(typeName, shape, thisSlot);
+        StatefulBlockContext outer = currentStatefulBlock;
+        currentStatefulBlock = ctx;
+        try {
+            tokens.expect("{");
+            SpnExpressionNode body = parseBlockBody();
+            tokens.expect("}");
+            return at(new spn.node.stateful.SpnStatefulBlockNode(
+                    typeName,
+                    declared.keySet().toArray(new String[0]),
+                    initArgs.toArray(new SpnExpressionNode[0]),
+                    thisSlot,
+                    body), nameTok);
+        } finally {
+            currentStatefulBlock = outer;
+        }
     }
 
     // ── Parenthesized expression or tuple ──────────────────────────────────

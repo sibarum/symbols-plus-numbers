@@ -20,7 +20,7 @@ import spn.type.SpnSymbol;
  *   put({:a 1}, :a, 9) -> {:a 9}
  * </pre>
  */
-@SpnBuiltin(name = "put", module = "Dict", params = {"dict", "key", "value"}, returns = "Dict")
+@SpnBuiltin(name = "put", module = "Dict", params = {"dict", "key", "value"}, returns = "Dict", receiver = "Dict")
 @NodeChild("dict")
 @NodeChild("key")
 @NodeChild("value")

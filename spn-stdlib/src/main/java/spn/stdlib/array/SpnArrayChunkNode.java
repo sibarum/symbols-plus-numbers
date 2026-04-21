@@ -14,7 +14,7 @@ import spn.type.SpnArrayValue;
  * Splits an array into chunks of the given size.
  * chunk([1,2,3,4,5], 2) -> [[1,2], [3,4], [5]]
  */
-@SpnBuiltin(name = "chunk", module = "Array", params = {"array", "size"}, returns = "Array")
+@SpnBuiltin(name = "chunk", module = "Array", params = {"array", "size"}, returns = "Array", receiver = "Array")
 @NodeChild("array")
 @NodeChild("size")
 @NodeInfo(shortName = "chunk")

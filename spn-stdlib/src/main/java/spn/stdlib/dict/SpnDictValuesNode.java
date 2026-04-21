@@ -18,7 +18,7 @@ import spn.type.SpnDictionaryValue;
  *   values({:name "Alice", :age "30"}) -> ["Alice", "30"]
  * </pre>
  */
-@SpnBuiltin(name = "values", module = "Dict", params = {"dict"}, returns = "Array")
+@SpnBuiltin(name = "values", module = "Dict", params = {"dict"}, returns = "Array", receiver = "Dict")
 @NodeChild("dict")
 @NodeInfo(shortName = "values")
 public abstract class SpnDictValuesNode extends SpnExpressionNode {

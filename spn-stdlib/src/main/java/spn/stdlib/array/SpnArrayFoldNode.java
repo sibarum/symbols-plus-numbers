@@ -24,7 +24,7 @@ import spn.type.SpnArrayValue;
  *   fold(["a", "b", "c"], "", concat) -> "abc"
  * </pre>
  */
-@SpnBuiltin(name = "fold", module = "Array", params = {"array", "init"})
+@SpnBuiltin(name = "fold", module = "Array", params = {"array", "init"}, receiver = "Array")
 @SpnParamHint(name = "function", function = true)
 @NodeChild("array")
 @NodeChild("init")

@@ -39,8 +39,8 @@ public class LogTab extends ScrollableTab {
         if (action != GLFW_PRESS && action != GLFW_REPEAT) return true;
         boolean ctrl = (mods & GLFW_MOD_CONTROL) != 0;
 
-        // Allow copy
-        if (ctrl && key == GLFW_KEY_C) {
+        // Allow copy and select-all
+        if (ctrl && (key == GLFW_KEY_C || key == GLFW_KEY_A)) {
             textArea.onKey(key, mods);
             return true;
         }

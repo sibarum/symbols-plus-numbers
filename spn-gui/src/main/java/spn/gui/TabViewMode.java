@@ -1,16 +1,18 @@
 package spn.gui;
 
+import static org.lwjgl.glfw.GLFW.*;
+
 /**
  * Bridge between the TabView and the legacy Mode stack.
  * This sits at the bottom of the mode stack (where EditorMode used to be).
  * It delegates all input and rendering to the TabView, which in turn
  * delegates to the active Tab.
  *
- * <p>Escape handling: forwarded to the active tab only. The base view
- * itself never treats Escape as a close signal — Escape is scoped to the
- * current tab (to cancel an in-progress action like search, unpin a trace
- * view, etc.) and never propagates to the window, module context, or
- * Save Changes dialog. Window close is solely the X button's job.
+ * <p>Escape handling: the active tab gets first crack at Escape (to cancel
+ * an in-progress action like search, unpin a trace view, etc.). If the tab
+ * doesn't consume it, Escape closes the active tab — prompting to save
+ * first if the tab is dirty. Escape never closes the window; if the last
+ * tab closes, a fresh untitled tab opens in its place.
  */
 class TabViewMode implements Mode {
 
@@ -24,10 +26,18 @@ class TabViewMode implements Mode {
 
     @Override
     public boolean onKey(int key, int scancode, int action, int mods) {
-        // Escape is scoped to the active tab. If the tab doesn't consume it
-        // (no in-progress action to cancel), Escape is a no-op at this level —
-        // it must not close the tab, open a dirty prompt, or close the window.
-        return tabView.onKey(key, scancode, action, mods);
+        // Let the active tab handle Escape first (e.g., to dismiss a search
+        // overlay). If the tab consumes it, we're done.
+        if (tabView.onKey(key, scancode, action, mods)) {
+            return true;
+        }
+        // Otherwise Escape closes the active tab. Dirty prompt is handled by
+        // handleTabClose, which pushes ConfirmExitMode with CLOSE_TAB action.
+        if (action == GLFW_PRESS && key == GLFW_KEY_ESCAPE) {
+            window.handleTabClose();
+            return true;
+        }
+        return false;
     }
 
     @Override

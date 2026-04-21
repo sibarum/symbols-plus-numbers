@@ -1,0 +1,308 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Feedforward Neural Network — reference substrate
+-- ═══════════════════════════════════════════════════════════════════════
+-- A canonical multi-layer perceptron. Each Layer is a (weights, biases)
+-- pair; the Network is an ordered sequence of layers. Forward pass applies
+-- each layer's affine transform and a sigmoid activation in turn.
+--
+--   Layer ::= (W: [out × in], b: [out])
+--   forward(Layer, x)      = σ(W · x + b)
+--   forward(Network, x)    = forward(L_n, ... forward(L_1, x))
+--
+-- Kept as plain SPN types (not a macro) until the API shape stabilizes.
+-- Once the training loop + canonical idioms settle, this becomes the
+-- template for a `constructMLP(...)` macro in stdlib.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import Math (exp, toFloat)
+import Array (length, append, reverse)
+
+-- Weights shape: [outDim][inDim] — outer index selects the output neuron,
+-- inner index is the weights vector for that neuron.
+type Layer(weights: Array<Array<float>>, biases: Array<float>)
+
+pure Layer(Array<Array<float>>, Array<float>) -> Layer = (w, b) {
+  this(w, b)
+}
+
+type Network(layers: Array<Layer>)
+
+pure Network(Array<Layer>) -> Network = (layers) {
+  this(layers)
+}
+
+-- ── Activations ─────────────────────────────────────────────────────────
+
+pure sigmoid(float) -> float = (x) { 1.0 / (1.0 + exp(-x)) }
+
+pure relu(float) -> float = (x) {
+  match
+  | x > 0.0 -> x
+  | _       -> 0.0
+}
+
+-- Elementwise sigmoid over a vector.
+pure mapSigmoid(Array<float>) -> Array<float> = (xs) {
+  let out = []
+  let i = 0
+  let n = length(xs)
+  while {i < n} do {
+    out = append(out, sigmoid(xs[i]))
+    i = i + 1
+  }
+  out
+}
+
+-- ── Linear algebra primitives ───────────────────────────────────────────
+
+-- Matrix-vector multiplication: (W · x) where W : [out × in], x : [in].
+-- Returns Array<float> of length [out].
+pure matVecMul(Array<Array<float>>, Array<float>) -> Array<float> = (mat, x) {
+  let out = []
+  let i = 0
+  let outDim = length(mat)
+  while {i < outDim} do {
+    let row = mat[i]
+    let inDim = length(row)
+    let sum = 0.0
+    let j = 0
+    while {j < inDim} do {
+      sum = sum + row[j] * x[j]
+      j = j + 1
+    }
+    out = append(out, sum)
+    i = i + 1
+  }
+  out
+}
+
+-- Elementwise addition of two equal-length vectors.
+pure addVec(Array<float>, Array<float>) -> Array<float> = (a, b) {
+  let out = []
+  let i = 0
+  let n = length(a)
+  while {i < n} do {
+    out = append(out, a[i] + b[i])
+    i = i + 1
+  }
+  out
+}
+
+-- ── Forward pass ────────────────────────────────────────────────────────
+
+-- Apply one layer: σ(W · x + b). Activation is sigmoid for this reference;
+-- a later macro version will parameterize over the activation function.
+pure forwardLayer(Layer, Array<float>) -> Array<float> = (layer, x) {
+  mapSigmoid(addVec(matVecMul(layer.weights, x), layer.biases))
+}
+
+-- Forward pass through every layer, threading the activation.
+pure forward(Network, Array<float>) -> Array<float> = (net, input) {
+  let activation = input
+  let i = 0
+  let n = length(net.layers)
+  while {i < n} do {
+    activation = forwardLayer(net.layers[i], activation)
+    i = i + 1
+  }
+  activation
+}
+
+-- Forward pass that returns EVERY layer's output (plus the input).
+-- Length = numLayers + 1: [input, a_1, a_2, ..., a_L]. Needed by the
+-- backward pass to compute gradients.
+pure forwardWithActivations(Network, Array<float>) -> Array<Array<float>>
+    = (net, input) {
+  let acts = append([], input)
+  let a = input
+  let i = 0
+  let n = length(net.layers)
+  while {i < n} do {
+    a = forwardLayer(net.layers[i], a)
+    acts = append(acts, a)
+    i = i + 1
+  }
+  acts
+}
+
+-- ── Training primitives ─────────────────────────────────────────────────
+
+-- Sigmoid derivative evaluated at the activation value:
+--   σ'(z) = σ(z) · (1 − σ(z)) = a · (1 − a).
+-- Cheap because we stored `a`, not `z`.
+pure sigmoidDerivAt(Array<float>) -> Array<float> = (a) {
+  let out = []
+  let i = 0
+  let n = length(a)
+  while {i < n} do {
+    let ai = a[i]
+    out = append(out, ai * (1.0 - ai))
+    i = i + 1
+  }
+  out
+}
+
+-- Elementwise vector subtraction.
+pure subVec(Array<float>, Array<float>) -> Array<float> = (a, b) {
+  let out = []
+  let i = 0
+  let n = length(a)
+  while {i < n} do {
+    out = append(out, a[i] - b[i])
+    i = i + 1
+  }
+  out
+}
+
+-- Elementwise vector multiplication (Hadamard product).
+pure hadamard(Array<float>, Array<float>) -> Array<float> = (a, b) {
+  let out = []
+  let i = 0
+  let n = length(a)
+  while {i < n} do {
+    out = append(out, a[i] * b[i])
+    i = i + 1
+  }
+  out
+}
+
+-- Outer product: (a ⊗ b)[i][j] = a[i] · b[j].
+pure outer(Array<float>, Array<float>) -> Array<Array<float>> = (a, b) {
+  let rows = []
+  let i = 0
+  let m = length(a)
+  let n = length(b)
+  while {i < m} do {
+    let row = []
+    let j = 0
+    while {j < n} do {
+      row = append(row, a[i] * b[j])
+      j = j + 1
+    }
+    rows = append(rows, row)
+    i = i + 1
+  }
+  rows
+}
+
+-- Matrix-transpose-times-vector: (Wᵀ · v). W is [out × in], v is [out],
+-- result is [in]. Avoids building the explicit transpose.
+pure matTVecMul(Array<Array<float>>, Array<float>) -> Array<float> = (mat, v) {
+  let outDim = length(mat)
+  let inDim = length(mat[0])
+  let out = []
+  let j = 0
+  while {j < inDim} do {
+    let sum = 0.0
+    let i = 0
+    while {i < outDim} do {
+      sum = sum + mat[i][j] * v[i]
+      i = i + 1
+    }
+    out = append(out, sum)
+    j = j + 1
+  }
+  out
+}
+
+-- Scalar multiplication of a vector.
+pure scaleVec(float, Array<float>) -> Array<float> = (k, v) {
+  let out = []
+  let i = 0
+  let n = length(v)
+  while {i < n} do {
+    out = append(out, k * v[i])
+    i = i + 1
+  }
+  out
+}
+
+-- Scalar multiplication of a matrix.
+pure scaleMat(float, Array<Array<float>>) -> Array<Array<float>> = (k, a) {
+  let rows = []
+  let i = 0
+  let m = length(a)
+  while {i < m} do {
+    rows = append(rows, scaleVec(k, a[i]))
+    i = i + 1
+  }
+  rows
+}
+
+-- Elementwise matrix subtraction.
+pure subMat(Array<Array<float>>, Array<Array<float>>) -> Array<Array<float>>
+    = (a, b) {
+  let rows = []
+  let i = 0
+  let m = length(a)
+  while {i < m} do {
+    rows = append(rows, subVec(a[i], b[i]))
+    i = i + 1
+  }
+  rows
+}
+
+-- Backward pass for MSE loss on a sigmoid MLP. Returns a `Network`
+-- whose layers hold the gradients ∂L/∂W and ∂L/∂b (same shape as the
+-- forward network).
+pure backward(Network, Array<Array<float>>, Array<float>) -> Network
+    = (net, acts, target) {
+  let numLayers = length(net.layers)
+  -- ∂L/∂a_out for MSE (½Σ(a − t)²) is (a − t).
+  let gradA = subVec(acts[numLayers], target)
+
+  -- Walk layers from the output backward. Build the gradient list in
+  -- reverse then flip it at the end so indices match the forward net.
+  let gradLayersRev = []
+  let l = numLayers - 1
+  while {l >= 0} do {
+    let aOut = acts[l + 1]       -- this layer's output
+    let aIn  = acts[l]           -- this layer's input (= input vector if l=0)
+    let gradZ = hadamard(gradA, sigmoidDerivAt(aOut))
+    let gradW = outer(gradZ, aIn)
+    let gradB = gradZ
+    gradLayersRev = append(gradLayersRev, Layer(gradW, gradB))
+    -- Propagate gradient through the current layer's weights for the next iter.
+    gradA = matTVecMul(net.layers[l].weights, gradZ)
+    l = l - 1
+  }
+  Network(reverse(gradLayersRev))
+}
+
+-- Apply a gradient: new = net − lr · grads. Returns a fresh Network.
+pure applyGradient(Network, Network, float) -> Network = (net, grads, lr) {
+  let updated = []
+  let i = 0
+  let n = length(net.layers)
+  while {i < n} do {
+    let layer = net.layers[i]
+    let g = grads.layers[i]
+    let newW = subMat(layer.weights, scaleMat(lr, g.weights))
+    let newB = subVec(layer.biases,  scaleVec(lr, g.biases))
+    updated = append(updated, Layer(newW, newB))
+    i = i + 1
+  }
+  Network(updated)
+}
+
+-- One gradient-descent step: forward → backward → update.
+pure trainStep(Network, Array<float>, Array<float>, float) -> Network
+    = (net, input, target, lr) {
+  let acts = forwardWithActivations(net, input)
+  let grads = backward(net, acts, target)
+  applyGradient(net, grads, lr)
+}
+
+-- Mean squared error loss: L = (1/2N) · Σ(a − t)². Division by 2 gives
+-- the gradient shape ∂L/∂a = (a − t) used in `backward`.
+pure mse(Array<float>, Array<float>) -> float = (a, target) {
+  let sum = 0.0
+  let i = 0
+  let n = length(a)
+  while {i < n} do {
+    let d = a[i] - target[i]
+    sum = sum + d * d
+    i = i + 1
+  }
+  sum / (2.0 * toFloat(n))
+}

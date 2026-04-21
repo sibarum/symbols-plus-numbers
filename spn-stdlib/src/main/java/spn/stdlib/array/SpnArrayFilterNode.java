@@ -22,7 +22,7 @@ import java.util.ArrayList;
  *   filter([1, 2, 3, 4], isEven) -> [2, 4]
  * </pre>
  */
-@SpnBuiltin(name = "filter", module = "Array", params = {"array"}, returns = "Array")
+@SpnBuiltin(name = "filter", module = "Array", params = {"array"}, returns = "Array", receiver = "Array")
 @SpnParamHint(name = "predicate", function = true)
 @NodeChild("array")
 @NodeInfo(shortName = "filter")

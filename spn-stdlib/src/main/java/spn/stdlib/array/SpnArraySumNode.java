@@ -9,7 +9,7 @@ import spn.node.SpnExpressionNode;
 import spn.node.builtin.SpnBuiltin;
 import spn.type.SpnArrayValue;
 
-@SpnBuiltin(name = "sum", module = "Array", params = {"array"}, returns = "Double")
+@SpnBuiltin(name = "sum", module = "Array", params = {"array"}, returns = "Double", receiver = "Array")
 @NodeChild("array")
 @NodeInfo(shortName = "sum")
 public abstract class SpnArraySumNode extends SpnExpressionNode {

@@ -1,0 +1,283 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Kuramoto Network — 16-node Demo
+-- ═══════════════════════════════════════════════════════════════════════
+-- A ring of 16 oscillators, each connected to its 2 nearest neighbors on
+-- each side (4 total). Rigidities are alternated: odd-indexed nodes are
+-- soft (σ=0.1), even-indexed are stiff (σ=2.0). Intrinsic frequencies are
+-- tightly clustered around ω=1.0 so synchronization is plausible.
+--
+-- We simulate for ~500 steps at dt=0.01 (5 sim-seconds), then render:
+--   - the final state as 16 dials arranged in a visual ring
+--   - the order parameter ρ evolution as a line plot along the bottom
+--
+-- What to look for:
+--   - Soft nodes (blue) settle into phase agreement with neighbors
+--   - Stiff nodes (red) resist — stay closer to their intrinsic frequency
+--   - Energy falls faster on stiff nodes (visible as reduced brightness)
+--   - ρ rises from near-0 (random) toward a positive value (partial sync)
+-- ═══════════════════════════════════════════════════════════════════════
+
+import Canvas
+import Math (sin, cos, toFloat, floor, round)
+import Array (append, concat, length)
+import spn.canvas.draw
+import kuramoto.network
+
+-- 2π (SPN has no built-in π constant). Declared as a zero-arg pure
+-- function rather than a top-level `let` so it's visible inside other
+-- pure function bodies.
+pure twoPi() -> float = () { 6.283185307179586 }
+
+-- Build the ring adjacency: for each node i, return the list of its 4
+-- neighbors (2 on each side, with wraparound).
+pure ringAdjacency(int, int) -> Array = (n, k) {
+  let adj = []
+  let i = 0
+  while {i < n} do {
+    let row = []
+    let d = 1
+    while {d <= k} do {
+      row = append(row, (i + d) % n)
+      row = append(row, (i - d + n) % n)
+      d = d + 1
+    }
+    adj = append(adj, row)
+    i = i + 1
+  }
+  adj
+}
+
+-- Seed for the reproducible PRNG. Change this integer to re-roll the
+-- initial state (phases, frequencies) of the entire network. Same seed
+-- → bit-identical simulation across runs.
+pure seed() -> int = () { 42 }
+
+-- LCG-based deterministic hash of (seed, i, salt). Per-node independent
+-- random streams — `salt` picks which stream for that node:
+--   salt=1 → initial phase
+--   salt=2 → frequency offset
+-- All arithmetic fits in int64 (max intermediate ~2·10^18 < 2^63), so
+-- the Truffle long→double rewriter won't fire mid-computation.
+pure lcgHash(int, int, int) -> int = (s, i, salt) {
+  let m = 2147483648       -- 2^31
+  let a = 1103515245       -- Numerical Recipes LCG multiplier
+  let c = 12345
+  let s1 = (a * s + c) % m
+  let s2 = (a * (s1 + i) + c) % m
+  (a * (s2 + salt) + c) % m
+}
+
+-- Uniform-distributed float in [0, 1), derived from lcgHash.
+pure rand01(int, int, int) -> float = (s, i, salt) {
+  toFloat(lcgHash(s, i, salt)) / 2147483648.0
+}
+
+pure makeNode(int) -> Node = (i) {
+  -- Alternating rigidity: odd = soft, even = stiff.
+  let sigma = match
+    | i % 2 == 0 -> 1.0
+    | _          -> 0.05
+  -- Independent random draws for phase and frequency. Uncorrelated
+  -- across nodes AND between phase/frequency of the same node.
+  -- Frequency range: edit the two constants to tune spread.
+  --   narrow: 0.9 + 0.2 * ...  → [0.9, 1.1), trivial sync
+  --   medium: 0.5 + 1.0 * ...  → [0.5, 1.5), sync stressed but achievable
+  --   wide:   0.0 + 2.0 * ...  → [0.0, 2.0), some nodes 2× others; hard sync
+  let initPhase = rand01(seed(), i, 1) * twoPi()
+  let freq      = 0.5 + 1.0 * rand01(seed(), i, 2)
+  Node(initPhase, freq, sigma, 10.0, 10.0, 1.0)
+}
+
+pure initialNodes(int) -> Array = (n) {
+  let nodes = []
+  let i = 0
+  while {i < n} do {
+    nodes = append(nodes, makeNode(i))
+    i = i + 1
+  }
+  nodes
+}
+
+-- Run `steps` simulation steps, returning the final node array
+-- AND accumulating the order parameter at each step for plotting.
+pure runSim(Array, Array, float, int) -> (Array, Array)
+    = (nodes0, adj, dt, steps) {
+  let nodes = nodes0
+  let history = [orderParameter(nodes)]
+  let s = 0
+  while {s < steps} do {
+    nodes = stepNetwork(nodes, adj, dt)
+    history = append(history, orderParameter(nodes))
+    s = s + 1
+  }
+  (nodes, history)
+}
+
+-- ── Visualization helpers ────────────────────────────────────────────────
+
+-- Map rigidity to RGB — blue (soft) → red (stiff) along a simple gradient.
+pure sigmaColor(float) -> (float, float, float) = (sigma) {
+  let t = match
+    | sigma > 2.0 -> 1.0
+    | sigma < 0.0 -> 0.0
+    | _           -> sigma / 2.0
+  (0.3 + 0.7 * t, 0.35, 0.9 - 0.6 * t)
+}
+
+-- Draw one node dial at (cx, cy) with the given radius.
+-- Dial body color encodes rigidity (blue=soft, red=stiff); brightness is
+-- floored at 40% so even fully-depleted nodes are visible. Energy is
+-- ALSO shown as an inner filled arc — radius proportional to E/E_max.
+pure drawNode(Node, float, float, float) -> Array = (node, cx, cy, r) {
+  let (cr, cg, cb) = sigmaColor(node.rigidity)
+  -- Energy ratio clamped to [0, 1]
+  let eRatio = match
+    | node.energy < 0.0        -> 0.0
+    | node.energy > node.energyMax -> 1.0
+    | _                        -> node.energy / node.energyMax
+  -- Fade between 0.4 (always visible) and 1.0 (full energy)
+  let fade = 0.4 + 0.6 * eRatio
+  let br = cr * fade
+  let bg = cg * fade
+  let bb = cb * fade
+  -- Dial body
+  let body = [CmdFill(br, bg, bb), CmdCircle(cx, cy, r)]
+  -- Phase indicator arrow
+  let tx = cx + r * 0.85 * cos(node.phase)
+  let ty = cy - r * 0.85 * sin(node.phase)
+  let arrow = [CmdStroke(0.98, 0.98, 0.98), CmdStrokeWeight(2.5),
+               CmdLine(cx, cy, tx, ty)]
+  concat(body, arrow)
+}
+
+-- Draw the 16-node ring in a circle of radius ringR around (cx, cy).
+pure drawRing(Array<Node>, float, float, float, float) -> Array
+    = (nodes, cx, cy, ringR, nodeR) {
+  let n = length(nodes)
+  let cmds = []
+  let i = 0
+  while {i < n} do {
+    let angle = twoPi() * toFloat(i) / toFloat(n)
+    let x = cx + ringR * cos(angle)
+    let y = cy - ringR * sin(angle)
+    cmds = concat(cmds, drawNode(nodes[i], x, y, nodeR))
+    i = i + 1
+  }
+  cmds
+}
+
+-- Draw edges between adjacent ring nodes as a subtle backdrop so the
+-- topology is visible.
+pure drawRingEdges(Array<Array<int>>, float, float, float) -> Array
+    = (adj, cx, cy, ringR) {
+  let n = length(adj)
+  let cmds = [CmdStroke(0.2, 0.22, 0.28), CmdStrokeWeight(1.0)]
+  let i = 0
+  while {i < n} do {
+    let ai = twoPi() * toFloat(i) / toFloat(n)
+    let xi = cx + ringR * cos(ai)
+    let yi = cy - ringR * sin(ai)
+    let neighbors = adj[i]
+    let k = 0
+    let nk = length(neighbors)
+    while {k < nk} do {
+      let j = neighbors[k]
+      -- Only draw each edge once (j > i)
+      match
+      | j > i -> {
+          let aj = twoPi() * toFloat(j) / toFloat(n)
+          let xj = cx + ringR * cos(aj)
+          let yj = cy - ringR * sin(aj)
+          cmds = append(cmds, CmdLine(xi, yi, xj, yj))
+        }
+      | _ -> { 0 }
+      k = k + 1
+    }
+    i = i + 1
+  }
+  cmds
+}
+
+-- Order-parameter line plot along the bottom of the canvas.
+pure drawOrderPlot(Array<float>, float, float, float, float) -> Array
+    = (history, x0, y0, w, h) {
+  let n = length(history)
+  let cmds = [
+    -- Frame
+    CmdStroke(0.3, 0.32, 0.38), CmdStrokeWeight(1.0),
+    CmdLine(x0, y0, x0 + w, y0),
+    CmdLine(x0, y0 - h, x0 + w, y0 - h),
+    CmdLine(x0, y0, x0, y0 - h),
+    -- Label
+    CmdFill(0.75, 0.75, 0.8),
+    CmdText(x0, y0 + 16.0, "order parameter  ρ  vs  time", 0.22)
+  ]
+  cmds = concat(cmds, [CmdStroke(0.85, 0.6, 0.3), CmdStrokeWeight(2.0)])
+  let i = 1
+  while {i < n} do {
+    let x1 = x0 + w * toFloat(i - 1) / toFloat(n - 1)
+    let y1 = y0 - h * history[i - 1]
+    let x2 = x0 + w * toFloat(i) / toFloat(n - 1)
+    let y2 = y0 - h * history[i]
+    cmds = append(cmds, CmdLine(x1, y1, x2, y2))
+    i = i + 1
+  }
+  cmds
+}
+
+-- ── Scene / frame builder ───────────────────────────────────────────────
+
+-- Compute how many simulation steps the sim should be at, given real
+-- elapsed seconds. Clamped to [0, MAX_STEPS] so per-frame work doesn't
+-- grow unbounded. Also clamps to 0 for negative elapsed (shouldn't happen,
+-- but defensive).
+pure simStepsForElapsed(float, float, int) -> int = (elapsed, dt, maxSteps) {
+  let raw = round(elapsed / dt)
+  match
+  | raw < 0           -> 0
+  | raw > maxSteps    -> maxSteps
+  | _                 -> raw
+}
+
+-- The per-frame draw callback. Re-simulates from t=0 up to elapsed each
+-- call — this is deterministic and cheap enough that recomputing is
+-- simpler than threading mutable state between frames. Caps at MAX_STEPS
+-- so the simulation plateaus after a while rather than slowing down.
+-- Declared `action` because `render` is impure (mutates the canvas
+-- command buffer).
+action drawFrame(float) -> int = (elapsed) {
+  let n = 16
+  let dt = 0.01
+  let maxSteps = 2000            -- 20 simulated seconds
+  let steps = simStepsForElapsed(elapsed, dt, maxSteps)
+
+  let adj = ringAdjacency(n, 2)
+  let nodes0 = initialNodes(n)
+  let (curNodes, history) = runSim(nodes0, adj, dt, steps)
+
+  let cx = 450.0
+  let cy = 320.0
+  let ringR = 200.0
+  let nodeR = 28.0
+
+  let cmds = [CmdClear(0.07, 0.08, 0.10)]
+  cmds = concat(cmds, [
+    CmdFill(0.92, 0.92, 0.96),
+    CmdText(250.0, 32.0, "Kuramoto ring — 16 oscillators, mixed rigidity", 0.32),
+    CmdFill(0.65, 0.65, 0.72),
+    CmdText(260.0, 58.0,
+            "blue = soft (σ=0.05)  red = stiff (σ=1.0)  brightness = energy",
+            0.22)
+  ])
+
+  cmds = concat(cmds, drawRingEdges(adj, cx, cy, ringR))
+  cmds = concat(cmds, drawRing(curNodes, cx, cy, ringR, nodeR))
+  cmds = concat(cmds, drawOrderPlot(history, 80.0, 640.0, 740.0, 90.0))
+
+  render(cmds)
+  0
+}
+
+canvas(900, 700)
+animate(30.0, drawFrame)
+show()

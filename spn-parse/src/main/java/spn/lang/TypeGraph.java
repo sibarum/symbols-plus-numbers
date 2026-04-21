@@ -1,6 +1,7 @@
 package spn.lang;
 
 import com.oracle.truffle.api.CallTarget;
+import spn.source.SourceRange;
 import spn.type.FieldDescriptor;
 import spn.type.FieldType;
 import spn.type.SpnFunctionDescriptor;
@@ -60,7 +61,25 @@ public final class TypeGraph {
         MACRO,          // macro deriveDouble(T) = { ... }
         CONSTANT,       // const Rational.one = Rational(1, 1)
         FACTORY,        // constructor overload: pure Rational(int) -> Rational = ...
-        BUILTIN         // stdlib built-in function (Java-implemented)
+        BUILTIN,        // stdlib built-in function (Java-implemented)
+        LOCAL_BINDING,  // let NAME = ... (and destructuring elements)
+        PARAMETER,      // function/method parameter
+        FIELD           // component of a struct type: `type Point(x: float, ...)`
+                        // stored with composite name `TypeName.fieldName`
+    }
+
+    /** True if {@code kind} is a declaration that opens a new local scope —
+     *  i.e., walking backward across a node of this kind means we've left the
+     *  previous function's body. Used by local-scope lookup. */
+    public static boolean opensScope(Kind kind) {
+        return kind == Kind.FUNCTION || kind == Kind.METHOD
+                || kind == Kind.OPERATOR || kind == Kind.FACTORY
+                || kind == Kind.MACRO;
+    }
+
+    /** True if {@code kind} is a local binding kind (let, param, destructure). */
+    public static boolean isLocal(Kind kind) {
+        return kind == Kind.LOCAL_BINDING || kind == Kind.PARAMETER;
     }
 
     // ── Graph node ──────────────────────────────────────────────────────────
@@ -74,12 +93,11 @@ public final class TypeGraph {
         private final String name;
         private final Kind kind;
 
-        // Source location
+        // Source location. `file` is the absolute path (or null for builtins).
+        // `nameRange` covers the declaration's NAME token — where a
+        // go-to-def click should land. Convention: 1-based line, 0-based col.
         private final String file;
-        private final int line;
-        private final int col;
-        private final int endLine;
-        private final int endCol;
+        private final SourceRange nameRange;
 
         // Type metadata (null when not applicable)
         private final FieldType[] paramTypes;
@@ -107,10 +125,7 @@ public final class TypeGraph {
             this.name = b.name;
             this.kind = b.kind;
             this.file = b.file;
-            this.line = b.line;
-            this.col = b.col;
-            this.endLine = b.endLine;
-            this.endCol = b.endCol;
+            this.nameRange = b.nameRange != null ? b.nameRange : SourceRange.UNKNOWN;
             this.paramTypes = b.paramTypes;
             this.returnType = b.returnType;
             this.isPure = b.isPure;
@@ -129,10 +144,9 @@ public final class TypeGraph {
         public String name()                  { return name; }
         public Kind kind()                    { return kind; }
         public String file()                  { return file; }
-        public int line()                     { return line; }
-        public int col()                      { return col; }
-        public int endLine()                  { return endLine; }
-        public int endCol()                   { return endCol; }
+        /** Where the declaration's NAME identifier lives in the source file.
+         *  Returns {@link SourceRange#UNKNOWN} if no position was captured. */
+        public SourceRange nameRange()        { return nameRange; }
         public FieldType[] paramTypes()       { return paramTypes; }
         public FieldType returnType()         { return returnType; }
         public boolean isPure()               { return isPure; }
@@ -149,7 +163,7 @@ public final class TypeGraph {
 
         @Override
         public String toString() {
-            return kind + " " + name + " @ " + file + ":" + line;
+            return kind + " " + name + " @ " + file + ":" + nameRange.startLine();
         }
 
         // ── Builder ─────────────────────────────────────────────────────────
@@ -162,7 +176,7 @@ public final class TypeGraph {
             private final String name;
             private final Kind kind;
             private String file;
-            private int line, col, endLine, endCol;
+            private SourceRange nameRange;
             private FieldType[] paramTypes;
             private FieldType returnType;
             private boolean isPure;
@@ -181,10 +195,9 @@ public final class TypeGraph {
             }
 
             public Builder file(String file)                     { this.file = file; return this; }
-            public Builder line(int line)                         { this.line = line; return this; }
-            public Builder col(int col)                           { this.col = col; return this; }
-            public Builder endLine(int endLine)                   { this.endLine = endLine; return this; }
-            public Builder endCol(int endCol)                     { this.endCol = endCol; return this; }
+            /** Position of the declaration's NAME token. Parser convention
+             *  (1-based line, 0-based col). */
+            public Builder nameRange(SourceRange range)           { this.nameRange = range; return this; }
             public Builder paramTypes(FieldType... types)         { this.paramTypes = types; return this; }
             public Builder returnType(FieldType type)             { this.returnType = type; return this; }
             public Builder pure(boolean isPure)                   { this.isPure = isPure; return this; }
@@ -210,9 +223,14 @@ public final class TypeGraph {
     // Secondary index: kind → nodes. For fast "give me all operators" queries.
     private final Map<Kind, List<Node>> byKind = new LinkedHashMap<>();
 
-    // Tertiary index: file+line → node. For "what declaration is at this position?"
-    // and for incremental invalidation.
-    private final Map<String, TreeMap<Integer, Node>> byFileLine = new LinkedHashMap<>();
+    // Tertiary index: file+line → nodes on that line, in col order. For
+    // "what declaration is at this position?", incremental invalidation, and
+    // local-scope walks (multiple locals can share a line).
+    private final Map<String, TreeMap<Integer, List<Node>>> byFileLine = new LinkedHashMap<>();
+
+    // Quaternary index: CallTarget → node. Lets the IDE map a resolved dispatch
+    // (which carries only a CallTarget) back to the declaration's source location.
+    private final IdentityHashMap<CallTarget, Node> byCallTarget = new IdentityHashMap<>();
 
     // ── Mutation ─────────────────────────────────────────────────────────────
 
@@ -220,9 +238,20 @@ public final class TypeGraph {
     public void add(Node node) {
         byName.computeIfAbsent(node.name(), k -> new ArrayList<>()).add(node);
         byKind.computeIfAbsent(node.kind(), k -> new ArrayList<>()).add(node);
-        if (node.file() != null) {
-            byFileLine.computeIfAbsent(node.file(), k -> new TreeMap<>())
-                       .put(node.line(), node);
+        if (node.file() != null && node.nameRange().isKnown()) {
+            TreeMap<Integer, List<Node>> lines = byFileLine.computeIfAbsent(
+                    node.file(), k -> new TreeMap<>());
+            List<Node> onLine = lines.computeIfAbsent(
+                    node.nameRange().startLine(), k -> new ArrayList<>());
+            // Keep within-line order by starting column.
+            int col = node.nameRange().startCol();
+            int ins = 0;
+            while (ins < onLine.size()
+                    && onLine.get(ins).nameRange().startCol() <= col) ins++;
+            onLine.add(ins, node);
+        }
+        if (node.callTarget() != null) {
+            byCallTarget.put(node.callTarget(), node);
         }
     }
 
@@ -232,12 +261,13 @@ public final class TypeGraph {
      * then re-populate from the parser.
      */
     public void invalidateFrom(String file, int fromLine) {
-        TreeMap<Integer, Node> fileNodes = byFileLine.get(file);
+        TreeMap<Integer, List<Node>> fileNodes = byFileLine.get(file);
         if (fileNodes == null) return;
 
         // Collect nodes to remove (at or after fromLine)
-        NavigableMap<Integer, Node> tail = fileNodes.tailMap(fromLine, true);
-        List<Node> toRemove = new ArrayList<>(tail.values());
+        NavigableMap<Integer, List<Node>> tail = fileNodes.tailMap(fromLine, true);
+        List<Node> toRemove = new ArrayList<>();
+        for (List<Node> onLine : tail.values()) toRemove.addAll(onLine);
         tail.clear();
 
         // Remove from other indices
@@ -246,6 +276,9 @@ public final class TypeGraph {
             if (nameList != null) nameList.remove(node);
             List<Node> kindList = byKind.get(node.kind());
             if (kindList != null) kindList.remove(node);
+            if (node.callTarget() != null) {
+                byCallTarget.remove(node.callTarget());
+            }
         }
     }
 
@@ -254,6 +287,7 @@ public final class TypeGraph {
         byName.clear();
         byKind.clear();
         byFileLine.clear();
+        byCallTarget.clear();
     }
 
     // ── Queries ─────────────────────────────────────────────────────────────
@@ -274,18 +308,68 @@ public final class TypeGraph {
         return byKind.getOrDefault(kind, List.of());
     }
 
-    /** All nodes in a file, ordered by line number. */
+    /** All nodes in a file, ordered by (line, col). */
     public Collection<Node> byFile(String file) {
-        TreeMap<Integer, Node> fileNodes = byFileLine.get(file);
-        return fileNodes != null ? fileNodes.values() : List.of();
+        TreeMap<Integer, List<Node>> fileNodes = byFileLine.get(file);
+        if (fileNodes == null) return List.of();
+        List<Node> all = new ArrayList<>();
+        for (List<Node> onLine : fileNodes.values()) all.addAll(onLine);
+        return all;
     }
 
-    /** The node at or just before the given line in a file (for "go to definition"). */
+    /** The declaration that owns a given CallTarget. Populated when the parser
+     *  registers functions/operators/methods with both. Returns null for
+     *  builtins and other nodes without a CallTarget (types, structs, etc.). */
+    public Node byCallTarget(CallTarget ct) {
+        return ct == null ? null : byCallTarget.get(ct);
+    }
+
+    /** The node at or just before the given line in a file (for "go to
+     *  definition"). Prefers the last node on {@code line} if any exist. */
     public Node atOrBefore(String file, int line) {
-        TreeMap<Integer, Node> fileNodes = byFileLine.get(file);
+        TreeMap<Integer, List<Node>> fileNodes = byFileLine.get(file);
         if (fileNodes == null) return null;
-        Map.Entry<Integer, Node> entry = fileNodes.floorEntry(line);
-        return entry != null ? entry.getValue() : null;
+        Map.Entry<Integer, List<Node>> entry = fileNodes.floorEntry(line);
+        if (entry == null || entry.getValue().isEmpty()) return null;
+        List<Node> onLine = entry.getValue();
+        return onLine.get(onLine.size() - 1);
+    }
+
+    /**
+     * Find a local binding (let or parameter) named {@code name} that is in
+     * scope at the given position.
+     *
+     * <p>Walks backward through the file's nodes by (line, col). Returns the
+     * first local/parameter node with a matching name. Stops (returns null)
+     * if a scope-opening declaration (function, method, operator, factory,
+     * macro) is encountered before the match — that means the click row is
+     * outside the local's scope.
+     *
+     * <p>Positions are parser convention (1-based line, 0-based col).
+     */
+    public Node findLocalInScope(String file, int line, int col, String name) {
+        TreeMap<Integer, List<Node>> fileNodes = byFileLine.get(file);
+        if (fileNodes == null) return null;
+        // Walk lines from `line` down to 0.
+        for (var entry : fileNodes.headMap(line, true).descendingMap().entrySet()) {
+            int entryLine = entry.getKey();
+            List<Node> onLine = entry.getValue();
+            // On the click's own line, only consider nodes whose col is at or
+            // before the click (a local declared later on the same line can't
+            // be referenced here).
+            for (int i = onLine.size() - 1; i >= 0; i--) {
+                Node n = onLine.get(i);
+                if (entryLine == line && n.nameRange().startCol() > col) continue;
+                if (opensScope(n.kind())) {
+                    // Crossing a function boundary — not in scope. But params
+                    // on the function header line ARE in scope for the body,
+                    // so they're separate nodes we would've already returned.
+                    return null;
+                }
+                if (isLocal(n.kind()) && n.name().equals(name)) return n;
+            }
+        }
+        return null;
     }
 
     /** All operator overloads for a given operator symbol. */

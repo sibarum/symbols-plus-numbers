@@ -49,4 +49,20 @@ public @interface SpnBuiltin {
      * Leave empty to let the generator infer from @Specialization return types.
      */
     String returns() default "";
+
+    /**
+     * If set, this builtin is also callable as a method on the named type —
+     * i.e. {@code receiver.methodName(args)} where {@code receiver} is
+     * implicitly passed as the first argument. Use SPN type names
+     * ("Array", "Dict", "Set", "Option", etc.). Leave empty for flat functions
+     * only. The first {@code @NodeChild} param MUST be the receiver.
+     */
+    String receiver() default "";
+
+    /**
+     * Method name on the receiver type. Defaults to {@link #name()} if empty,
+     * which is right for normal cases. Set this when the flat function name
+     * is disambiguated (e.g., {@code dictSize} flat → {@code size} method).
+     */
+    String method() default "";
 }

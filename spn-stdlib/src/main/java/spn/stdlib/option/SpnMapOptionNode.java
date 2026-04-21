@@ -21,7 +21,7 @@ import spn.type.SpnStructValue;
  *   mapOption(None, double)    -> None
  * </pre>
  */
-@SpnBuiltin(name = "mapOption", module = "Option", params = {"option"}, returns = "Option")
+@SpnBuiltin(name = "mapOption", module = "Option", params = {"option"}, returns = "Option", receiver = "Option", method = "map")
 @SpnParamHint(name = "function", function = true)
 @NodeChild("option")
 @NodeInfo(shortName = "mapOption")

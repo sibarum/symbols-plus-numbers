@@ -9,7 +9,7 @@ import spn.node.SpnExpressionNode;
 import spn.node.builtin.SpnBuiltin;
 import spn.type.SpnArrayValue;
 
-@SpnBuiltin(name = "arrayMax", module = "Array", params = {"array"})
+@SpnBuiltin(name = "arrayMax", module = "Array", params = {"array"}, receiver = "Array", method = "max")
 @NodeChild("array")
 @NodeInfo(shortName = "arrayMax")
 public abstract class SpnArrayMaxNode extends SpnExpressionNode {

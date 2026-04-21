@@ -45,7 +45,7 @@ public final class TypeResolver {
 
     private final Map<String, List<SpnParser.OperatorOverload>> operatorRegistry;
     private final List<SpnParser.Promotion> promotionRegistry;
-    private final Map<String, SpnParser.MethodEntry> methodRegistry;
+    private final Map<String, spn.language.MethodEntry> methodRegistry;
     private final Map<String, SpnStructDescriptor> structRegistry;
     private final Map<String, SpnTypeDescriptor> typeRegistry;
     private final Map<String, SpnVariantSet> variantRegistry;
@@ -74,7 +74,7 @@ public final class TypeResolver {
 
     TypeResolver(Map<String, List<SpnParser.OperatorOverload>> operatorRegistry,
                  List<SpnParser.Promotion> promotionRegistry,
-                 Map<String, SpnParser.MethodEntry> methodRegistry,
+                 Map<String, spn.language.MethodEntry> methodRegistry,
                  Map<String, SpnStructDescriptor> structRegistry,
                  Map<String, SpnTypeDescriptor> typeRegistry,
                  Map<String, SpnVariantSet> variantRegistry,
@@ -235,7 +235,7 @@ public final class TypeResolver {
 
         // 2. .neg() / .inv() method fallback
         String methodName = op.equals("-") ? "neg" : "inv";
-        SpnParser.MethodEntry method = resolveMethod(operandType, methodName);
+        spn.language.MethodEntry method = resolveMethod(operandType, methodName);
         if (method != null) {
             SpnExpressionNode result = new spn.node.func.SpnMethodInvokeNode(
                     method.callTarget(), operand, new SpnExpressionNode[0]);
@@ -359,14 +359,14 @@ public final class TypeResolver {
     // ── Method resolution ───────────────────────────────────────────────────
 
     /** Resolve a method by receiver type and name. */
-    public SpnParser.MethodEntry resolveMethod(FieldType receiverType, String methodName) {
+    public spn.language.MethodEntry resolveMethod(FieldType receiverType, String methodName) {
         if (receiverType == null) return null;
 
         // Union types: method must exist on ALL variants
         if (receiverType instanceof FieldType.OfVariant ov) {
-            SpnParser.MethodEntry first = null;
+            spn.language.MethodEntry first = null;
             for (SpnStructDescriptor variant : ov.variantSet().getVariants()) {
-                SpnParser.MethodEntry entry = methodRegistry.get(variant.getName() + "." + methodName);
+                spn.language.MethodEntry entry = methodRegistry.get(variant.getName() + "." + methodName);
                 if (entry == null) return null;
                 if (first == null) first = entry;
             }
@@ -375,7 +375,7 @@ public final class TypeResolver {
 
         // Try exact type description match
         String key = receiverType.describe() + "." + methodName;
-        SpnParser.MethodEntry entry = methodRegistry.get(key);
+        spn.language.MethodEntry entry = methodRegistry.get(key);
         if (entry != null) return entry;
         // Try the type's simple name
         String typeName = resolveTypeName(receiverType);
@@ -700,6 +700,11 @@ public final class TypeResolver {
         if (type instanceof FieldType.OfStruct os) return os.descriptor().getName();
         if (type instanceof FieldType.OfConstrainedType oct) return oct.descriptor().getName();
         if (type instanceof FieldType.OfProduct op) return op.descriptor().getName();
+        // Built-in collection/option types. Returning these names lets
+        // method dispatch work for stdlib Array/Dict/Set/Option methods.
+        if (type instanceof FieldType.OfArray) return "Array";
+        if (type instanceof FieldType.OfDictionary) return "Dict";
+        if (type instanceof FieldType.OfSet) return "Set";
         return null;
     }
 

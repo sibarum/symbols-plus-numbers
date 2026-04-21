@@ -665,8 +665,8 @@ public class TraceSourceTab extends ScrollableTab {
             return true;
         }
 
-        // Ctrl+C: copy from whichever area is active
-        if (ctrl && key == GLFW_KEY_C) {
+        // Ctrl+C / Ctrl+A: copy or select-all in whichever area is active
+        if (ctrl && (key == GLFW_KEY_C || key == GLFW_KEY_A)) {
             if (detailCallIndex >= 0) {
                 detailArea.onKey(key, mods);
             } else if (panelState != PanelState.FILE_SELECT) {

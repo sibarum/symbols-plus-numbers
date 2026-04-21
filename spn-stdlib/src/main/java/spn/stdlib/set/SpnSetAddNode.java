@@ -9,7 +9,7 @@ import spn.node.SpnExpressionNode;
 import spn.node.builtin.SpnBuiltin;
 import spn.type.SpnSetValue;
 
-@SpnBuiltin(name = "setAdd", module = "Set", params = {"set", "element"}, returns = "Set")
+@SpnBuiltin(name = "setAdd", module = "Set", params = {"set", "element"}, returns = "Set", receiver = "Set", method = "add")
 @NodeChild("set")
 @NodeChild("element")
 @NodeInfo(shortName = "setAdd")

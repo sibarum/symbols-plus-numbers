@@ -268,6 +268,16 @@ class ImportMode implements Mode {
             });
         }
 
+        // CanvasGui module exports
+        {
+            var guiRegistry = new spn.language.SpnModuleRegistry();
+            spn.canvasgui.spn.CanvasGuiBuiltins.registerModule(guiRegistry);
+            guiRegistry.lookup("CanvasGui").ifPresent(mod -> {
+                var exports = byModule.computeIfAbsent("CanvasGui", k -> new ArrayList<>());
+                exports.addAll(mod.allExportedNames());
+            });
+        }
+
         for (var entry : byModule.entrySet()) {
             String mod = entry.getKey();
             items.add(new ImportItem(mod, null, Kind.MODULE,
@@ -288,6 +298,7 @@ class ImportMode implements Mode {
             var registry = new spn.language.SpnModuleRegistry();
             spn.stdlib.gen.StdlibModuleLoader.registerAll(registry);
             spn.canvas.CanvasBuiltins.registerModule(registry);
+            spn.canvasgui.spn.CanvasGuiBuiltins.registerModule(registry);
             registry.addLoader(loader);
 
             for (String namespace : loader.discoverModules()) {
@@ -321,6 +332,7 @@ class ImportMode implements Mode {
                     var modRegistry = new spn.language.SpnModuleRegistry();
                     spn.stdlib.gen.StdlibModuleLoader.registerAll(modRegistry);
                     spn.canvas.CanvasBuiltins.registerModule(modRegistry);
+                    spn.canvasgui.spn.CanvasGuiBuiltins.registerModule(modRegistry);
                     var symTable = new spn.type.SpnSymbolTable();
                     modRegistry.addLoader(new spn.lang.ClasspathModuleLoader(null, symTable));
                     modRegistry.addLoader(new spn.lang.FilesystemModuleLoader(

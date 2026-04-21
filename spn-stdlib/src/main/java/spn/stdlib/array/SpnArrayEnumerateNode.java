@@ -15,7 +15,7 @@ import spn.type.SpnTupleValue;
 /**
  * Pairs each element with its index: enumerate(["a", "b"]) -> [(0, "a"), (1, "b")]
  */
-@SpnBuiltin(name = "enumerate", module = "Array", params = {"array"}, returns = "Array")
+@SpnBuiltin(name = "enumerate", module = "Array", params = {"array"}, returns = "Array", receiver = "Array")
 @NodeChild("array")
 @NodeInfo(shortName = "enumerate")
 public abstract class SpnArrayEnumerateNode extends SpnExpressionNode {

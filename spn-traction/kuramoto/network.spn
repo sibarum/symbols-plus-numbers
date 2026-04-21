@@ -1,0 +1,139 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Kuramoto Network — Phase 1 (float substrate, voice-gated energy model)
+-- ═══════════════════════════════════════════════════════════════════════
+-- Each node is a coupled oscillator with three parameters (ω, σ, E_max,
+-- r) plus the dynamic phase φ and dynamic energy E.
+--
+-- Key design: σ and E control ORTHOGONAL dimensions of behavior.
+--   σᵢ  — input resistance. How hard it is for neighbors to move me.
+--         Stiff nodes damp their phase response but still participate.
+--   Eᵢ  — output voice. How loudly my phase influences neighbors.
+--         Tired nodes broadcast less, but still listen and move.
+--
+-- This keeps depleted-soft nodes distinct from infinitely-stiff nodes:
+-- the former stay mobile but quiet, the latter stay loud but immobile.
+--
+-- Per-step dynamics:
+--
+--   βᵢ = clamp(Eᵢ / E_max,ᵢ, 0, 1)              -- broadcast strength
+--   Pᵢ = Σⱼ wᵢⱼ · βⱼ · sin(φⱼ − φᵢ)              -- voice-weighted pressure
+--   φᵢ ← φᵢ + Δt · (ωᵢ + Pᵢ / (1 + σᵢ))          -- phase update (no α gate)
+--   Wᵢ = βᵢ · |Pᵢ|                               -- outbound work rate
+--   Eᵢ ← clamp(Eᵢ + (rᵢ − Wᵢ) · Δt, 0, E_max,ᵢ)  -- energy update
+--
+-- Both cost and recovery are scaled by Δt, so the dynamics are invariant
+-- under dt rescaling. A quiet neighborhood (small |P|) lets nodes
+-- recover their voice; heavy pressure keeps them quieter.
+--
+-- The update is synchronous: all new states are computed from the
+-- previous-frame array, then returned as a new array.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import Math (sin, cos, abs, min, floor, sqrt, toFloat)
+import Array (length, append)
+
+-- Each node carries its intrinsic parameters and its dynamic state.
+type Node(
+  phase: float,
+  freq: float,
+  rigidity: float,
+  energy: float,
+  energyMax: float,
+  recoveryRate: float
+)
+
+pure Node(float, float, float, float, float, float) -> Node
+    = (phase, freq, rigidity, energy, energyMax, recoveryRate) {
+  this(phase, freq, rigidity, energy, energyMax, recoveryRate)
+}
+
+-- Wrap an angle into [0, 2π). Keeps the stored phase bounded for
+-- visualization and numerical stability across long simulations.
+pure wrap2Pi(float) -> float = (a) {
+  let twopi = 6.283185307179586
+  a - twopi * floor(a / twopi)
+}
+
+-- Broadcast strength β: monotonic in energy, in [0, 1]. A fully-charged
+-- node broadcasts at weight 1; a depleted node can't transmit but still
+-- listens. Linear ramp, clamped at both ends.
+pure broadcastStrength(float, float) -> float = (energy, energyMax) {
+  match
+  | energy <= 0.0         -> 0.0
+  | energy >= energyMax   -> 1.0
+  | _                     -> energy / energyMax
+}
+
+-- Voice-weighted incoming pressure: each neighbor j contributes
+-- βⱼ · sin(φⱼ − φᵢ). Tired neighbors pull less; quieter networks drift.
+pure pressure(float, Array<Node>, Array) -> float = (phaseI, nodes, neighborsOfI) {
+  let sum = 0.0
+  let k = 0
+  let n = length(neighborsOfI)
+  while {k < n} do {
+    let j = neighborsOfI[k]
+    let neighbor = nodes[j]
+    let betaJ = broadcastStrength(neighbor.energy, neighbor.energyMax)
+    sum = sum + betaJ * sin(neighbor.phase - phaseI)
+    k = k + 1
+  }
+  sum
+}
+
+-- Compute the new state of node i given the full previous-frame arrays.
+pure advanceNode(Node, float, Array, Array<Node>) -> Node
+    = (node, dt, neighbors, nodes) {
+  let p = pressure(node.phase, nodes, neighbors)
+  let beta = broadcastStrength(node.energy, node.energyMax)
+
+  -- Phase update: rigidity damps motion; energy does NOT gate response.
+  -- A tired node still follows its neighbors; it just doesn't lead.
+  let velocity = node.freq + p / (1.0 + node.rigidity)
+  let newPhase = wrap2Pi(node.phase + dt * velocity)
+
+  -- Energy update: cost of broadcasting is β·|P| per unit time; both
+  -- cost and recovery are dt-scaled so the model is time-invariant.
+  let work = beta * abs(p)
+  let eRaw = node.energy + (node.recoveryRate - work) * dt
+  let newEnergy = match
+    | eRaw < 0.0            -> 0.0
+    | eRaw > node.energyMax -> node.energyMax
+    | _                     -> eRaw
+
+  Node(newPhase, node.freq, node.rigidity,
+       newEnergy, node.energyMax, node.recoveryRate)
+}
+
+-- Synchronous step: every node's new state is computed against the
+-- previous-frame snapshot, then all new states are collected.
+pure stepNetwork(Array<Node>, Array<Array>, float) -> Array<Node>
+    = (nodes, adjacency, dt) {
+  let n = length(nodes)
+  let out = []
+  let i = 0
+  while {i < n} do {
+    let next = advanceNode(nodes[i], dt, adjacency[i], nodes)
+    out = append(out, next)
+    i = i + 1
+  }
+  out
+}
+
+-- Order parameter ρ = |(1/N) Σ e^(iφᵢ)| — a scalar in [0, 1] that
+-- measures phase coherence. 0 = incoherent, 1 = all phases aligned.
+pure orderParameter(Array<Node>) -> float = (nodes) {
+  let n = length(nodes)
+  let sx = 0.0
+  let sy = 0.0
+  let i = 0
+  while {i < n} do {
+    let node = nodes[i]
+    sx = sx + cos(node.phase)
+    sy = sy + sin(node.phase)
+    i = i + 1
+  }
+  let nf = toFloat(n)
+  let mx = sx / nf
+  let my = sy / nf
+  sqrt(mx * mx + my * my)
+}

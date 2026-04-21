@@ -18,7 +18,7 @@ import spn.type.SpnStructValue;
  * filterOption(Some(3), isPositive) -> Some(3)
  * filterOption(Some(-1), isPositive) -> None
  */
-@SpnBuiltin(name = "filterOption", module = "Option", params = {"option"})
+@SpnBuiltin(name = "filterOption", module = "Option", params = {"option"}, receiver = "Option", method = "filter")
 @SpnParamHint(name = "predicate", function = true)
 @NodeChild("option")
 @NodeInfo(shortName = "filterOption")
