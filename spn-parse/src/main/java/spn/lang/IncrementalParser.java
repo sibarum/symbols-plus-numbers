@@ -59,10 +59,32 @@ public final class IncrementalParser {
             String targetFile,
             SourceRange targetRange) {}
 
+    /**
+     * A type-reference annotation for IDE go-to-def on type names.
+     *
+     * <p>{@code useSite} is the range of the type-name token in the current
+     * file. {@code targetFile}/{@code targetRange} point at the declaration
+     * when the type was declared in a file the parser saw (locally, or in
+     * future, in another module's source). {@code importRange} points at the
+     * {@code import} keyword that brought the type into scope, for types
+     * imported from outside the current module.
+     *
+     * <p>All ranges are in <b>editor coordinates</b> (0-based line, 0-based
+     * col). The editor prefers {@code targetRange} over {@code importRange};
+     * either or both may be null.
+     */
+    public record TypeRefAnnotation(
+            SourceRange useSite,
+            String typeName,
+            String targetFile,
+            SourceRange targetRange,
+            SourceRange importRange) {}
+
     /** Result of an incremental parse. */
     public record Result(
             List<ParseError> errors,
             List<DispatchAnnotation> dispatches, // resolved overloads for IDE display
+            List<TypeRefAnnotation> typeRefs,    // resolved type-name use sites for IDE display
             boolean fullReparse,   // true if a full reparse was needed
             int totalSpans,        // total declaration spans
             int invalidatedSpans   // spans that needed re-parsing
@@ -78,7 +100,7 @@ public final class IncrementalParser {
     public Result parse(String source, String fileName) {
         if (source.isBlank()) {
             cache.invalidateAll();
-            return new Result(List.of(), List.of(), false, 0, 0);
+            return new Result(List.of(), List.of(), List.of(), false, 0, 0);
         }
 
         // Scan into declaration spans
@@ -96,7 +118,7 @@ public final class IncrementalParser {
         // If nothing changed, return cached errors with last dispatch data
         if (invalidated == 0) {
             return new Result(collectCachedErrors(cachedSpans, spans),
-                    lastDispatches, false, spans.size(), 0);
+                    lastDispatches, lastTypeRefs, false, spans.size(), 0);
         }
 
         // Something changed — do a full parse with error recovery.
@@ -160,6 +182,7 @@ public final class IncrementalParser {
         // the editor can go-to-def on `state.counter`-style member names.
         lastDispatches = extractDispatches(parser.getResolver(), parser.getTypeGraph(),
                 parser.getFieldAccessSites());
+        lastTypeRefs = extractTypeRefs(parser.getTypeReferenceSites());
 
         // Retain parser artifacts so the IDE can answer go-to-def queries
         // without re-parsing. A fresh parser is built on every invocation, so
@@ -167,11 +190,14 @@ public final class IncrementalParser {
         lastTypeGraph = parser.getTypeGraph();
         lastBuiltinNames = Set.copyOf(parser.getBuiltinRegistry().keySet());
 
-        return new Result(errors, lastDispatches, true, spans.size(), invalidated);
+        return new Result(errors, lastDispatches, lastTypeRefs, true, spans.size(), invalidated);
     }
 
     /** Cached dispatch annotations from the last successful parse. */
     private List<DispatchAnnotation> lastDispatches = List.of();
+
+    /** Cached type-reference annotations from the last successful parse. */
+    private List<TypeRefAnnotation> lastTypeRefs = List.of();
 
     /** TypeGraph from the last parse. Null before any parse completes. */
     private TypeGraph lastTypeGraph;
@@ -251,6 +277,26 @@ public final class IncrementalParser {
         result.sort((a, b) -> a.callSite().startLine() != b.callSite().startLine()
                 ? Integer.compare(a.callSite().startLine(), b.callSite().startLine())
                 : Integer.compare(a.callSite().startCol(), b.callSite().startCol()));
+        return List.copyOf(result);
+    }
+
+    /** Convert the parser's raw type-reference sites (parser convention ranges)
+     *  into editor-convention annotations. Sorted by position for linear scan. */
+    private List<TypeRefAnnotation> extractTypeRefs(List<SpnParser.TypeReferenceSite> sites) {
+        if (sites == null || sites.isEmpty()) return List.of();
+        List<TypeRefAnnotation> result = new ArrayList<>(sites.size());
+        for (SpnParser.TypeReferenceSite s : sites) {
+            SourceRange useSite = s.useSite().toEditorCoords();
+            SourceRange targetRange = (s.targetRange() != null && s.targetRange().isKnown())
+                    ? s.targetRange().toEditorCoords() : null;
+            SourceRange importRange = (s.importRange() != null && s.importRange().isKnown())
+                    ? s.importRange().toEditorCoords() : null;
+            result.add(new TypeRefAnnotation(useSite, s.typeName(),
+                    s.targetFile(), targetRange, importRange));
+        }
+        result.sort((a, b) -> a.useSite().startLine() != b.useSite().startLine()
+                ? Integer.compare(a.useSite().startLine(), b.useSite().startLine())
+                : Integer.compare(a.useSite().startCol(), b.useSite().startCol()));
         return List.copyOf(result);
     }
 

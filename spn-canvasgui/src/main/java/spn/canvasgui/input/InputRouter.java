@@ -49,6 +49,18 @@ public final class InputRouter {
 
     private void onMove(Component root, double x, double y) {
         lastX = x; lastY = y;
+
+        // Mouse capture: while pressed, MOVE events go to the press target
+        // (in its local coords) regardless of what's under the pointer.
+        // This is what enables drag semantics for sliders, scrollbars, etc.
+        if (pressTarget != null) {
+            Component hit = root.hitTest((float) x, (float) y);
+            if (hit != pressTarget) pointerLeftPressTarget = true;
+            bubble(pressTarget, new GuiEvent.Pointer(GuiEvent.PointerPhase.MOVE,
+                    localX(pressTarget, x), localY(pressTarget, y), 0, 0));
+            return;
+        }
+
         Component hit = root.hitTest((float) x, (float) y);
         if (hit != hoverTarget) {
             if (hoverTarget != null) {
@@ -62,9 +74,6 @@ public final class InputRouter {
                 bubble(hoverTarget, new GuiEvent.Pointer(GuiEvent.PointerPhase.ENTER,
                         localX(hoverTarget, x), localY(hoverTarget, y), 0, 0));
             }
-        }
-        if (pressTarget != null && hit != pressTarget) {
-            pointerLeftPressTarget = true;
         }
         if (hit != null) {
             bubble(hit, new GuiEvent.Pointer(GuiEvent.PointerPhase.MOVE,

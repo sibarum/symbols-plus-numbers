@@ -79,7 +79,12 @@
       "Bash(grep -n \"pure.*\\\\\\\\..*->\\\\|parseMethod\" \"C:\\\\Users\\\\Owner\\\\IdeaProjects\\\\spn-parent/spn-parse/src/main/java/spn/lang/SpnParser.java\")",
       "Bash(mvn -pl spn-ast,spn-parse,spn-stdlib install -DskipTests)",
       "Bash(mvn -pl spn-stdlib test -Dtest=CollectionMethodsTest)",
-      "Bash(mvn -pl spn-ast compile)"
+      "Bash(mvn -pl spn-ast compile)",
+      "Bash(grep -v \"typeGraph.add\\\\|//.*typeGraph\\\\|private.*TypeGraph\\\\|import\")",
+      "Bash(mvn -pl spn-parse,spn-gui -am compile -q)",
+      "Bash(mvn -pl spn-parse,spn-gui -am compile)",
+      "Bash(mvn -pl spn-parse,spn-gui -am clean compile)",
+      "Bash(mvn -pl spn-parse,spn-gui test)"
     ]
   }
 }

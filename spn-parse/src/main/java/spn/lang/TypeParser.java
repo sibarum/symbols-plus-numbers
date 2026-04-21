@@ -14,6 +14,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
 /**
@@ -44,16 +45,23 @@ final class TypeParser {
     private final Map<String, SpnVariantSet> variantRegistry;
     private final Map<String, SpnFunctionDescriptor> functionDescriptorRegistry;
 
+    /** Called with (token, name) whenever a named type reference is resolved
+     *  to a known declaration. Lets {@link SpnParser} record the use site
+     *  for IDE go-to-def. May be null. */
+    private final BiConsumer<SpnParseToken, String> typeRefRecorder;
+
     TypeParser(SpnTokenizer tokens,
                Map<String, SpnStructDescriptor> structRegistry,
                Map<String, SpnTypeDescriptor> typeRegistry,
                Map<String, SpnVariantSet> variantRegistry,
-               Map<String, SpnFunctionDescriptor> functionDescriptorRegistry) {
+               Map<String, SpnFunctionDescriptor> functionDescriptorRegistry,
+               BiConsumer<SpnParseToken, String> typeRefRecorder) {
         this.tokens = tokens;
         this.structRegistry = structRegistry;
         this.typeRegistry = typeRegistry;
         this.variantRegistry = variantRegistry;
         this.functionDescriptorRegistry = functionDescriptorRegistry;
+        this.typeRefRecorder = typeRefRecorder;
     }
 
     /**
@@ -160,12 +168,21 @@ final class TypeParser {
                 default -> {
                     // Check registries
                     SpnStructDescriptor sd = structRegistry.get(name);
-                    if (sd != null) yield FieldType.ofStruct(sd);
+                    if (sd != null) {
+                        if (typeRefRecorder != null) typeRefRecorder.accept(tok, name);
+                        yield FieldType.ofStruct(sd);
+                    }
                     SpnTypeDescriptor td = typeRegistry.get(name);
-                    if (td != null) yield td.isProduct()
-                            ? FieldType.ofProduct(td) : FieldType.ofConstrainedType(td);
+                    if (td != null) {
+                        if (typeRefRecorder != null) typeRefRecorder.accept(tok, name);
+                        yield td.isProduct()
+                                ? FieldType.ofProduct(td) : FieldType.ofConstrainedType(td);
+                    }
                     SpnVariantSet vs = variantRegistry.get(name);
-                    if (vs != null) yield FieldType.ofVariant(vs);
+                    if (vs != null) {
+                        if (typeRefRecorder != null) typeRefRecorder.accept(tok, name);
+                        yield FieldType.ofVariant(vs);
+                    }
                     throw tokens.error("Unknown type: " + name, tok);
                 }
             };

@@ -83,6 +83,9 @@ public final class FilesystemModuleLoader implements ModuleLoader {
                     .extra("promotions", parser.getPromotionRegistry())
                     .extra("signatures", parser.getSignatureRegistry())
                     .extra("qualifiedKeys", parser.getQualifiedKeyRegistry())
+                    // Type-declaration positions for IDE go-to-def on types
+                    // imported from this module.
+                    .extra("typeDeclarations", parser.buildTypeDeclarations())
                     .build();
 
             return Optional.of(module);

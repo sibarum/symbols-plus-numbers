@@ -197,4 +197,68 @@ class TypeGraphTest {
         assertEquals(1, editor.startLine(), "editor line is 0-based");
         assertEquals(5, editor.startCol(), "editor col is the same 0-based col");
     }
+
+    // ── Type-reference use sites (for IDE go-to-def on type names) ──────────
+
+    private SpnParser parseForTypeRefs(String source) {
+        SpnParser parser = new SpnParser(source, "test.spn", null, symbolTable, null);
+        parser.parse();
+        return parser;
+    }
+
+    @Test
+    void typeReferenceInSignatureResolvesToLocalDeclaration() {
+        // `Point` is declared on line 1 and referenced as a parameter type
+        // and return type on line 2. Both references should resolve to the
+        // declaration's name range.
+        SpnParser parser = parseForTypeRefs(
+                "type Point(x: float, y: float)\n" +
+                "pure identity(Point) -> Point = (p) { p }");
+
+        var refs = parser.getTypeReferenceSites();
+        // At least two refs: parameter type and return type on line 2.
+        var pointRefs = refs.stream()
+                .filter(r -> "Point".equals(r.typeName()))
+                .toList();
+        assertTrue(pointRefs.size() >= 2,
+                "expected >=2 Point references, got " + pointRefs.size());
+
+        var declNode = parser.getTypeGraph().lookupFirst("Point");
+        assertNotNull(declNode);
+        // Every Point reference should point at the declaration and carry a
+        // known use-site range.
+        for (var r : pointRefs) {
+            assertEquals("test.spn", r.targetFile(), "local type: targetFile is current file");
+            assertEquals(declNode.nameRange(), r.targetRange(),
+                    "local type: targetRange is the declaration's name range");
+            assertTrue(r.useSite().isKnown());
+            assertNull(r.importRange(), "local type: no import statement");
+        }
+    }
+
+    @Test
+    void typeReferenceIgnoresBuiltinPrimitives() {
+        // `int` / `float` are builtins — no source to jump to, don't record.
+        SpnParser parser = parseForTypeRefs(
+                "pure add(int, int) -> int = (a, b) { a + b }");
+        var refs = parser.getTypeReferenceSites();
+        assertTrue(refs.stream().noneMatch(r -> "int".equals(r.typeName())),
+                "primitive `int` should not be recorded as a type reference");
+    }
+
+    @Test
+    void typeReferenceUseSiteMatchesTokenRange() {
+        // The reference on line 2 to `Point` starts at column 14 (after
+        // `pure ident(`). Check the use-site range reflects the token position.
+        SpnParser parser = parseForTypeRefs(
+                "type Point(x: float, y: float)\n" +
+                "pure ident(Point) -> int = (p) { 0 }");
+        var ref = parser.getTypeReferenceSites().stream()
+                .filter(r -> "Point".equals(r.typeName()))
+                .findFirst().orElse(null);
+        assertNotNull(ref);
+        assertEquals(2, ref.useSite().startLine(), "use site is on line 2");
+        assertEquals(11, ref.useSite().startCol(),
+                "use site starts at col 11 (after `pure ident(`)");
+    }
 }

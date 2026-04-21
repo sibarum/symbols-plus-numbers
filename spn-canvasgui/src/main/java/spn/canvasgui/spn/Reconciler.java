@@ -2,10 +2,15 @@ package spn.canvasgui.spn;
 
 import com.oracle.truffle.api.CallTarget;
 import spn.canvasgui.component.Component;
+import spn.canvasgui.layout.Box;
+import spn.canvasgui.layout.Grid;
 import spn.canvasgui.layout.HBox;
+import spn.canvasgui.layout.Mask;
+import spn.canvasgui.layout.Spacer;
 import spn.canvasgui.layout.VBox;
 import spn.canvasgui.theme.Theme;
 import spn.canvasgui.widget.Button;
+import spn.canvasgui.widget.Slider;
 import spn.canvasgui.widget.Text;
 import spn.type.SpnSymbol;
 
@@ -45,7 +50,38 @@ public final class Reconciler {
                 for (GuiCmd child : v.children()) box.add(build(child));
                 yield box;
             }
+            case GuiCmd.Grid g -> {
+                Grid grid = new Grid(g.rows(), g.cols());
+                for (GuiCmd child : g.children()) grid.add(build(child));
+                yield grid;
+            }
+            case GuiCmd.Spacer s -> new Spacer();
+            case GuiCmd.Slider sl -> {
+                Slider slider = new Slider(theme).setRange(sl.min(), sl.max()).setValue(sl.value());
+                bindSliderHandlers(slider, sl.handlers());
+                yield slider;
+            }
+            case GuiCmd.Mask m -> {
+                Mask mask = new Mask(m.widthRem(), m.heightRem());
+                if (m.child() != null) mask.setChild(build(m.child()));
+                yield mask;
+            }
+            case GuiCmd.Box b -> {
+                Box box = new Box();
+                applyBoxStyling(box, b);
+                if (b.child() != null) box.setChild(build(b.child()));
+                yield box;
+            }
         };
+    }
+
+    private static void applyBoxStyling(Box dst, GuiCmd.Box src) {
+        dst.setMarginRem(src.marginRem());
+        dst.setPaddingRem(src.paddingRem());
+        if (src.hasBorder()) dst.setBorder(src.borderRem(),
+                src.borderR(), src.borderG(), src.borderB());
+        if (src.hasBg()) dst.setBg(src.bgR(), src.bgG(), src.bgB());
+        else dst.clearBg();
     }
 
     /**
@@ -82,6 +118,42 @@ public final class Reconciler {
                 }
                 yield build(cmd);
             }
+            case GuiCmd.Grid g -> {
+                if (existing instanceof Grid grid
+                        && grid.rows() == g.rows() && grid.cols() == g.cols()) {
+                    updateChildren(grid.children(), g.children(), grid::replaceChild, grid::add);
+                    yield grid;
+                }
+                yield build(cmd);
+            }
+            case GuiCmd.Spacer s -> existing instanceof Spacer ? existing : build(cmd);
+            case GuiCmd.Slider sl -> {
+                if (existing instanceof Slider slider) {
+                    slider.setRange(sl.min(), sl.max()).setValue(sl.value());
+                    bindSliderHandlers(slider, sl.handlers());
+                    yield slider;
+                }
+                yield build(cmd);
+            }
+            case GuiCmd.Mask m -> {
+                if (existing instanceof Mask mask) {
+                    mask.setSizeRem(m.widthRem(), m.heightRem());
+                    mask.setChild(m.child() != null ? build(m.child()) : null);
+                    yield mask;
+                }
+                yield build(cmd);
+            }
+            case GuiCmd.Box b -> {
+                if (existing instanceof Box box) {
+                    applyBoxStyling(box, b);
+                    Component newChild = b.child() != null
+                            ? (box.child() != null ? update(box.child(), b.child()) : build(b.child()))
+                            : null;
+                    box.setChild(newChild);
+                    yield box;
+                }
+                yield build(cmd);
+            }
         };
     }
 
@@ -112,6 +184,19 @@ public final class Reconciler {
             btn.onClick(() -> ct.call());
         } else {
             btn.onClick(() -> {});
+        }
+    }
+
+    private void bindSliderHandlers(Slider slider, Map<SpnSymbol, CallTarget> handlers) {
+        CallTarget change = null;
+        for (var e : handlers.entrySet()) {
+            if (e.getKey().name().equals("change")) change = e.getValue();
+        }
+        if (change != null) {
+            CallTarget ct = change;
+            slider.onChange(v -> ct.call(v));
+        } else {
+            slider.onChange(v -> {});
         }
     }
 

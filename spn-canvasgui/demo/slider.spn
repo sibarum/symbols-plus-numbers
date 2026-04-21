@@ -1,0 +1,27 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Slider demo — drag to change a value, label echoes it.
+-- ═══════════════════════════════════════════════════════════════════════
+-- Stateless slider: value is bound from this.x each frame; the on:change
+-- handler updates this.x with the new value, which the next frame reads
+-- back. Try arrow keys after focusing the slider with Tab.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import CanvasGui
+import String (formatNum)
+
+stateful type Knob(x: float)
+
+Knob(0.5) {
+  let render = do() {
+    guiRender(
+      guiVBox([
+        guiText("value = " ++ formatNum(this.x))
+            .padding(0.5).bg(0.18, 0.20, 0.26),
+        guiSlider(0.0, 1.0, this.x).on(:change, do(v) { this.x = v }),
+      ]).padding(0.75)
+    )
+  }
+
+  guiWindow("Slider", 360, 160)
+  guiRun(30.0, render)
+}

@@ -1,0 +1,32 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Operator pad — exercises guiGrid + Box styling (.margin/.padding/.bg).
+-- ═══════════════════════════════════════════════════════════════════════
+-- Discrete handlers (no loop — do() bodies cannot capture outer locals).
+-- The display gets a tinted background and padding; the grid sits inside
+-- a padded outer Box so the buttons don't hug the window edge.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import CanvasGui
+import String (formatNum)
+
+stateful type CalcState(value: int)
+
+CalcState(0) {
+  let render = do() {
+    guiRender(
+      guiVBox([
+        guiText("= " ++ formatNum(this.value))
+            .padding(0.5).bg(0.18, 0.20, 0.26),
+        guiGrid(2, 2, [
+          guiButton("+1").on(:click, do() { this.value = this.value + 1 }),
+          guiButton("-1").on(:click, do() { this.value = this.value - 1 }),
+          guiButton("×2").on(:click, do() { this.value = this.value * 2 }),
+          guiButton("Clear").on(:click, do() { this.value = 0 }),
+        ]),
+      ]).padding(0.75)
+    )
+  }
+
+  guiWindow("Operator pad", 320, 280)
+  guiRun(30.0, render)
+}

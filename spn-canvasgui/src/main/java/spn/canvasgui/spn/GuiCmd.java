@@ -1,6 +1,7 @@
 package spn.canvasgui.spn;
 
 import com.oracle.truffle.api.CallTarget;
+import spn.canvasgui.component.Insets;
 import spn.type.SpnSymbol;
 
 import java.util.LinkedHashMap;
@@ -53,6 +54,96 @@ public sealed interface GuiCmd {
         public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
             return new VBox(children, merge(handlers, event, handler));
         }
+    }
+
+    record Grid(int rows, int cols, List<GuiCmd> children,
+                Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
+        public Grid(int rows, int cols, List<GuiCmd> children) { this(rows, cols, children, Map.of()); }
+        @Override
+        public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
+            return new Grid(rows, cols, children, merge(handlers, event, handler));
+        }
+    }
+
+    record Spacer(Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
+        public Spacer() { this(Map.of()); }
+        @Override
+        public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
+            return new Spacer(merge(handlers, event, handler));
+        }
+    }
+
+    record Slider(double min, double max, double value,
+                  Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
+        public Slider(double min, double max, double value) { this(min, max, value, Map.of()); }
+        @Override
+        public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
+            return new Slider(min, max, value, merge(handlers, event, handler));
+        }
+    }
+
+    record Mask(GuiCmd child, float widthRem, float heightRem,
+                Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
+        public Mask(GuiCmd child, float w, float h) { this(child, w, h, Map.of()); }
+        @Override
+        public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
+            return new Mask(child, widthRem, heightRem, merge(handlers, event, handler));
+        }
+    }
+
+    /**
+     * Single-child decorator with margin / padding / border / background.
+     * Created lazily by {@code .margin / .padding / .border / .bg} chained
+     * onto any GuiCmd (those methods wrap a non-Box child in a fresh Box).
+     */
+    record Box(GuiCmd child, Insets marginRem, Insets paddingRem,
+               float borderRem, float borderR, float borderG, float borderB, boolean hasBorder,
+               float bgR, float bgG, float bgB, boolean hasBg,
+               Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
+
+        public static Box wrap(GuiCmd child) {
+            return new Box(child, Insets.ZERO, Insets.ZERO,
+                    0, 0, 0, 0, false,
+                    0, 0, 0, false,
+                    Map.of());
+        }
+
+        public Box withMarginRem(Insets m) {
+            return new Box(child, m, paddingRem, borderRem,
+                    borderR, borderG, borderB, hasBorder,
+                    bgR, bgG, bgB, hasBg, handlers);
+        }
+
+        public Box withPaddingRem(Insets p) {
+            return new Box(child, marginRem, p, borderRem,
+                    borderR, borderG, borderB, hasBorder,
+                    bgR, bgG, bgB, hasBg, handlers);
+        }
+
+        public Box withBorder(float widthRem, float r, float g, float b) {
+            return new Box(child, marginRem, paddingRem, widthRem,
+                    r, g, b, true,
+                    bgR, bgG, bgB, hasBg, handlers);
+        }
+
+        public Box withBg(float r, float g, float b) {
+            return new Box(child, marginRem, paddingRem, borderRem,
+                    borderR, borderG, borderB, hasBorder,
+                    r, g, b, true, handlers);
+        }
+
+        @Override
+        public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
+            return new Box(child, marginRem, paddingRem, borderRem,
+                    borderR, borderG, borderB, hasBorder,
+                    bgR, bgG, bgB, hasBg,
+                    merge(handlers, event, handler));
+        }
+    }
+
+    /** Merge styling onto {@code cmd}: if it's already a Box, update it; else wrap fresh. */
+    static Box ensureBox(GuiCmd cmd) {
+        return cmd instanceof Box b ? b : Box.wrap(cmd);
     }
 
     private static Map<SpnSymbol, CallTarget> merge(Map<SpnSymbol, CallTarget> base,

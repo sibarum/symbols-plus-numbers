@@ -202,9 +202,12 @@ public class SpnParser {
                     }
                 });
         // Type parser holds tokens plus the four type-lookup registries.
+        // The recorder callback captures type-reference use sites so the IDE
+        // can offer go-to-definition on type names in signatures.
         this.typeParser = new TypeParser(
                 tokens, structRegistry, typeRegistry, variantRegistry,
-                functionDescriptorRegistry);
+                functionDescriptorRegistry,
+                this::recordTypeReference);
         // Type resolver handles compile-time dispatch decisions.
         this.resolver = new TypeResolver(
                 operatorRegistry, promotionRegistry, methodRegistry,
@@ -250,6 +253,13 @@ public class SpnParser {
             if (slot != null) return slot;
             if (parent != null) return parent.lookupLocal(name);
             return -1;
+        }
+
+        /** Like lookupLocal but doesn't walk parents — used to detect outer-scope
+         *  references from inside a do() closure body, which can't legally capture them. */
+        int lookupLocalImmediate(String name) {
+            Integer slot = locals.get(name);
+            return slot != null ? slot : -1;
         }
 
         FieldType lookupType(String name) {
@@ -390,6 +400,23 @@ public class SpnParser {
     public Map<String, Set<String>> getSignatureRegistry() { return signatureRegistry; }
     public Map<String, SpnFunctionDescriptor> getQualifiedKeyRegistry() { return qualifiedKeyRegistry; }
     public List<Promotion> getPromotionRegistry() { return promotionRegistry; }
+
+    /** Build a map of every exported type/struct/variant declaration in this
+     *  parse to its source position. Used by module loaders so cross-module
+     *  go-to-definition can jump to the original declaration, not just the
+     *  import statement that brought it in. */
+    public Map<String, spn.language.TypeDeclPos> buildTypeDeclarations() {
+        Map<String, spn.language.TypeDeclPos> result = new LinkedHashMap<>();
+        for (TypeGraph.Kind k : new TypeGraph.Kind[]{
+                TypeGraph.Kind.TYPE, TypeGraph.Kind.STRUCT, TypeGraph.Kind.VARIANT}) {
+            for (TypeGraph.Node n : typeGraph.byKind(k)) {
+                if (n.file() == null || !n.nameRange().isKnown()) continue;
+                result.putIfAbsent(n.name(),
+                        new spn.language.TypeDeclPos(n.file(), n.nameRange()));
+            }
+        }
+        return result;
+    }
 
     // ── Top-level parsing ──────────────────────────────────────────────────
 
@@ -1255,6 +1282,9 @@ public class SpnParser {
     }
 
     private void parseImportDecl() {
+        // Position of the `import` keyword — used so go-to-def can land on
+        // the import statement when the clicked type was brought in by it.
+        SpnParseToken importTok = tokens.peek();
         tokens.expect("import");
 
         // Parse the module path
@@ -1325,7 +1355,31 @@ public class SpnParser {
         }
 
         ImportDirective directive = new ImportDirective(path.toString(), names, qualifier);
+
+        // Snapshot type-related registries so we can record which names this
+        // import brought into scope, and attribute them to this statement for
+        // go-to-def on imported types.
+        Set<String> typesBefore = new HashSet<>(typeRegistry.keySet());
+        Set<String> structsBefore = new HashSet<>(structRegistry.keySet());
+        Set<String> variantsBefore = new HashSet<>(variantRegistry.keySet());
+
         resolveAndApplyImport(directive);
+
+        spn.source.SourceRange importRange = importTok.range();
+        recordNewImportedNames(typesBefore, typeRegistry.keySet(), importRange);
+        recordNewImportedNames(structsBefore, structRegistry.keySet(), importRange);
+        recordNewImportedNames(variantsBefore, variantRegistry.keySet(), importRange);
+    }
+
+    /** Add every name in {@code after \ before} to {@link #importedTypeRanges}
+     *  pointing at {@code range}. First import of a given name wins. */
+    private void recordNewImportedNames(Set<String> before, Set<String> after,
+                                        spn.source.SourceRange range) {
+        for (String name : after) {
+            if (!before.contains(name)) {
+                importedTypeRanges.putIfAbsent(name, range);
+            }
+        }
     }
 
     /**
@@ -1406,6 +1460,14 @@ public class SpnParser {
         if (macros != null) macroRegistry.putAll(macros);
         List<Promotion> promotions = module.getExtra("promotions");
         if (promotions != null) promotionRegistry.addAll(promotions);
+        // IDE go-to-def: copy source positions for imported types so clicks
+        // on a cross-module type name land on the declaration, not the import.
+        Map<String, spn.language.TypeDeclPos> typeDecls = module.getExtra("typeDeclarations");
+        if (typeDecls != null) {
+            for (var entry : typeDecls.entrySet()) {
+                importedTypeDeclarations.putIfAbsent(entry.getKey(), entry.getValue());
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -1436,6 +1498,17 @@ public class SpnParser {
 
             SpnVariantSet vs = module.getVariant(src);
             if (vs != null) { variantRegistry.put(dst, vs); }
+
+            // IDE go-to-def: if this module carries source positions for the
+            // imported type, record it under the LOCAL alias so clicks on
+            // the name in this file route to the original declaration.
+            if (td != null || sd != null || vs != null) {
+                Map<String, spn.language.TypeDeclPos> typeDecls = module.getExtra("typeDeclarations");
+                if (typeDecls != null) {
+                    spn.language.TypeDeclPos pos = typeDecls.get(src);
+                    if (pos != null) importedTypeDeclarations.putIfAbsent(dst, pos);
+                }
+            }
 
             // If this is a type/struct, also import all associated behavior
             if (td != null || sd != null) {
@@ -2580,6 +2653,74 @@ public class SpnParser {
     }
 
     /**
+     * A type-use site in the current file, resolved for IDE go-to-def.
+     * Emitted by {@link TypeParser} for every named type reference in
+     * signatures, let ascriptions, struct field types, composite-type
+     * element types, and variant payloads.
+     *
+     * <p>{@code useSite} is the type-name token's range in this file.
+     * {@code targetFile}/{@code targetRange} point at the declaration when
+     * the type was declared in a file the parser saw (locally or — in
+     * future — in another module's source). {@code importRange} points at
+     * the {@code import} keyword of the import statement that brought the
+     * name into scope, when applicable. Any field may be null; the editor
+     * prefers {@code targetRange} over {@code importRange}.
+     *
+     * <p>Raw form (parser convention); converted to editor coords by
+     * {@link IncrementalParser} at the parser/UI boundary.
+     */
+    record TypeReferenceSite(spn.source.SourceRange useSite, String typeName,
+                             String targetFile, spn.source.SourceRange targetRange,
+                             spn.source.SourceRange importRange) {}
+
+    private final List<TypeReferenceSite> typeReferenceSites = new ArrayList<>();
+
+    /** Maps a name brought into scope by an import to the SourceRange of
+     *  that import's keyword. Populated in {@link #parseImportDecl()} by
+     *  snapshotting the type/struct/variant registries before/after each
+     *  directive applies. First import wins when a name is imported twice. */
+    private final Map<String, spn.source.SourceRange> importedTypeRanges = new LinkedHashMap<>();
+
+    /** Maps a name brought into scope by an import to the declaration's
+     *  source position in the defining module. Populated by
+     *  {@link #applyFullImport} and {@link #applySelectiveImport} from the
+     *  module's {@code typeDeclarations} extra, so go-to-def on an imported
+     *  type can open the defining file instead of just the import line. */
+    private final Map<String, spn.language.TypeDeclPos> importedTypeDeclarations = new LinkedHashMap<>();
+
+    public List<TypeReferenceSite> getTypeReferenceSites() {
+        return typeReferenceSites;
+    }
+
+    /** Record a type use site for IDE go-to-def. Called from {@link TypeParser}
+     *  when a named type token resolves to a known type. Skips unresolved
+     *  names, primitives, and composite-type builtins (Array/Set/Dict/Tuple),
+     *  which the caller filters out. */
+    private void recordTypeReference(SpnParseToken nameTok, String typeName) {
+        if (nameTok == null || typeName == null) return;
+        String targetFile = null;
+        spn.source.SourceRange targetRange = null;
+        // Prefer a local declaration (same file) — the TypeGraph has its
+        // exact position. Fall back to the imported-declarations map when
+        // the type was brought in from another module's source.
+        TypeGraph.Node decl = typeGraph.lookupFirst(typeName);
+        if (decl != null && decl.file() != null && decl.nameRange().isKnown()) {
+            targetFile = decl.file();
+            targetRange = decl.nameRange();
+        } else {
+            spn.language.TypeDeclPos pos = importedTypeDeclarations.get(typeName);
+            if (pos != null && pos.range() != null && pos.range().isKnown()) {
+                targetFile = pos.file();
+                targetRange = pos.range();
+            }
+        }
+        spn.source.SourceRange importRange = importedTypeRanges.get(typeName);
+        if (targetFile == null && targetRange == null && importRange == null) return;
+        typeReferenceSites.add(new TypeReferenceSite(
+                nameTok.range(), typeName, targetFile, targetRange, importRange));
+    }
+
+    /**
      * Parse: let TypeName(a, b, c) = expr
      * Destructures a struct/product value into local bindings.
      */
@@ -3668,6 +3809,16 @@ public class SpnParser {
         // Variable read
         int slot = currentScope.lookupLocal(name);
         if (slot >= 0) {
+            // Inside a do() body, only locals declared within that body are
+            // valid — outer-scope locals don't exist in the closure's frame.
+            // Walk-up lookups would silently produce out-of-bounds at runtime.
+            if (currentStatefulBlock != null && currentStatefulBlock.inDoBody
+                    && currentScope.lookupLocalImmediate(name) < 0) {
+                throw tokens.error("do() body cannot reference outer local '"
+                        + name + "' — only `this.*` and locals declared inside the do() are visible. "
+                        + "Move the value onto the stateful type, or build the closure where the value is local.",
+                        tok);
+            }
             SpnExpressionNode readNode = new SpnReadLocalVariableNodeWrapper(slot);
             FieldType varType = currentScope.lookupType(name);
             if (varType != null) trackType(readNode, varType);

@@ -308,6 +308,12 @@ public class EditorTab extends ScrollableTab {
     //   (2) declaration is elsewhere in module → open/switch tab and select
     //   (3) name imported from a builtin/other → scroll to the `import` line
     //   (4) unresolved                          → Ctrl+T the clicked row
+    //
+    // Type references are handled by the same flow via
+    // {@link spn.lang.IncrementalParser.TypeRefAnnotation}s emitted by the
+    // parser at every named-type use site. Cross-module type navigation uses
+    // the annotation's importRange to jump directly to the import statement
+    // that brought the type into scope.
 
     private void goToDefinition(double mx, double my) {
         int[] pos = textArea.screenToDocPos(mx, my);
@@ -323,6 +329,35 @@ public class EditorTab extends ScrollableTab {
             var tr = disp.targetRange();
             if (navigateToDeclaration(disp.targetFile(), tr.startLine(), tr.startCol(),
                     name != null ? name : extractOpFromDescription(disp.description()))) {
+                return;
+            }
+        }
+
+        // Type reference: the parser records every named-type use site with
+        // the resolved declaration (when available in the current parse) and
+        // the import statement that brought the name into scope (when
+        // imported). This covers cross-file and cross-module type navigation
+        // that the name-only fallback below can't handle.
+        var typeRef = diagnosticEngine.typeReferenceAt(row, col);
+        if (typeRef != null) {
+            if (typeRef.targetFile() != null && typeRef.targetRange() != null) {
+                var tr = typeRef.targetRange();
+                if (navigateToDeclaration(typeRef.targetFile(),
+                        tr.startLine(), tr.startCol(), typeRef.typeName())) {
+                    return;
+                }
+            }
+            // Outside the current module (or no source available): jump to the
+            // import that brought the type in. Select the type name within the
+            // import line if it's listed (selective import), else select the
+            // import keyword so the user sees which statement it was.
+            if (typeRef.importRange() != null) {
+                int importLine = typeRef.importRange().startLine();
+                if (!selectWordOnLine(importLine, typeRef.typeName())) {
+                    var ir = typeRef.importRange();
+                    textArea.selectRange(ir.startLine(), ir.startCol(),
+                            ir.endLine(), ir.endCol());
+                }
                 return;
             }
         }
@@ -481,13 +516,20 @@ public class EditorTab extends ScrollableTab {
                 // stop scanning.
                 break;
             }
-            int idx = findWholeWord(line, name);
-            if (idx >= 0) {
-                textArea.selectRange(row, idx, row, idx + name.length());
-                return true;
-            }
+            if (selectWordOnLine(row, name)) return true;
         }
         return false;
+    }
+
+    /** Select {@code name} on {@code row} if it appears there as a whole word.
+     *  Returns false if the row is out of range or the word isn't present. */
+    private boolean selectWordOnLine(int row, String name) {
+        if (row < 0 || row >= textArea.getBuffer().lineCount()) return false;
+        String line = textArea.getBuffer().getLine(row);
+        int idx = findWholeWord(line, name);
+        if (idx < 0) return false;
+        textArea.selectRange(row, idx, row, idx + name.length());
+        return true;
     }
 
     private static int findWholeWord(String line, String name) {

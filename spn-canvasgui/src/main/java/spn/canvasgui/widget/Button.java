@@ -91,6 +91,13 @@ public class Button extends Component {
                 case ENTER, EXIT, PRESS, RELEASE, MOVE -> { return true; }
             }
         }
+        // Keyboard activation: Enter or Space when focused.
+        if (e instanceof GuiEvent.KeyDown k && focused()) {
+            if (k.key() == spn.stdui.input.Key.ENTER || k.key() == spn.stdui.input.Key.SPACE) {
+                onClick.run();
+                return true;
+            }
+        }
         return false;
     }
 }

@@ -22,4 +22,13 @@ public final class Theme {
     /** Button horizontal padding, rem. */
     public float buttonPadXRem = 0.75f;
     public float buttonPadYRem = 0.4f;
+
+    // ── Slider ──────────────────────────────────────────────────────────
+    public float sliderTrackR = 0.18f, sliderTrackG = 0.20f, sliderTrackB = 0.26f;
+    public float sliderThumbR = 0.55f, sliderThumbG = 0.62f, sliderThumbB = 0.78f;
+    public float sliderThumbHoverR = 0.70f, sliderThumbHoverG = 0.78f, sliderThumbHoverB = 0.95f;
+    public float sliderTrackHeightRem = 0.35f;
+    public float sliderThumbWidthRem = 0.7f;
+    public float sliderDefaultWidthRem = 12f;
+    public float sliderDefaultHeightRem = 1.5f;
 }

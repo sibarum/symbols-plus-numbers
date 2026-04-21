@@ -33,6 +33,9 @@ public class DiagnosticEngine {
     /** Dispatch annotations from the last successful parse. */
     private java.util.List<spn.lang.IncrementalParser.DispatchAnnotation> dispatches = java.util.List.of();
 
+    /** Type-reference annotations from the last successful parse. */
+    private java.util.List<spn.lang.IncrementalParser.TypeRefAnnotation> typeRefs = java.util.List.of();
+
     private final SpnSymbolTable symbolTable;
     private final SpnModuleRegistry registry;
 
@@ -81,6 +84,11 @@ public class DiagnosticEngine {
         // Cache dispatch annotations for IDE display
         if (result.dispatches() != null && !result.dispatches().isEmpty()) {
             dispatches = result.dispatches();
+        }
+
+        // Cache type-reference annotations for IDE display (go-to-def on types)
+        if (result.typeRefs() != null && !result.typeRefs().isEmpty()) {
+            typeRefs = result.typeRefs();
         }
 
         // Convert parse errors to diagnostic marks
@@ -159,6 +167,23 @@ public class DiagnosticEngine {
             boolean beforeEnd = cs.endLine() > line
                     || (cs.endLine() == line && cs.endCol() >= col);
             if (afterStart && beforeEnd) return d;
+        }
+        return null;
+    }
+
+    /** The type-reference annotation whose use-site range contains the given
+     *  position (or null). Used by go-to-def to navigate from a type name in a
+     *  signature or type ascription to its declaration or import statement.
+     *  (line, col) are in editor coordinates. */
+    public spn.lang.IncrementalParser.TypeRefAnnotation typeReferenceAt(int line, int col) {
+        for (var t : typeRefs) {
+            var us = t.useSite();
+            if (us.startLine() > line) break;
+            boolean afterStart = us.startLine() < line
+                    || (us.startLine() == line && us.startCol() <= col);
+            boolean beforeEnd = us.endLine() > line
+                    || (us.endLine() == line && us.endCol() >= col);
+            if (afterStart && beforeEnd) return t;
         }
         return null;
     }
