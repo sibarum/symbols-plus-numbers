@@ -378,7 +378,7 @@ class ArrayTest {
         @Test
         void describe() {
             assertEquals("Array<Long>", FieldType.ofArray(FieldType.LONG).describe());
-            assertEquals("Array", FieldType.ofArray(FieldType.UNTYPED).describe());
+            assertEquals("UntypedArray", FieldType.ofArray(FieldType.UNTYPED).describe());
         }
 
         @Test

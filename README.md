@@ -67,7 +67,7 @@ pure Rational.inv() -> Rational = () { Rational(this.1, this.0) }
 -- Derive ordering from a single comparator
 import Ordering
 pure compare(Rational, Rational) -> int = (a, b) { ... }
-deriveOrderingFromInt(Rational, compare)
+deriveOrderingFromInt<Rational, compare>
 
 -- Anonymous union types
 pure area(Circle | Rectangle) -> float = (shape) {
@@ -80,10 +80,10 @@ pure area(Circle | Rectangle) -> float = (shape) {
 -- macro params with `requires`. No conformance declaration on the type.
 signature Additive (@+, @-, @neg)
 
-macro deriveDouble(T requires Additive) = {
+macro deriveDouble<T requires Additive> = {
   pure T.doubled() -> T = () { this + this }
 }
-deriveDouble(Rational)        -- compile error if Rational lacks any Additive key
+deriveDouble<Rational>        -- compile error if Rational lacks any Additive key
 ```
 
 ## Features
@@ -144,61 +144,65 @@ match shape
 
 Compile-time impure functions. A macro body can define types, functions, and methods — but declarations are LOCAL to the macro scope unless explicitly `emit`-ted. Operator overloads and promotions register globally (they modify semantics, not scope).
 
+Macros use angle brackets at declaration and invocation sites: `macro Name<P> = { ... }` is the only declaration form; `Name<Arg>` is the only invocation form. Parentheses are reserved for runtime calls.
+
 ```
--- Simple macro (old-style, no emit — everything registers normally)
-macro deriveDouble(T) = {
+-- Simple macro: register a function for some type
+macro deriveDouble<T> = {
   pure double(T) -> T = (x) { x + x }
 }
-deriveDouble(int)
+deriveDouble<int>
 double(5)  -- 10
 
 -- Derive ordering from a single comparator (stdlib)
 import Ordering
-deriveOrderingFromInt(Rational, compare)
+deriveOrderingFromInt<Rational, compare>
 -- now <, >, <=, >= work on Rational
 
--- Scoped macro with emit — typed collection wrapper
+-- Typed collection wrapper (stdlib)
 import Collections
-type RationalArray = constructTypedArray(Rational)
-let arr = RationalArray([]).push(5)    -- 5 promoted to Rational automatically
-arr.get(0) == Rational(5, 1)          -- typed retrieval
-arr.items                              -- compile error: private field
+type RationalArray = Array<Rational>
+let arr = RationalArray().push(5)      -- 5 promoted to Rational automatically
+arr[0] == Rational(5, 1)                -- subscript returns the typed element
+arr.items                               -- compile error: private field
 ```
 
 **Macro features:**
-- **`emit`** keyword transmits a declaration from the macro's scope to the caller
-- **`type X = macroCall(T)`** binds the emitted type under a user-chosen name
-- **Multi-emit bundles** — `emit { label: T1, label2: T2 }` emits several named types; the caller binds `let h = macroCall(...)` to a compile-time handle and pulls each via `type X = h.label` (see below)
-- **Conditional blocks** — `<! if COND !> { ... } <! else !> { ... }` selects between branches at expansion time based on macro-param values. Works for both conditional bodies and conditional declarations (see below)
-- **Scoped isolation** — internal helpers are discarded after the macro completes
-- **Private constructor fields** — `let this.field = expr` creates encapsulated state, accessible only from methods on the same type
-- **Multiple dispatch** — macro-generated functions participate in type-dispatched overloading
-- **Unique internal names** — multiple invocations of the same macro don't collide
-- **Macro-aware error messages** — parse errors inside an expanded body are tagged with the macro invocation site (`[in macro name(file:line)]`), so diagnostics point back to the caller rather than the internal expansion
-- **Signature constraints** — `macro foo(T requires Ring) = { ... }` checks at the call site that T has impls for every dispatch key the signature lists; missing keys are named in the error (see "Qualified Dispatch Keys" below)
+- **`emit`** keyword transmits a declaration from the macro's scope to the caller. One emit per macro — `type X = macro<Arg>` binds the single emitted type under a user-chosen name.
+- **Memoized invocations** — `Array<Rational>` used twice in the same file refers to the same emitted type. Type aliases bound to the same macro+args are interchangeable.
+- **Conditional blocks** — `<! if COND !> { ... } <! else !> { ... }` selects between branches at expansion time based on macro-param values. Works for both conditional bodies and conditional declarations (see below).
+- **Scoped isolation** — internal helpers are discarded after the macro completes; only `emit`-ted names (plus any operator overloads and promotions) survive.
+- **Private constructor fields** — `let this.field = expr` creates encapsulated state, accessible only from methods on the same type.
+- **Multiple dispatch** — macro-generated functions participate in type-dispatched overloading.
+- **Macro-aware error messages** — parse errors inside an expanded body are tagged with the macro invocation site (`[in macro name(file:line)]`), so diagnostics point back to the caller rather than the internal expansion.
+- **Signature constraints** — `macro foo<T requires Ring> = { ... }` checks at the call site that T has impls for every dispatch key the signature lists; missing keys are named in the error (see "Qualified Dispatch Keys" below).
 
-**Multi-emit with named handles:**
+**User-definable subscript:**
+
+Any type can define `[]` as a method, and `x[i]` at a call site dispatches to it. Stdlib collection macros use this to preserve element types through subscript:
 
 ```
-import Numerics     -- ships with constructRatComplex
+macro Array<T> = {
+  type TypedArray
+  ...
+  pure TypedArray[](int) -> T = (i) { this.items[i] }
+  ...
+  emit TypedArray
+}
 
--- The caller binds a compile-time handle, then pulls each type by label:
-let rc = constructRatComplex(31)
-type Rat31 = rc.rational
-type Cpx31 = rc.complex
-
-let q = Rat31(3, 4) + Rat31(1, 2)       -- exact rational arithmetic
-let z = Cpx31(Rat31(1, 1), Rat31(0, 1)) -- complex as (scale, tan θ)
+type IntArray = Array<int>
+let xs = IntArray().push(1).push(2)
+xs[0]         -- int, not _ — typechecks for arithmetic, match narrowing, etc.
 ```
 
-The handle (`rc`) is a compile-time namespace, not a runtime value. Two separate invocations (e.g. `constructRatComplex(31)` and `constructRatComplex(20)`) produce non-conflicting types even when pulled into the same scope — useful when you want mixed-precision numerics in one file. Function and value emit (`pure f = rc.normalize`, `let v = rc.bits`) are planned extensions — today, the bundle form carries types only.
+The setter form `pure TypeName[](int, T) -> ...` is reserved for stateful types (not yet implemented — immutable types use a named `.with(i, x)` method instead).
 
 **Macro conditional blocks:**
 
 The `<! ... !>` delimiters mark a macro-expansion-time directive. The only form in v1 is a binary conditional — always paired with a mandatory `else` — selecting between two blocks:
 
 ```
-macro withFlavor(flavor) = {
+macro withFlavor<flavor> = {
   type Wrapper(int)
 
   -- Conditional body: same method, different implementations
@@ -215,8 +219,8 @@ macro withFlavor(flavor) = {
   emit Wrapper
 }
 
-type Fast = withFlavor(:fast)         -- .go() doubles; no .tag()
-type Tagged = withFlavor(:tagged)     -- .go() passes through; has .tag()
+type Fast = withFlavor<:fast>         -- .go() doubles; no .tag()
+type Tagged = withFlavor<:tagged>     -- .go() passes through; has .tag()
 ```
 
 The condition is evaluated against macro-param-substituted literals. Supported: int/string/symbol/bool literals, `==`/`!=`/`<`/`>`/`<=`/`>=`, `&&`/`||`/`!`, parentheses. Any non-literal identifier reaching evaluation produces a parse error attributed to the macro call site. Conditional blocks nest; inner directives are resolved on the chosen outer branch.
@@ -270,13 +274,13 @@ Sub-signature references expand at parse time so the registry holds the transiti
 **`requires` constraints on macro parameters.** The payoff: you can state polymorphism constraints at the call site without reaching for generics:
 
 ```
-macro deriveArithmetic(T requires Ring) = {
+macro deriveArithmetic<T requires Ring> = {
   pure T.doubled() -> T = () { this + this }
   pure T.squared() -> T = () { this * this }
 }
 
-deriveArithmetic(Rational)   -- Rational has all Ring keys → ok
-deriveArithmetic(Box)        -- parse error: "Box doesn't satisfy Ring: missing @-, @inv, ..."
+deriveArithmetic<Rational>   -- Rational has all Ring keys → ok
+deriveArithmetic<Box>        -- parse error: "Box doesn't satisfy Ring: missing @-, @inv, ..."
 ```
 
 The error names the specific missing keys at the macro invocation site — dispatch failures don't have to happen deep inside macro expansion.
@@ -461,9 +465,9 @@ Shift+F5 records all function calls, returns, errors, and variable assignments d
 | **String** | `toUpper`, `toLower`, `trim`, `replace`, `substring`, `split`, `startsWith`, `show`, `join`, `formatNum` |
 | **Range** | `rangeStep`, `repeat`, `iterate` |
 | **Option** | `mapOption`, `flatMap`, `unwrap`, `unwrapOr` |
-| **Ordering** | `deriveOrderingFromInt(T, cmp)`, `deriveOrderingFromOrdering(T, cmp)` — stdlib macros |
-| **Collections** | Stdlib macros for typed collection wrappers with private encapsulated storage: `constructTypedArray(T)` (`.push`, `.get`, `.length`), `constructTypedSet(T)` (`.add`, `.remove`, `.size`, `.toArray`), `constructTypedDict(K, V)` (`.put`, `.get`, `.has`, `.remove`, `.size`, `.keys`, `.values`) |
-| **Numerics** | `constructRatComplex(bits)` — stdlib macro that emits a paired `(rational, complex)` type bundle with hard-budget bitshift normalization. Rationals carry residual zeros and infinities; complex uses `(scale, tan θ)` for exact angle arithmetic closed under rationals |
+| **Ordering** | `deriveOrderingFromInt<T, cmp>`, `deriveOrderingFromOrdering<T, cmp>` — stdlib macros |
+| **Collections** | Stdlib macros for typed collection wrappers with private encapsulated storage: `Array<T>` (`.push`, `[i]`, `.length`, `.reverse`), `Set<T>` (`.add`, `.remove`, `.size`, `.toArray`), `Dict<K, V>` (`.put`, `[k]`, `.has`, `.remove`, `.size`, `.keys`, `.values`) |
+| **Numerics** | `Rational<bits>` and `TComplex<R>` — composable stdlib macros. `Rational<31>` emits a hard-budget rational type with bitshift normalization; `TComplex<R>` wraps any rational-like `R` as `(scale, tan θ)` for exact angle arithmetic. Nest as `TComplex<Rational<31>>`. |
 
 Canvas functions (`canvas`, `show`, `clear`, `fill`, `stroke`, `strokeWeight`, `rect`, `circle`, `line`, `text`, `animate`) are provided by the spn-canvas module.
 
@@ -524,7 +528,7 @@ The `TypeGraph` records every declaration (types, functions, operators, promotio
 - **Newlines are statement boundaries.** No semicolons. Operators on a new line start a new expression (same-line rule for function calls, binary minus, and parenthesized expressions).
 - **Definition order matters.** Each line can use everything above it. Unary operators before binary operators that use them. Types before functions that reference them. The file reads as a dependency chain.
 - **No `if` keyword.** Conditionals are subject-less guard matches: `match | cond -> a | _ -> b`. One canonical form for all branching.
-- **Macros are compile-time impure functions.** Same `(params) { body }` syntax as everything else. `emit` controls what escapes to the caller's scope. Replaces generics: `type RationalArray = constructTypedArray(Rational)`. Macro parameters can carry `requires` constraints — `macro foo(T requires Ring)` — to specify polymorphism without a separate type-variable system.
+- **Macros are compile-time impure functions.** Declare with `macro Name<P> = { ... }` and invoke with `Name<Arg>`. `emit` controls what single declaration escapes to the caller's scope. Replaces generics: `type RationalArray = Array<Rational>`. Macro parameters can carry `requires` constraints — `macro foo<T requires Ring>` — to specify polymorphism without a separate type-variable system. Invocations memoize: `Array<Rational>` twice in the same file refers to the same emitted type.
 - **Dispatch is one mechanism.** Operators (`a + b`), method calls (`a.foo()`), free-function calls (`foo(a, b)`), and signature-constrained generics (`macro<T requires Sig>`) all resolve via the same global table — find an entry matching the arg types, with promotion as a relaxation. Qualified keys (`@com.foo.bar`) are the universal name for a dispatch slot; operators are pre-registered keys; `signature` declarations name sets of required keys. No parallel typeclass / trait / interface system.
 - **Encapsulation via constructor fields.** `let this.field = expr` in a constructor creates private state, accessible only from methods on the same type. No runtime reflection.
 
@@ -577,7 +581,8 @@ mvn test
 
 - **TypeGraph-driven IDE features** -- go-to-definition, find-usages, and dependency visualization powered by the unified declaration graph
 - **Incremental type inference** -- exploit definition-order for sub-millisecond re-inference on edits (invalidate from edit line onward, cache above)
-- **Macro evolution** -- compile-time evaluation beyond literal comparisons (currently the conditional-block evaluator handles literal/symbol/bool/int comparisons + `&&`/`||`/`!`); environment- or platform-specific code generation; non-source artifact generation (manifests, lookup tables); `pure f = handle.fn` and `let v = handle.value` to round out the multi-emit bundle (today only types are bundle-emittable)
+- **Macro evolution** -- compile-time evaluation beyond literal comparisons (currently the conditional-block evaluator handles literal/symbol/bool/int comparisons + `&&`/`||`/`!`); environment- or platform-specific code generation; non-source artifact generation (manifests, lookup tables)
+- **Subscript setter for stateful types** -- `pure MyType[](int, T) = (i, obj) { ... }` on stateful types so `arr[i] = x` inside a `do` block mutates the heap-allocated instance
 - **`=?` three-way comparator** -- single `compareTo` dispatch replacing individual `<`, `>`, `<=`, `>=` overloads, returning `:lt | :eq | :gt`
 - **Cross-file trace links** -- clickable caller links in the Tracer invocation panel
 - **Type narrowing in match branches** -- union types narrow to the matched variant inside each arm

@@ -700,11 +700,12 @@ public final class TypeResolver {
         if (type instanceof FieldType.OfStruct os) return os.descriptor().getName();
         if (type instanceof FieldType.OfConstrainedType oct) return oct.descriptor().getName();
         if (type instanceof FieldType.OfProduct op) return op.descriptor().getName();
-        // Built-in collection/option types. Returning these names lets
-        // method dispatch work for stdlib Array/Dict/Set/Option methods.
-        if (type instanceof FieldType.OfArray) return "Array";
-        if (type instanceof FieldType.OfDictionary) return "Dict";
-        if (type instanceof FieldType.OfSet) return "Set";
+        // Built-in collection types. These keys match @SpnBuiltin(receiver=…)
+        // annotation values in the stdlib and the user-visible names in
+        // FieldType.describe() / SpnTypeName.of().
+        if (type instanceof FieldType.OfArray) return "UntypedArray";
+        if (type instanceof FieldType.OfDictionary) return "UntypedDict";
+        if (type instanceof FieldType.OfSet) return "UntypedSet";
         return null;
     }
 

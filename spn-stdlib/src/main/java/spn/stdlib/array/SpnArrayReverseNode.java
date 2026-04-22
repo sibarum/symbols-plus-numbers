@@ -12,7 +12,7 @@ import spn.type.SpnArrayValue;
 /**
  * Returns a new array with elements in reverse order.
  */
-@SpnBuiltin(name = "reverse", module = "Array", params = {"array"}, returns = "Array", receiver = "Array")
+@SpnBuiltin(name = "reverse", module = "Array", params = {"array"}, returns = "Array", receiver = "UntypedArray")
 @NodeChild("array")
 @NodeInfo(shortName = "reverse")
 public abstract class SpnArrayReverseNode extends SpnExpressionNode {

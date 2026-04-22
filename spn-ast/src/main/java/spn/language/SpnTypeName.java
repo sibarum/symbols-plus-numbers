@@ -22,9 +22,9 @@ public final class SpnTypeName {
         if (value instanceof SpnProductValue pv) return pv.getType().getName();
         if (value instanceof SpnConstrainedValue cv) return cv.getType().getName();
         if (value instanceof SpnTupleValue tv) return "Tuple(" + tv.getElements().length + ")";
-        if (value instanceof SpnArrayValue) return "Array";
-        if (value instanceof SpnSetValue) return "Set";
-        if (value instanceof SpnDictionaryValue) return "Dict";
+        if (value instanceof SpnArrayValue) return "UntypedArray";
+        if (value instanceof SpnSetValue) return "UntypedSet";
+        if (value instanceof SpnDictionaryValue) return "UntypedDict";
         if (value instanceof com.oracle.truffle.api.CallTarget) return "Function";
         return value.getClass().getSimpleName();
     }

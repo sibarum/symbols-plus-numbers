@@ -386,7 +386,7 @@ class SetTest {
         @Test
         void describe() {
             assertEquals("Set<Long>", FieldType.ofSet(FieldType.LONG).describe());
-            assertEquals("Set", FieldType.ofSet(FieldType.UNTYPED).describe());
+            assertEquals("UntypedSet", FieldType.ofSet(FieldType.UNTYPED).describe());
         }
 
         @Test

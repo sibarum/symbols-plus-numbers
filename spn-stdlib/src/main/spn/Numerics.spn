@@ -1,38 +1,39 @@
 -- ═══════════════════════════════════════════════════════════════════════
 -- SPN Standard Library — Numerics
 -- ═══════════════════════════════════════════════════════════════════════
--- Macro-generated rational + complex type pairs parameterized by a bit
--- budget. Each pair uses hard-budget bitshift normalization: after any
+-- Two macros for building rational + complex types parameterized by a bit
+-- budget. Each rational uses hard-budget bitshift normalization: after any
 -- arithmetic, numerator and denominator are shifted right by the minimum
 -- amount needed to fit both in the budget. This gives predictable
 -- precision (~2^-bits per step) at the cost of exact value preservation.
 --
--- Complex numbers are represented as (scale, tan θ) with exact angle
--- addition via tan(a+b) = (tan a + tan b) / (1 - tan a · tan b), keeping
--- all arithmetic closed under the rationals — no transcendental functions,
--- no square roots.
+-- Complex numbers are represented as (scale, tan θ) over a Rational<bits>
+-- type; multiplication composes rotations exactly via direction-vector
+-- multiplication with explicit sign handling for the new denominator.
 --
 -- Usage:
 --   import Numerics
 --
---   let num31 = constructRatComplex(31)
---   type Rat31 = num31.rational
---   type Cpx31 = num31.complex
+--   type Rat31 = Rational<31>
+--   type Cpx31 = TComplex<Rat31>
+--   -- or nested:
+--   type Cpx31 = TComplex<Rational<31>>
 --
 --   let q = Rat31(3, 4)
---   let z = Cpx31(Rat31(1,2), Rat31(1,3))
+--   let z = Cpx31(Rat31(1, 2), Rat31(1, 3))
 --
--- Two separate invocations (e.g. constructRatComplex(31) and
--- constructRatComplex(20)) produce non-conflicting types even when used
--- in the same scope.
+-- Memoization means `Rational<31>` always refers to the same type across
+-- the file, so `Rat31` and a nested `TComplex<Rational<31>>` share their
+-- underlying rational type — the same ops dispatch either way.
 -- ═══════════════════════════════════════════════════════════════════════
 
 import Math (abs, sign, max, bitWidth, shr, shl)
 import Ordering
 
-macro constructRatComplex(bits) = {
+-- ── Rational<bits> ────────────────────────────────────────────────────
 
-  -- ── Rational with hard-budget bitshift normalization ──────────────
+macro Rational<bits> = {
+
   type R(int, int)
 
   -- Canonical form:
@@ -93,7 +94,7 @@ macro constructRatComplex(bits) = {
     | _ -> (q1 - q2).0
   }
 
-  deriveOrderingFromInt(R, compare)
+  deriveOrderingFromInt<R, compare>
 
   const R.one = R(1, 1)
   const R.zero = R(0, 1)
@@ -101,7 +102,16 @@ macro constructRatComplex(bits) = {
 
   promote int -> R = (i) { R(i) }
 
-  -- ── Complex as (scale, tan θ) — exact angle arithmetic over R ─────
+  emit R
+}
+
+-- ── TComplex<R> ───────────────────────────────────────────────────────
+-- Parameterised by a rational-like type R. Any type providing Ring-shaped
+-- ops (+, -, *, /, neg, == against (0,_)/(_,0) projective forms) works;
+-- in practice R is a `Rational<bits>` from the macro above.
+
+macro TComplex<R> = {
+
   type C(scale: R, tangent: R)
 
   pure C(R, R) -> C = (scale, tan) { this(scale, tan) }
@@ -196,5 +206,5 @@ macro constructRatComplex(bits) = {
 
   promote R -> C = (q) { C(q) }
 
-  emit { rational: R, complex: C }
+  emit C
 }

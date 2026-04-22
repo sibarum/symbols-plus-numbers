@@ -1,0 +1,312 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Phase-Valued Factorization Demo — forward pass only (untrained)
+-- ═══════════════════════════════════════════════════════════════════════
+-- Cycles through N = 2..30 and renders:
+--   - the current N and its true factorization
+--   - the input feature bank (one dot per prime; brightness = divFeature)
+--   - the output TComplex bank (one dial per prime; needle = phase,
+--     brightness = |z|)
+--   - weights between the two columns, colored by the weight's phase
+--   - the decoded exponent vector below the output column
+--
+-- Weights are random (seeded LCG) so predictions shouldn't match truth
+-- yet — the point of this frame is verifying the substrate runs end to
+-- end. Kuramoto training lives in a later module.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import Canvas
+import Math (cos, sin, toFloat, round)
+import Array (length, append, concat)
+import String (formatNum)
+import spn.canvas.draw
+import factor.network
+
+-- ── Configuration ───────────────────────────────────────────────────────
+pure seed() -> int = () { 42 }
+pure primes() -> Array<int> = () { append(append(append([], 2), 3), 5) }
+pure maxExp() -> int = () { 5 }
+
+-- ── True factorization (for display / comparison) ───────────────────────
+pure trueExp(int, int) -> int = (n, p) {
+  let count = 0
+  let r = n
+  while {r > 0 && r % p == 0} do {
+    count = count + 1
+    r = r / p
+  }
+  count
+}
+
+-- ── Colour helpers ──────────────────────────────────────────────────────
+-- Hue → RGB for a 0..1 hue value using a 6-sector HSV cone at S=1, V=1.
+-- Compact and good enough for labelling phase.
+pure hueRgb(float) -> (float, float, float) = (h) {
+  let h6 = h * 6.0
+  let sector = round(h6 - 0.5) % 6
+  let f = h6 - toFloat(round(h6 - 0.5))
+  let q = 1.0 - f
+  match sector
+  | 0 -> (1.0, f,   0.0)
+  | 1 -> (q,   1.0, 0.0)
+  | 2 -> (0.0, 1.0, f)
+  | 3 -> (0.0, q,   1.0)
+  | 4 -> (f,   0.0, 1.0)
+  | _ -> (1.0, 0.0, q)
+}
+
+-- Phase angle in [0, 2π) → hue in [0, 1) → rgb.
+pure phaseColor(float) -> (float, float, float) = (angle) {
+  hueRgb(angle / twoPi())
+}
+
+-- ── Layout ──────────────────────────────────────────────────────────────
+pure inputX()  -> float = () { 250.0 }
+pure outputX() -> float = () { 680.0 }
+
+pure neuronY(int, int, float) -> float = (idx, total, centerY) {
+  let spacing = 90.0
+  let topY = centerY - spacing * toFloat(total - 1) / 2.0
+  topY + spacing * toFloat(idx)
+}
+
+-- ── Drawing: input dot ──────────────────────────────────────────────────
+-- Input is purely real (tan = 0), so just a monochrome disk with
+-- brightness = activation.
+pure drawInput(float, float, float, float, int) -> Array
+    = (fval, x, y, r, prime) {
+  let b = 0.25 + 0.65 * fval
+  concat(
+    [CmdFill(0.45, 0.48, 0.55), CmdCircle(x, y, r + 3.0),
+     CmdFill(b * 0.8, b * 0.9, b), CmdCircle(x, y, r)],
+    [CmdFill(0.7, 0.75, 0.85),
+     CmdText(x - 80.0, y + 6.0,
+             "div" ++ formatNum(prime) ++ " = " ++ formatNum(fval), 0.22)]
+  )
+}
+
+-- ── Drawing: output dial ────────────────────────────────────────────────
+-- Phase needle + magnitude brightness + ring of exponent tick marks.
+pure drawDial(TComplex, float, float, float, int, int) -> Array
+    = (z, cx, cy, r, prime, maxE) {
+  let mag = magnitudeFloat(z)
+  let angle = argOf(z)
+  let (cr, cg, cb) = phaseColor(angle)
+  let fade = 0.25 + 0.65 * match | mag > 1.0 -> 1.0 | _ -> mag
+
+  -- Ring body with phase-colored tint
+  let body = [
+    CmdFill(0.2, 0.22, 0.28), CmdCircle(cx, cy, r + 4.0),
+    CmdFill(cr * fade, cg * fade, cb * fade), CmdCircle(cx, cy, r)
+  ]
+
+  -- Exponent tick marks around the ring (one per class)
+  let ticks = []
+  let k = 0
+  while {k < maxE} do {
+    let ta = twoPi() * toFloat(k) / toFloat(maxE)
+    let tx1 = cx + (r + 2.0) * cos(ta)
+    let ty1 = cy - (r + 2.0) * sin(ta)
+    let tx2 = cx + (r + 8.0) * cos(ta)
+    let ty2 = cy - (r + 8.0) * sin(ta)
+    ticks = append(ticks, CmdLine(tx1, ty1, tx2, ty2))
+    k = k + 1
+  }
+
+  -- Phase needle
+  let nx = cx + r * 0.85 * cos(angle)
+  let ny = cy - r * 0.85 * sin(angle)
+  let needle = [
+    CmdStroke(0.2, 0.22, 0.28), CmdStrokeWeight(1.0)
+  ]
+  let needle2 = concat(needle, ticks)
+  let needle3 = concat(needle2, [
+    CmdStroke(0.98, 0.98, 0.98), CmdStrokeWeight(2.5),
+    CmdLine(cx, cy, nx, ny)
+  ])
+
+  -- Label to the right
+  let label = [
+    CmdFill(0.7, 0.75, 0.85),
+    CmdText(cx + r + 16.0, cy + 6.0, "p=" ++ formatNum(prime), 0.26)
+  ]
+
+  concat(concat(body, needle3), label)
+}
+
+-- ── Drawing: weights as colored lines ───────────────────────────────────
+pure drawWeights(PLayer, int, int, float, float, float) -> Array
+    = (layer, inDim, outDim, centerY, xIn, xOut) {
+  let cmds = []
+  let j = 0
+  while {j < outDim} do {
+    let row = layer.weights[j]
+    let y2 = neuronY(j, outDim, centerY)
+    let i = 0
+    while {i < inDim} do {
+      let w = row[i]
+      let y1 = neuronY(i, inDim, centerY)
+      let wAngle = argOf(w)
+      let (cr, cg, cb) = phaseColor(wAngle)
+      let wMag = magnitudeFloat(w)
+      let width = 0.8 + 2.2 * match | wMag > 1.0 -> 1.0 | _ -> wMag
+      cmds = append(cmds, CmdStroke(cr * 0.7, cg * 0.7, cb * 0.7))
+      cmds = append(cmds, CmdStrokeWeight(width))
+      cmds = append(cmds, CmdLine(xIn, y1, xOut, y2))
+      i = i + 1
+    }
+    j = j + 1
+  }
+  cmds
+}
+
+-- ── Prediction string helpers ───────────────────────────────────────────
+-- Build "[c2, c3, c5]" from a TComplex output vector.
+pure decodedString(Array<TComplex>, int) -> string = (outputs, maxE) {
+  let s = "["
+  let j = 0
+  let m = length(outputs)
+  while {j < m} do {
+    let c = decodeExponent(argOf(outputs[j]), maxE)
+    s = s ++ formatNum(c)
+    s = s ++ match | j < m - 1 -> ", " | _ -> ""
+    j = j + 1
+  }
+  s ++ "]"
+}
+
+pure truthString(int, Array<int>) -> string = (n, ps) {
+  let s = "["
+  let j = 0
+  let m = length(ps)
+  while {j < m} do {
+    s = s ++ formatNum(trueExp(n, ps[j]))
+    s = s ++ match | j < m - 1 -> ", " | _ -> ""
+    j = j + 1
+  }
+  s ++ "]"
+}
+
+-- Pretty-print 12 as "2 * 3^1" given primes bank. Built inline (no
+-- intermediate Array<string>) because an empty-literal array starts as
+-- Array<_>, and the opacity of _ blocks ++ on later reads.
+pure factorizationString(int, Array<int>) -> string = (n, ps) {
+  let s = ""
+  let any = false
+  let j = 0
+  let m = length(ps)
+  while {j < m} do {
+    let e = trueExp(n, ps[j])
+    match
+    | e == 0 -> { 0 }
+    | _ -> {
+        let sep = match
+          | any -> " * "
+          | _   -> ""
+        let part = match
+          | e == 1 -> formatNum(ps[j])
+          | _      -> formatNum(ps[j]) ++ "^" ++ formatNum(e)
+        s = s ++ sep ++ part
+        any = true
+      }
+    j = j + 1
+  }
+  match
+  | any -> s
+  | _   -> "(outside prime bank)"
+}
+
+-- ── Frame builder ───────────────────────────────────────────────────────
+pure exampleForElapsed(float, int) -> int = (elapsed, rangeN) {
+  -- One example per 0.8 s; cycle through 2..(2 + rangeN - 1).
+  let idx = round(elapsed / 0.8) % rangeN
+  match
+  | idx < 0 -> 2
+  | _       -> 2 + idx
+}
+
+action drawFrame(float) -> int = (elapsed) {
+  let ps = primes()
+  let k = length(ps)
+  let mE = maxExp()
+
+  -- Fixed random weights — same every frame.
+  let net = PNetwork(append([], initPLayer(0, k, k, seed())))
+
+  -- Cycle N through [2, 31).
+  let n = exampleForElapsed(elapsed, 30)
+
+  let features = encodeInput(n, ps)
+  let outputs = forwardC(net, features)
+
+  let centerY = 380.0
+  let cmds = [CmdClear(0.07, 0.08, 0.10)]
+
+  -- Title
+  cmds = concat(cmds, [
+    CmdFill(0.92, 0.92, 0.96),
+    CmdText(260.0, 40.0,
+      "Phase Factorizer — forward pass (untrained)", 0.32),
+    CmdFill(0.55, 0.6, 0.68),
+    CmdText(260.0, 66.0,
+      "weights random; outputs will not match truth yet", 0.22)
+  ])
+
+  -- Big N + factorization banner
+  cmds = concat(cmds, [
+    CmdFill(0.88, 0.92, 0.98),
+    CmdText(80.0, 130.0,
+            "N = " ++ formatNum(n) ++ "   =   " ++ factorizationString(n, ps),
+            0.48)
+  ])
+
+  -- Truth vs. prediction vectors
+  cmds = concat(cmds, [
+    CmdFill(0.65, 0.75, 0.58),
+    CmdText(80.0, 170.0, "truth     " ++ truthString(n, ps), 0.28),
+    CmdFill(0.85, 0.6, 0.3),
+    CmdText(80.0, 200.0, "predicted " ++ decodedString(outputs, mE), 0.28)
+  ])
+
+  -- Column headers
+  cmds = concat(cmds, [
+    CmdFill(0.6, 0.64, 0.72),
+    CmdText(inputX() - 45.0, 260.0, "inputs", 0.24),
+    CmdText(outputX() - 30.0, 260.0, "outputs", 0.24)
+  ])
+
+  -- Weight edges first (under the nodes)
+  cmds = concat(cmds, drawWeights(net.layers[0], k, k, centerY,
+                                   inputX(), outputX()))
+
+  -- Input dots
+  let i = 0
+  while {i < k} do {
+    let fval = ratToFloat(features[i].0)
+    let y = neuronY(i, k, centerY)
+    cmds = concat(cmds, drawInput(fval, inputX(), y, 22.0, ps[i]))
+    i = i + 1
+  }
+
+  -- Output dials
+  let j = 0
+  while {j < k} do {
+    let y = neuronY(j, k, centerY)
+    cmds = concat(cmds, drawDial(outputs[j], outputX(), y, 26.0, ps[j], mE))
+    j = j + 1
+  }
+
+  -- Legend for phase ring
+  cmds = concat(cmds, [
+    CmdFill(0.55, 0.6, 0.68),
+    CmdText(80.0, 680.0,
+      "dial hue = output phase   brightness = |z|   ticks = exponent classes  0.." ++ formatNum(mE - 1),
+      0.20)
+  ])
+
+  render(cmds)
+  0
+}
+
+canvas(960, 720)
+animate(30.0, drawFrame)
+show()

@@ -30,7 +30,7 @@ data DrawCmd
 -- RENDER — the single action boundary
 -- ═══════════════════════════════════════════════════════════════════════
 
-action render(Array) = (cmds) {
+action render(UntypedArray) = (cmds) {
     let i = 0
     while {i < length(cmds)} do {
         let cmd = cmds[i]

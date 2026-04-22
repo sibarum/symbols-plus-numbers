@@ -18,7 +18,7 @@ import spn.type.SpnSymbol;
  *   dictGet({:a 1, :b 2}, :a) -> 1
  * </pre>
  */
-@SpnBuiltin(name = "dictGet", module = "Dict", params = {"dict", "key"}, receiver = "Dict", method = "get")
+@SpnBuiltin(name = "dictGet", module = "Dict", params = {"dict", "key"}, receiver = "UntypedDict", method = "get")
 @NodeChild("dict")
 @NodeChild("key")
 @NodeInfo(shortName = "dictGet")

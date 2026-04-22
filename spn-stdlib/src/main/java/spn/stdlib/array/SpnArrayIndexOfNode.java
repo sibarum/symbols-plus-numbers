@@ -12,7 +12,7 @@ import spn.type.SpnArrayValue;
 /**
  * Returns the index of the first occurrence of an element, or -1 if not found.
  */
-@SpnBuiltin(name = "indexOf", module = "Array", params = {"collection", "element"}, returns = "Long", receiver = "Array")
+@SpnBuiltin(name = "indexOf", module = "Array", params = {"collection", "element"}, returns = "Long", receiver = "UntypedArray")
 @NodeChild("collection")
 @NodeChild("element")
 @NodeInfo(shortName = "indexOf")

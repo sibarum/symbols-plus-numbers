@@ -51,6 +51,7 @@ public final class Reconciler {
                 txt.setFontSymbol(t.font());
                 txt.setBold(t.bold());
                 txt.setItalic(t.italic());
+                txt.setLineHeightMult(t.lineHeight());
                 bindTextHandlers(txt, t.handlers());
                 yield txt;
             }
@@ -140,6 +141,7 @@ public final class Reconciler {
                     txt.setFontSymbol(t.font());
                     txt.setBold(t.bold());
                     txt.setItalic(t.italic());
+                    txt.setLineHeightMult(t.lineHeight());
                     bindTextHandlers(txt, t.handlers());
                     yield txt;
                 }

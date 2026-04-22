@@ -14,14 +14,14 @@
 --   import Ordering
 --
 --   pure cmpRationals(Rational, Rational) -> int = (a, b) { ... }
---   deriveOrderingFromInt(Rational, cmpRationals)
+--   deriveOrderingFromInt<Rational, cmpRationals>
 --
 --   -- now <, >, <=, >= work on Rational
 -- ═══════════════════════════════════════════════════════════════════════
 
 -- Derive ordering operators from an integer comparator.
 -- The cmp function should return < 0 for less-than, 0 for equal, > 0 for greater-than.
-macro deriveOrderingFromInt(T, cmp) = {
+macro deriveOrderingFromInt<T, cmp> = {
   pure <(T, T) -> bool  = (a, b) { cmp(a, b) < 0 }
   pure >(T, T) -> bool  = (a, b) { cmp(a, b) > 0 }
   pure <=(T, T) -> bool = (a, b) { cmp(a, b) <= 0 }
@@ -30,7 +30,7 @@ macro deriveOrderingFromInt(T, cmp) = {
 
 -- Derive ordering operators from a symbolic comparator.
 -- The cmp function should return :lt, :eq, or :gt.
-macro deriveOrderingFromOrdering(T, cmp) = {
+macro deriveOrderingFromOrdering<T, cmp> = {
   pure <(T, T) -> bool  = (a, b) { cmp(a, b) == :lt }
   pure >(T, T) -> bool  = (a, b) { cmp(a, b) == :gt }
   pure <=(T, T) -> bool = (a, b) { cmp(a, b) != :gt }

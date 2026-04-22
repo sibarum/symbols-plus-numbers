@@ -14,7 +14,7 @@ import spn.type.SpnSetValue;
  * Checks if a collection contains an element, or a string contains a substring.
  * Polymorphic: works on Array, String, Set.
  */
-@SpnBuiltin(name = "contains", module = "Array", params = {"collection", "element"}, returns = "Boolean", receiver = "Array")
+@SpnBuiltin(name = "contains", module = "Array", params = {"collection", "element"}, returns = "Boolean", receiver = "UntypedArray")
 @NodeChild("collection")
 @NodeChild("element")
 @NodeInfo(shortName = "contains")

@@ -41,7 +41,7 @@ class OrderingMacrosTest {
             import Ordering
             type Box(int)
             pure cmpBox(Box, Box) -> int = (a, b) { a.0 - b.0 }
-            deriveOrderingFromInt(Box, cmpBox)
+            deriveOrderingFromInt<Box, cmpBox>
             Box(3) < Box(5)
             """);
         assertEquals(true, lt);
@@ -53,7 +53,7 @@ class OrderingMacrosTest {
             import Ordering
             type Box(int)
             pure cmpBox(Box, Box) -> int = (a, b) { a.0 - b.0 }
-            deriveOrderingFromInt(Box, cmpBox)
+            deriveOrderingFromInt<Box, cmpBox>
             Box(7) > Box(2)
             """);
         assertEquals(true, gt);
@@ -65,7 +65,7 @@ class OrderingMacrosTest {
             import Ordering
             type Box(int)
             pure cmpBox(Box, Box) -> int = (a, b) { a.0 - b.0 }
-            deriveOrderingFromInt(Box, cmpBox)
+            deriveOrderingFromInt<Box, cmpBox>
             Box(4) <= Box(4)
             """);
         assertEquals(true, eq);
@@ -105,7 +105,7 @@ class OrderingMacrosTest {
               | (_, true)  -> :lt
               | _          -> :gt
             }
-            deriveOrderingFromOrdering(Box, cmpBox)
+            deriveOrderingFromOrdering<Box, cmpBox>
             Box(1) < Box(9)
             """);
         assertEquals(true, lt);
@@ -122,7 +122,7 @@ class OrderingMacrosTest {
               | (_, true)  -> :lt
               | _          -> :gt
             }
-            deriveOrderingFromOrdering(Box, cmpBox)
+            deriveOrderingFromOrdering<Box, cmpBox>
             Box(8) >= Box(8)
             """);
         assertEquals(true, ge);

@@ -9,7 +9,7 @@ import spn.node.SpnExpressionNode;
 import spn.node.builtin.SpnBuiltin;
 import spn.type.SpnArrayValue;
 
-@SpnBuiltin(name = "first", module = "Array", params = {"array"}, receiver = "Array")
+@SpnBuiltin(name = "first", module = "Array", params = {"array"}, receiver = "UntypedArray")
 @NodeChild("array")
 @NodeInfo(shortName = "first")
 public abstract class SpnArrayFirstNode extends SpnExpressionNode {

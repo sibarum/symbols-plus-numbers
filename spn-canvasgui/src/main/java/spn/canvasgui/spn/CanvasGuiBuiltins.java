@@ -127,6 +127,7 @@ public final class CanvasGuiBuiltins {
         addBoolMethod(methods, "wordWrap", buildWordWrapCallTarget(guiCmdType), guiCmdType);
         addBoolMethod(methods, "bold", buildBoldCallTarget(guiCmdType), guiCmdType);
         addBoolMethod(methods, "italic", buildItalicCallTarget(guiCmdType), guiCmdType);
+        addLineHeightMethod(methods, buildLineHeightCallTarget(guiCmdType), guiCmdType);
         addFontMethod(methods, buildFontMethodCallTarget(guiCmdType), guiCmdType);
 
         builder.extra("methods", methods);
@@ -355,6 +356,30 @@ public final class CanvasGuiBuiltins {
                 .param("symbol", FieldType.SYMBOL)
                 .returns(guiCmdType).build();
         methods.put("GuiCmd.font", new spn.language.MethodEntry(ct, desc));
+    }
+
+    private static void addLineHeightMethod(Map<String, spn.language.MethodEntry> methods,
+                                            CallTarget ct, FieldType guiCmdType) {
+        SpnFunctionDescriptor desc = SpnFunctionDescriptor.pure("lineHeight")
+                .param("this", guiCmdType)
+                .param("mult", FieldType.DOUBLE)
+                .returns(guiCmdType).build();
+        methods.put("GuiCmd.lineHeight", new spn.language.MethodEntry(ct, desc));
+    }
+
+    private static CallTarget buildLineHeightCallTarget(FieldType guiCmdType) {
+        var fdb = FrameDescriptor.newBuilder();
+        int sCmd = fdb.addSlot(FrameSlotKind.Object, "this", null);
+        int sVal = fdb.addSlot(FrameSlotKind.Object, "mult", null);
+        var desc = SpnFunctionDescriptor.pure("lineHeight")
+                .param("this", guiCmdType)
+                .param("mult", FieldType.DOUBLE)
+                .returns(guiCmdType).build();
+        SpnExpressionNode body = SpnGuiLineHeightNodeGen.create(
+                SpnReadLocalVariableNodeGen.create(sCmd),
+                SpnReadLocalVariableNodeGen.create(sVal));
+        return new SpnFunctionRootNode(null, fdb.build(), desc,
+                new int[]{sCmd, sVal}, body).getCallTarget();
     }
 
     private static CallTarget buildFontMethodCallTarget(FieldType guiCmdType) {

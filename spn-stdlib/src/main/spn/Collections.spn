@@ -2,31 +2,35 @@
 -- SPN Standard Library — Typed Collections
 -- ═══════════════════════════════════════════════════════════════════════
 -- Macros that generate type-safe collection wrappers. Each wrapper
--- encapsulates a raw Array/Set/Dict behind typed methods, enforced at
--- compile time via the promotion system. Internal state is private —
--- only the emitted API is accessible.
+-- encapsulates a raw UntypedArray/UntypedSet/UntypedDict behind typed
+-- methods, enforced at compile time via the promotion system. Internal
+-- state is private — only the emitted API is accessible.
 --
 -- Usage:
 --   import Collections
 --
---   type RationalArray = constructTypedArray(Rational)
---   let arr = RationalArray([])
+--   type RationalArray = Array<Rational>
+--   let arr = RationalArray()
 --   let arr2 = arr.push(Rational(3, 4))
---   arr2.get(0)  -- Rational(3, 4)
+--   arr2[0]  -- Rational(3, 4)
 --
 --   -- Promotions work automatically:
 --   let arr3 = arr.push(5)  -- 5 promoted to Rational(5, 1)
+--
+--   -- Memoization: same type parameter always yields the same emitted
+--   -- wrapper. `type A = Array<Rational>` and `type B = Array<Rational>`
+--   -- alias the same underlying type.
 -- ═══════════════════════════════════════════════════════════════════════
 
-import Array (append, length)
+import Array (append, length, reverse)
 import Set (setAdd, setRemove, fromArray, toArray, size)
 import Dict (put, dictGet, dictSize, emptyDict, hasKey, remove, keys, values)
 
 -- ── Typed Array ─────────────────────────────────────────────────────
 
-macro constructTypedArray(T) = {
+macro Array<T> = {
   type TypedArray
-  pure TypedArray(Array) -> TypedArray = (arr) {
+  pure TypedArray(UntypedArray) -> TypedArray = (arr) {
     let this.items = arr
     this(arr)
   }
@@ -36,18 +40,21 @@ macro constructTypedArray(T) = {
   pure TypedArray.push(T) -> TypedArray = (item) {
     TypedArray(append(this.items, item))
   }
-  pure TypedArray.get(int) -> T = (i) {
+  pure TypedArray[](int) -> T = (i) {
     this.items[i]
   }
   pure TypedArray.length() -> int = () {
     length(this.items)
+  }
+  pure TypedArray.reverse() -> TypedArray = () {
+    TypedArray(reverse(this.items))
   }
   emit TypedArray
 }
 
 -- ── Typed Set ───────────────────────────────────────────────────────
 --
---   type UserIdSet = constructTypedSet(UserId)
+--   type UserIdSet = Set<UserId>
 --   let s = UserIdSet()
 --   let s2 = s.add(UserId(:alice)).add(UserId(:bob))
 --   s2.size()           -- 2
@@ -55,9 +62,9 @@ macro constructTypedArray(T) = {
 --
 -- No `contains` method — membership is a pattern-matching semantic in SPN.
 
-macro constructTypedSet(T) = {
+macro Set<T> = {
   type TypedSet
-  pure TypedSet(Set) -> TypedSet = (s) {
+  pure TypedSet(UntypedSet) -> TypedSet = (s) {
     let this.items = s
     this(s)
   }
@@ -73,7 +80,7 @@ macro constructTypedSet(T) = {
   pure TypedSet.size() -> int = () {
     size(this.items)
   }
-  pure TypedSet.toArray() -> Array = () {
+  pure TypedSet.toArray() -> UntypedArray = () {
     toArray(this.items)
   }
   emit TypedSet
@@ -86,15 +93,15 @@ macro constructTypedSet(T) = {
 -- only usable keys). V is any type; values entering via `.put` are
 -- promoted to V automatically.
 --
---   type UserMap = constructTypedDict(Symbol, User)
+--   type UserMap = Dict<Symbol, User>
 --   let m = UserMap().put(:alice, alice).put(:bob, bob)
---   m.get(:alice)
+--   m[:alice]
 --   m.has(:carol)   -- false
 --   m.size()        -- 2
 
-macro constructTypedDict(K, V) = {
+macro Dict<K, V> = {
   type TypedDict
-  pure TypedDict(Dict) -> TypedDict = (d) {
+  pure TypedDict(UntypedDict) -> TypedDict = (d) {
     let this.entries = d
     this(d)
   }
@@ -104,7 +111,7 @@ macro constructTypedDict(K, V) = {
   pure TypedDict.put(K, V) -> TypedDict = (k, v) {
     TypedDict(put(this.entries, k, v))
   }
-  pure TypedDict.get(K) -> V = (k) {
+  pure TypedDict[](K) -> V = (k) {
     dictGet(this.entries, k)
   }
   pure TypedDict.has(K) -> bool = (k) {
@@ -116,10 +123,10 @@ macro constructTypedDict(K, V) = {
   pure TypedDict.size() -> int = () {
     dictSize(this.entries)
   }
-  pure TypedDict.keys() -> Array = () {
+  pure TypedDict.keys() -> UntypedArray = () {
     keys(this.entries)
   }
-  pure TypedDict.values() -> Array = () {
+  pure TypedDict.values() -> UntypedArray = () {
     values(this.entries)
   }
   emit TypedDict

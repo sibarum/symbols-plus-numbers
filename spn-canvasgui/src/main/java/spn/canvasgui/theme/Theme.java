@@ -26,6 +26,9 @@ public final class Theme {
     public float textCursorWidthRem = 0.08f;
     public double textBlinkRateSec = 1.0;       // full on/off cycle
     public float textEditPadXRem = 0.25f;      // inner left/right padding for editable text
+    public double textMultiClickTimeSec = 0.4; // press-to-press window for double/triple-click
+    public float textMultiClickSlopPx = 4f;    // max local-coord drift between multi-click presses
+    public float textLineHeightMult = 1.0f;    // default inter-line spacing multiplier
 
     /** Button horizontal padding, rem. */
     public float buttonPadXRem = 0.75f;

@@ -96,25 +96,28 @@ public class SpnParser {
         }
     }
 
-    // A macro can emit multiple named declarations. Today only TYPE is supported;
-    // FUNCTION and VALUE are reserved for future stages.
+    // What kind of declaration an `emit TypeName` statement exports from the
+    // macro body. Today only TYPE is supported; FUNCTION and VALUE are
+    // reserved for future stages (emit fn, emit const, etc.).
     enum EmittedKind { TYPE }
     record EmittedEntry(EmittedKind kind, String internalName) {}
 
-    // A macro handle is a compile-time namespace bound via `let h = macroCall(...)`.
-    // It is not a runtime value — field access (`h.rational`) resolves at parse time.
-    record MacroHandle(LinkedHashMap<String, EmittedEntry> bundle, int line, int col) {}
-
     // Macro expansion state
     private boolean insideMacroExpansion = false;
-    // Bundle of names emitted by the currently-expanding macro, keyed by the
-    // caller-visible label. Cleared at the start of each expansion.
+    // Names emitted by the currently-expanding macro. Cleared at the start of
+    // each expansion. Typical macros emit exactly one entry — `renameMacroEmittedType`
+    // rejects multi-emit when the caller uses `type X = macro<...>`.
     private final LinkedHashMap<String, EmittedEntry> macroEmittedBundle = new LinkedHashMap<>();
     private static final String MACRO_END_SENTINEL = "__MACRO_END__";
     private int macroExpansionCounter = 0; // unique suffix for internal type names
     private final Map<String, MacroDef> macroRegistry = new LinkedHashMap<>();
-    // Compile-time namespace: `let h = macroCall(...)` binds h → the emitted bundle.
-    private final Map<String, MacroHandle> macroHandles = new LinkedHashMap<>();
+    // Memoization: same (macroName, arg-token-text) → same emitted internal type
+    // name. Gives `Array<int>` identity across multiple invocations in the same
+    // file. Keyed on the raw text of arg tokens, so semantic aliases
+    // (`type Rat = Rational` used in `Array<Rat>` vs `Array<Rational>`) are
+    // distinct entries — users collapse via the canonical name.
+    // Cross-file singleton identity is a followup (lives in the module registry).
+    private final Map<String, String> macroMemo = new LinkedHashMap<>();
 
     // Module namespace claimed by a `module com.foo.bar` declaration at the
     // top of the file. Null if no module was declared. Used to enforce
@@ -204,10 +207,15 @@ public class SpnParser {
         // Type parser holds tokens plus the four type-lookup registries.
         // The recorder callback captures type-reference use sites so the IDE
         // can offer go-to-definition on type names in signatures.
+        // macroRegistry.keySet() is a live view: as macros get added during
+        // parsing, the set reflects them immediately, so `MacroName<Args>`
+        // in a later type position resolves correctly.
         this.typeParser = new TypeParser(
                 tokens, structRegistry, typeRegistry, variantRegistry,
                 functionDescriptorRegistry,
-                this::recordTypeReference);
+                this::recordTypeReference,
+                macroRegistry.keySet(),
+                this::expandMacroAsType);
         // Type resolver handles compile-time dispatch decisions.
         this.resolver = new TypeResolver(
                 operatorRegistry, promotionRegistry, methodRegistry,
@@ -517,11 +525,11 @@ public class SpnParser {
         SpnParseToken tok = tokens.peek();
         if (tok == null) return null;
 
-        // Macro invocation: Name(args) where Name is a registered macro.
+        // Macro invocation: Name<args> where Name is a registered macro.
         // Detect before the keyword switch so macro names can't collide with keywords.
         if (macroRegistry.containsKey(tok.text())) {
             SpnParseToken next = tokens.peek(1);
-            if (next != null && next.text().equals("(")) {
+            if (next != null && next.text().equals("<")) {
                 expandMacroInvocation();
                 return null;
             }
@@ -555,19 +563,19 @@ public class SpnParser {
     // ── Macros ─────────────────────────────────────────────────────────────
 
     /**
-     * Parse: macro Name(P1, P2, ...) = { body }
+     * Parse: macro Name<P1, P2, ...> = { body }
      * The body is captured as a raw token sequence; parameters are substituted
-     * textually at invocation time.
+     * textually at invocation time. Empty parameter lists are legal:
+     * {@code macro Name<> = { ... }}.
      */
     private void parseMacroDecl() {
         tokens.expect("macro");
         SpnParseToken nameTok = tokens.advance();
         String name = nameTok.text();
 
-        // Parameter list: (P1, P2 requires SigName, ...)
-        tokens.expect("(");
+        tokens.expect("<");
         List<MacroParam> params = new ArrayList<>();
-        while (!tokens.check(")")) {
+        while (!tokens.check(">")) {
             String paramName = tokens.advance().text();
             String requiredSig = null;
             if (tokens.match("requires")) {
@@ -577,7 +585,7 @@ public class SpnParser {
             params.add(new MacroParam(paramName, requiredSig));
             tokens.match(",");
         }
-        tokens.expect(")");
+        tokens.expect(">");
 
         tokens.expect("=");
         tokens.expect("{");
@@ -616,28 +624,51 @@ public class SpnParser {
     private void expandMacroInvocation() {
         SpnParseToken nameTok = tokens.advance();
         MacroDef macro = macroRegistry.get(nameTok.text());
+        expandMacroInvocationAt(macro, nameTok);
+    }
 
-        tokens.expect("(");
+    /** Expand a macro whose name token has already been consumed by the caller.
+     *  The next token must be the opening {@code <} delimiter. Used by
+     *  type-context invocation where the TypeParser has already advanced past
+     *  the name token before recognising the macro. */
+    private void expandMacroInvocationAt(MacroDef macro, SpnParseToken nameTok) {
+        tokens.expect("<");
         List<List<SpnParseToken>> args = new ArrayList<>();
-        while (tokens.hasMore() && !tokens.check(")")) {
+        while (tokens.hasMore() && !tokens.check(">")) {
             List<SpnParseToken> arg = new ArrayList<>();
             int depth = 0;
+            int angleDepth = 0;
             while (tokens.hasMore()) {
                 String t = tokens.peek().text();
-                if (depth == 0 && (t.equals(",") || t.equals(")"))) break;
+                if (depth == 0 && angleDepth == 0 && (t.equals(",") || t.equals(">"))) break;
                 if (t.equals("(") || t.equals("[") || t.equals("{")) depth++;
                 else if (t.equals(")") || t.equals("]") || t.equals("}")) depth--;
+                else if (t.equals("<")) angleDepth++;
+                else if (t.equals(">")) angleDepth--;
                 arg.add(tokens.advance());
             }
             args.add(arg);
             if (!tokens.hasMore()) break;
             tokens.match(",");
         }
-        tokens.expect(")");
+        tokens.expect(">");
 
         if (args.size() != macro.paramNames().size()) {
             throw tokens.error("Macro '" + macro.name() + "' expects "
                     + macro.paramNames().size() + " argument(s), got " + args.size(), nameTok);
+        }
+
+        // Memoization lookup (file-scoped): same macro + same arg token text
+        // yields the same internal emitted type. On hit, we short-circuit the
+        // body-parsing step and advertise the cached type as the emit of this
+        // invocation so callers like renameMacroEmittedType can alias it.
+        String memoKey = buildMacroMemoKey(macro.name(), args);
+        String cachedInternal = macroMemo.get(memoKey);
+        if (cachedInternal != null) {
+            macroEmittedBundle.clear();
+            macroEmittedBundle.put(cachedInternal,
+                    new EmittedEntry(EmittedKind.TYPE, cachedInternal));
+            return;
         }
 
         // Check `requires` constraints on macro params.
@@ -759,6 +790,50 @@ public class SpnParser {
                 snapDescriptors, snapFactories, snapConstants, snapFunctionOverloads);
 
         insideMacroExpansion = wasInMacro;
+
+        // Record the (first) emitted type in the memo so subsequent invocations
+        // with the same args reuse it.
+        for (EmittedEntry entry : macroEmittedBundle.values()) {
+            if (entry.kind() == EmittedKind.TYPE) {
+                macroMemo.put(memoKey, entry.internalName());
+                break;
+            }
+        }
+    }
+
+    /** Expand a macro invocation at a type position: {@code MacroName<Args>}
+     *  with the name token already consumed by {@link TypeParser}. Parses the
+     *  angle-bracketed args, runs expansion (memoized), and resolves the
+     *  emitted type back to a {@link FieldType}. */
+    private FieldType expandMacroAsType(SpnParseToken nameTok) {
+        MacroDef macro = macroRegistry.get(nameTok.text());
+        if (macro == null) return FieldType.UNTYPED;
+        expandMacroInvocationAt(macro, nameTok);
+        // Single-emit: the bundle has at most one TYPE entry after expansion.
+        for (EmittedEntry entry : macroEmittedBundle.values()) {
+            if (entry.kind() != EmittedKind.TYPE) continue;
+            SpnStructDescriptor sd = structRegistry.get(entry.internalName());
+            if (sd != null) return FieldType.ofStruct(sd);
+            SpnTypeDescriptor td = typeRegistry.get(entry.internalName());
+            if (td != null) {
+                return td.isProduct()
+                        ? FieldType.ofProduct(td)
+                        : FieldType.ofConstrainedType(td);
+            }
+        }
+        return FieldType.UNTYPED;
+    }
+
+    /** Build a file-scoped memo key: macro name + joined text of all arg tokens.
+     *  Aliases don't collapse — `Array<Rat>` and `Array<Rational>` are distinct
+     *  entries even if `Rat` is an alias for `Rational`. */
+    private String buildMacroMemoKey(String macroName, List<List<SpnParseToken>> args) {
+        StringBuilder sb = new StringBuilder(macroName);
+        for (List<SpnParseToken> arg : args) {
+            sb.append('|');
+            for (SpnParseToken t : arg) sb.append(t.text()).append(' ');
+        }
+        return sb.toString();
     }
 
     /**
@@ -814,7 +889,7 @@ public class SpnParser {
     }
 
     /**
-     * After a macro expansion in {@code type X = macroCall(T)} context, find
+     * After a macro expansion in {@code type X = macroCall<T>} context, find
      * the emitted type (registered under its internal name) and re-register
      * it under the user's chosen name {@code X}. Also re-register any methods
      * and factories prefixed with the internal name.
@@ -826,11 +901,10 @@ public class SpnParser {
 
         if (macroEmittedBundle.size() > 1) {
             throw tokens.error("Macro emits multiple declarations (" + macroEmittedBundle.size()
-                    + "); use 'let handle = macroCall(...)' and 'type X = handle.field' to pick one",
+                    + "); a macro invoked from 'type X = macro<...>' must emit exactly one type",
                     nameTok);
         }
 
-        // Single-emit case: take the sole entry's internal name
         String internalName = macroEmittedBundle.values().iterator().next().internalName();
         aliasEmittedType(targetName, internalName, nameTok);
     }
@@ -885,17 +959,13 @@ public class SpnParser {
     // ── Emit (macro scope export) ────────────────────────────────────────
 
     /**
-     * Parse: {@code emit TypeName}  (single-emit, backward-compatible)
-     *   or: {@code emit { label: TypeName, label2: TypeName2, ... }}  (bundle-emit)
+     * Parse: {@code emit TypeName}
      *
-     * <p>Only valid inside a macro expansion. Records each (label → internal name)
-     * pair in the current macro's emit bundle. Labels are caller-visible and used
-     * via a macro handle (e.g. {@code type X = h.label}). For the single-emit form,
-     * label == internal name.
-     *
-     * <p>The emitted declarations (and any methods prefixed with their names)
-     * persist into the caller's scope after the macro scope reverts; internal
-     * declarations without an emit are discarded.
+     * <p>Only valid inside a macro expansion. Records the (internal name → internal
+     * name) entry in the current macro's emit bundle — the emitted type, together
+     * with any methods prefixed with its name, persists into the caller's scope
+     * after the macro scope reverts; internal declarations without an emit are
+     * discarded.
      */
     private void parseEmit() {
         SpnParseToken emitTok = tokens.expect("emit");
@@ -903,23 +973,9 @@ public class SpnParser {
             throw tokens.error("'emit' can only be used inside a macro body", emitTok);
         }
 
-        if (tokens.match("{")) {
-            // Bundle form: emit { label: TypeName, ... }
-            while (!tokens.check("}")) {
-                SpnParseToken labelTok = tokens.advance();
-                String label = labelTok.text();
-                tokens.expect(":");
-                SpnParseToken nameTok = tokens.advance();
-                macroEmittedBundle.put(label, new EmittedEntry(EmittedKind.TYPE, nameTok.text()));
-                tokens.match(",");
-            }
-            tokens.expect("}");
-        } else {
-            // Single form: emit TypeName  (label == internal name)
-            SpnParseToken nameTok = tokens.advance();
-            String name = nameTok.text();
-            macroEmittedBundle.put(name, new EmittedEntry(EmittedKind.TYPE, name));
-        }
+        SpnParseToken nameTok = tokens.advance();
+        String name = nameTok.text();
+        macroEmittedBundle.put(name, new EmittedEntry(EmittedKind.TYPE, name));
     }
 
     // ── Qualified-key registration: register pure @fqn(params) -> ret ─────
@@ -1806,41 +1862,18 @@ public class SpnParser {
         SpnParseToken nameTok = tokens.expectType(TokenType.TYPE_NAME);
         String name = nameTok.text();
 
-        // type Name = macroCall(args)  OR  type Name = handle.field  OR  type Name = BaseType [where ...]
+        // type Name = macroCall<args>  OR  type Name = BaseType [where ...]
         if (tokens.match("=")) {
-            // Check for macro call: type X = macroName(args)
+            // Check for macro call: type X = macroName<args>
             SpnParseToken rhsTok = tokens.peek();
             SpnParseToken rhsNext = tokens.peek(1);
             if (rhsTok != null && rhsNext != null
                     && macroRegistry.containsKey(rhsTok.text())
-                    && rhsNext.text().equals("(")) {
+                    && rhsNext.text().equals("<")) {
                 // Expand the macro — it will emit a type under its internal name.
                 expandMacroInvocation();
                 // Find the emitted type and re-register it under the user's chosen name.
                 renameMacroEmittedType(name, nameTok);
-                return;
-            }
-
-            // Check for macro handle field access: type X = handle.field
-            if (rhsTok != null && rhsNext != null
-                    && macroHandles.containsKey(rhsTok.text())
-                    && rhsNext.text().equals(".")) {
-                SpnParseToken handleTok = tokens.advance(); // handle name
-                tokens.advance(); // '.'
-                SpnParseToken fieldTok = tokens.advance();
-                String handleName = handleTok.text();
-                String fieldName = fieldTok.text();
-                MacroHandle handle = macroHandles.get(handleName);
-                EmittedEntry entry = handle.bundle().get(fieldName);
-                if (entry == null) {
-                    throw tokens.error("Macro handle '" + handleName
-                            + "' has no field '" + fieldName + "'", fieldTok);
-                }
-                if (entry.kind() != EmittedKind.TYPE) {
-                    throw tokens.error("Field '" + handleName + "." + fieldName
-                            + "' is not a type", fieldTok);
-                }
-                aliasEmittedType(name, entry.internalName(), nameTok);
                 return;
             }
 
@@ -2220,7 +2253,7 @@ public class SpnParser {
         // Dispatch by declaration form
         if (nameTok.type() == TokenType.TYPE_NAME && tokens.peek(1) != null) {
             String next = tokens.peek(1).text();
-            if (next.equals(".")) return parseMethodDecl(isPure, nameTok);
+            if (next.equals(".") || next.equals("[")) return parseMethodDecl(isPure, nameTok);
             if (next.equals("(")) return parseFactoryDecl(isPure, nameTok);
         }
         if (nameTok.type() == TokenType.OPERATOR) return parseOperatorOrFuncDecl(isPure, true);
@@ -2230,20 +2263,33 @@ public class SpnParser {
     /**
      * Parse: pure TypeName.method(args) -> ReturnType = (params) { body }
      *    or: pure TypeName.@qualified.key(args) -> ReturnType = (params) { body }
+     *    or: pure TypeName[](args) -> ReturnType = (params) { body }
      *
      * <p>The qualified-key form implements a globally-named dispatch slot on
      * the type. Stored in the method registry under {@code TypeName.@fqn} so
      * lookup is uniform with regular methods.
+     *
+     * <p>The {@code []} form attaches a subscript method to the type.
+     * Registered under {@code TypeName.[]} — same registry, dispatched by
+     * the subscript expression {@code arr[i]} in parsePostfix when the
+     * receiver is not a raw array.
      */
     private SpnStatementNode parseMethodDecl(boolean isPure, SpnParseToken nameTok) {
         String typeName = tokens.advance().text(); // consume TypeName
-        tokens.advance(); // consume '.'
         String methodName;
-        SpnParseToken methodTok = tokens.peek();
-        if (methodTok != null && methodTok.type() == TokenType.QUALIFIED_KEY) {
-            methodName = tokens.advance().text(); // keep the @ prefix in the name
+        SpnParseToken methodTok;
+        if (tokens.check("[")) {
+            methodTok = tokens.advance(); // '['
+            tokens.expect("]");
+            methodName = "[]";
         } else {
-            methodName = expectIdentifier().text();
+            tokens.advance(); // consume '.'
+            methodTok = tokens.peek();
+            if (methodTok != null && methodTok.type() == TokenType.QUALIFIED_KEY) {
+                methodName = tokens.advance().text(); // keep the @ prefix in the name
+            } else {
+                methodName = expectIdentifier().text();
+            }
         }
 
         List<FieldType> paramTypes = parseParamTypeList();
@@ -2745,25 +2791,6 @@ public class SpnParser {
 
         SpnParseToken nameTok = expectIdentifier();
         String name = nameTok.text();
-
-        // Check: `let name = macroCall(...)` → macro handle binding.
-        // Bind `name` as a compile-time namespace over the macro's emit bundle;
-        // field access (`type X = name.field`) resolves later at parse time.
-        // No runtime node is emitted.
-        SpnParseToken la0 = tokens.peek();
-        SpnParseToken la1 = tokens.peek(1);
-        SpnParseToken la2 = tokens.peek(2);
-        if (la0 != null && la0.text().equals("=")
-                && la1 != null && macroRegistry.containsKey(la1.text())
-                && la2 != null && la2.text().equals("(")) {
-            tokens.advance(); // consume '='
-            int line = la1.line();
-            int col = la1.col();
-            expandMacroInvocation();
-            var bundle = new LinkedHashMap<>(macroEmittedBundle);
-            macroHandles.put(name, new MacroHandle(bundle, line, col));
-            return null;
-        }
 
         // Optional type annotation
         FieldType annotatedType = null;
@@ -3675,14 +3702,49 @@ public class SpnParser {
 
         while (true) {
             // Indexing: expr[index]
+            //
+            // Two dispatch paths, in priority order:
+            //   1. User-defined subscript — `pure TypeName[](args) -> ret`
+            //      registered in methodRegistry under "TypeName.[]". Produces
+            //      a SpnMethodInvokeNode; the method's return type propagates
+            //      statically so chains like `arr[i].field` typecheck.
+            //      Skipped when receiver is OfArray (raw arrays use path 2).
+            //   2. Builtin subscript — SpnArrayAccessNode handles OfArray at
+            //      compile time with element-type propagation, and falls
+            //      through at runtime to SpnArrayValue / SpnDictionaryValue
+            //      specializations. Runs for any receiver not caught by path 1.
+            //
+            // Typed wrappers from Collections.spn (Array<T>/Dict<K,V>) go
+            // through path 1; bare literals (`[1, 2]`, `[:k v]`) go through
+            // path 2. Both coexist and don't interfere.
             if (tokens.check("[")) {
                 requireTyped(expr, "indexing");
                 // Capture the receiver type BEFORE the access node replaces expr,
                 // so we can propagate the element type if it's known.
                 FieldType receiverType = inferType(expr);
-                tokens.advance();
+                SpnParseToken openTok = tokens.advance();
                 SpnExpressionNode index = parseExpression();
                 tokens.expect("]");
+
+                if (!(receiverType instanceof FieldType.OfArray)) {
+                    MethodEntry method = resolveMethod(receiverType, "[]");
+                    if (method != null) {
+                        recordMethodCall(openTok, receiverType, "[]", method);
+                        List<SpnExpressionNode> args = new ArrayList<>();
+                        args.add(index);
+                        if (method.descriptor() != null) {
+                            resolver.promoteMethodArgs(args, method.descriptor());
+                        }
+                        expr = new spn.node.func.SpnMethodInvokeNode(
+                                method.callTarget(), expr,
+                                args.toArray(new SpnExpressionNode[0]));
+                        if (method.descriptor().hasTypedReturn()) {
+                            trackType(expr, method.descriptor().getReturnType());
+                        }
+                        continue;
+                    }
+                }
+
                 expr = SpnArrayAccessNodeGen.create(expr, index);
                 if (receiverType instanceof FieldType.OfArray oa) {
                     trackType(expr, oa.elementType());

@@ -19,7 +19,7 @@ import spn.type.SpnTupleValue;
  *   zip([1, 2, 3], ["a", "b"]) -> [(1, "a"), (2, "b")]
  * </pre>
  */
-@SpnBuiltin(name = "zip", module = "Array", params = {"left", "right"}, returns = "Array", receiver = "Array")
+@SpnBuiltin(name = "zip", module = "Array", params = {"left", "right"}, returns = "Array", receiver = "UntypedArray")
 @NodeChild("left")
 @NodeChild("right")
 @NodeInfo(shortName = "zip")

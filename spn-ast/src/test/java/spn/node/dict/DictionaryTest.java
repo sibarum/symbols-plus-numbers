@@ -421,7 +421,7 @@ class DictionaryTest {
         @Test
         void describe() {
             assertEquals("Dict<String>", FieldType.ofDictionary(FieldType.STRING).describe());
-            assertEquals("Dict", FieldType.ofDictionary(FieldType.UNTYPED).describe());
+            assertEquals("UntypedDict", FieldType.ofDictionary(FieldType.UNTYPED).describe());
         }
 
         @Test

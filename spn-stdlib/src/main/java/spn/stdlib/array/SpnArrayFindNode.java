@@ -24,7 +24,7 @@ import spn.stdlib.option.SpnOptionDescriptors;
  *   find([1, 3, 5], isEven) -> None
  * </pre>
  */
-@SpnBuiltin(name = "find", module = "Array", params = {"array"}, returns = "Option", receiver = "Array")
+@SpnBuiltin(name = "find", module = "Array", params = {"array"}, returns = "Option", receiver = "UntypedArray")
 @SpnParamHint(name = "predicate", function = true)
 @NodeChild("array")
 @NodeInfo(shortName = "find")

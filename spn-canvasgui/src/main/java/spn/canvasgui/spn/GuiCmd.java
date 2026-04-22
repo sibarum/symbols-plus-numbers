@@ -37,35 +37,38 @@ public sealed interface GuiCmd {
 
     record Text(String content, boolean editable, boolean selectable,
                 boolean multiline, boolean wordWrap, SpnSymbol font,
-                boolean bold, boolean italic,
+                boolean bold, boolean italic, float lineHeight,
                 Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
         public Text(String content) {
-            this(content, false, false, false, false, null, false, false, Map.of());
+            this(content, false, false, false, false, null, false, false, 1.0f, Map.of());
         }
         public Text withEditable(boolean e) {
-            return new Text(content, e, selectable, multiline, wordWrap, font, bold, italic, handlers);
+            return new Text(content, e, selectable, multiline, wordWrap, font, bold, italic, lineHeight, handlers);
         }
         public Text withSelectable(boolean s) {
-            return new Text(content, editable, s, multiline, wordWrap, font, bold, italic, handlers);
+            return new Text(content, editable, s, multiline, wordWrap, font, bold, italic, lineHeight, handlers);
         }
         public Text withMultiline(boolean m) {
-            return new Text(content, editable, selectable, m, wordWrap, font, bold, italic, handlers);
+            return new Text(content, editable, selectable, m, wordWrap, font, bold, italic, lineHeight, handlers);
         }
         public Text withWordWrap(boolean w) {
-            return new Text(content, editable, selectable, multiline, w, font, bold, italic, handlers);
+            return new Text(content, editable, selectable, multiline, w, font, bold, italic, lineHeight, handlers);
         }
         public Text withFont(SpnSymbol f) {
-            return new Text(content, editable, selectable, multiline, wordWrap, f, bold, italic, handlers);
+            return new Text(content, editable, selectable, multiline, wordWrap, f, bold, italic, lineHeight, handlers);
         }
         public Text withBold(boolean b) {
-            return new Text(content, editable, selectable, multiline, wordWrap, font, b, italic, handlers);
+            return new Text(content, editable, selectable, multiline, wordWrap, font, b, italic, lineHeight, handlers);
         }
         public Text withItalic(boolean i) {
-            return new Text(content, editable, selectable, multiline, wordWrap, font, bold, i, handlers);
+            return new Text(content, editable, selectable, multiline, wordWrap, font, bold, i, lineHeight, handlers);
+        }
+        public Text withLineHeight(float h) {
+            return new Text(content, editable, selectable, multiline, wordWrap, font, bold, italic, h, handlers);
         }
         @Override
         public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
-            return new Text(content, editable, selectable, multiline, wordWrap, font, bold, italic,
+            return new Text(content, editable, selectable, multiline, wordWrap, font, bold, italic, lineHeight,
                     merge(handlers, event, handler));
         }
     }

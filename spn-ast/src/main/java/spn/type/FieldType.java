@@ -200,7 +200,7 @@ public sealed interface FieldType {
 
         @Override
         public String describe() {
-            if (elementType instanceof Untyped) return "Array";
+            if (elementType instanceof Untyped) return "UntypedArray";
             return "Array<" + elementType.describe() + ">";
         }
     }
@@ -219,7 +219,7 @@ public sealed interface FieldType {
 
         @Override
         public String describe() {
-            if (elementType instanceof Untyped) return "Set";
+            if (elementType instanceof Untyped) return "UntypedSet";
             return "Set<" + elementType.describe() + ">";
         }
     }
@@ -238,7 +238,7 @@ public sealed interface FieldType {
 
         @Override
         public String describe() {
-            if (valueType instanceof Untyped) return "Dict";
+            if (valueType instanceof Untyped) return "UntypedDict";
             return "Dict<" + valueType.describe() + ">";
         }
     }

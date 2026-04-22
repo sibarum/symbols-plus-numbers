@@ -1014,10 +1014,10 @@ x + y
         void macroDeclarationAndInvocation() {
             // Macro that derives a "double" function for any numeric type
             assertEquals(10L, run("""
-                macro deriveDouble(T) = {
+                macro deriveDouble<T> = {
                   pure double(T) -> T = (x) { x + x }
                 }
-                deriveDouble(int)
+                deriveDouble<int>
                 double(5)
                 """));
         }
@@ -1027,11 +1027,11 @@ x + y
             // The motivating use case: one macro emits several functions for a type.
             assertEquals(7L, run("""
                 type Point(int, int)
-                macro derivePointOps(T) = {
+                macro derivePointOps<T> = {
                   pure sumX(T, T) -> int = (a, b) { a.0 + b.0 }
                   pure sumY(T, T) -> int = (a, b) { a.1 + b.1 }
                 }
-                derivePointOps(Point)
+                derivePointOps<Point>
                 sumX(Point(3, 9), Point(4, 1))
                 """));
         }
@@ -1039,10 +1039,10 @@ x + y
         @Test
         void macroWithMultipleParams() {
             assertEquals(7L, run("""
-                macro deriveCombine(A, B) = {
+                macro deriveCombine<A, B> = {
                   pure combine(A, B) -> int = (a, b) { a + b }
                 }
-                deriveCombine(int, int)
+                deriveCombine<int, int>
                 combine(3, 4)
                 """));
         }
@@ -1160,12 +1160,12 @@ x + y
                 type Box(int)
                 type Pair(int, int)
 
-                macro deriveGetter(T) = {
+                macro deriveGetter<T> = {
                   pure getFirst(T) -> int = (x) { x.0 }
                 }
 
-                deriveGetter(Box)
-                deriveGetter(Pair)
+                deriveGetter<Box>
+                deriveGetter<Pair>
 
                 getFirst(Box(3))
                 """));
@@ -1179,11 +1179,11 @@ x + y
                 type Box(int)
                 type Pair(int, int)
 
-                macro deriveSum(T) = {
+                macro deriveSum<T> = {
                   pure sumFields(T) -> int = (x) { x.0 + x.1 }
                 }
 
-                deriveSum(Pair)
+                deriveSum<Pair>
                 sumFields(Pair(3, 7))
                 """));
         }
@@ -1193,7 +1193,7 @@ x + y
             // The new macro v2 pattern: macro emits a type, caller binds it.
             // Internal declarations (helperFn) are discarded after macro.
             assertEquals(99L, run("""
-                macro constructWrapper(T) = {
+                macro constructWrapper<T> = {
                   type Wrapper(T)
                   pure Wrapper.unwrap() -> T = () { this.0 }
                   pure helperFn(int) -> int = (x) { x + 1 }
@@ -1201,7 +1201,7 @@ x + y
                 }
 
                 type Box(int)
-                type SafeBox = constructWrapper(Box)
+                type SafeBox = constructWrapper<Box>
 
                 let sb = SafeBox(Box(99))
                 sb.unwrap().0
@@ -1212,14 +1212,14 @@ x + y
         void macroEmitTypeInternalDiscarded() {
             // helperFn defined inside the macro should NOT be visible after expansion
             assertThrows(SpnParseException.class, () -> run("""
-                macro constructWrapper(T) = {
+                macro constructWrapper<T> = {
                   type Wrapper(T)
                   pure helperFn(int) -> int = (x) { x + 1 }
                   emit Wrapper
                 }
 
                 type Box(int)
-                type SafeBox = constructWrapper(Box)
+                type SafeBox = constructWrapper<Box>
 
                 helperFn(5)
                 """));
@@ -1232,11 +1232,11 @@ x + y
                 type Box(int)
                 pure ==(Box, Box) -> bool = (a, b) { a.0 == b.0 }
 
-                macro deriveAdd(T) = {
+                macro deriveAdd<T> = {
                   pure +(T, T) -> T = (a, b) { T(a.0 + b.0) }
                 }
 
-                deriveAdd(Box)
+                deriveAdd<Box>
                 Box(3) + Box(4) == Box(7)
                 """));
         }
@@ -1248,12 +1248,12 @@ x + y
             assertEquals(99L, run("""
                 type Box(int)
 
-                macro deriveWrapper(T, W) = {
+                macro deriveWrapper<T, W> = {
                   type W(T)
                   pure W.unwrap() -> T = () { this.0 }
                 }
 
-                deriveWrapper(Box, SafeBox)
+                deriveWrapper<Box, SafeBox>
                 let sb = SafeBox(Box(99))
                 sb.unwrap().0
                 """));
@@ -1273,112 +1273,6 @@ x + y
         }
     }
 
-    // ── Multi-emit macros (bundle form) ────────────────────────────────────
-    //
-    // `emit { label: TypeName, ... }` emits multiple named types. The caller
-    // binds `let h = macroCall(...)` to a compile-time handle and then pulls
-    // individual types via `type X = h.label`. Single-emit `emit T` remains
-    // backward compatible (it's the 1-field degenerate case).
-
-    @Nested
-    class MultiEmitMacros {
-
-        @Test
-        void singleEmitBackwardCompatible() {
-            // Existing `emit T` + `type X = call(...)` path still works unchanged.
-            assertEquals(42L, run("""
-                macro constructWrapper(T) = {
-                  type Wrapper(T)
-                  pure Wrapper.unwrap() -> T = () { this.0 }
-                  emit Wrapper
-                }
-
-                type Box(int)
-                type SafeBox = constructWrapper(Box)
-
-                let sb = SafeBox(Box(42))
-                sb.unwrap().0
-                """));
-        }
-
-        @Test
-        void bundleEmitTwoTypesViaHandle() {
-            // The motivating case: one macro emits a pair of related types,
-            // caller pulls each via handle.field.
-            assertEquals(7L, run("""
-                macro constructPair() = {
-                  type First(int)
-                  type Second(int)
-                  pure First.get() -> int = () { this.0 }
-                  pure Second.get() -> int = () { this.0 }
-                  emit { first: First, second: Second }
-                }
-
-                let pair = constructPair()
-                type A = pair.first
-                type B = pair.second
-
-                let a = A(3)
-                let b = B(4)
-                a.get() + b.get()
-                """));
-        }
-
-        @Test
-        void unknownHandleFieldErrors() {
-            assertThrows(SpnParseException.class, () -> run("""
-                macro constructPair() = {
-                  type First(int)
-                  type Second(int)
-                  emit { first: First, second: Second }
-                }
-
-                let pair = constructPair()
-                type Nope = pair.third
-                Nope(1)
-                """));
-        }
-
-        @Test
-        void oldFormOnMultiEmitErrors() {
-            // `type X = macroCall(...)` on a multi-emit macro must produce a
-            // clear error steering the user to the handle form.
-            assertThrows(SpnParseException.class, () -> run("""
-                macro constructPair() = {
-                  type First(int)
-                  type Second(int)
-                  emit { first: First, second: Second }
-                }
-
-                type Ambiguous = constructPair()
-                Ambiguous(1)
-                """));
-        }
-
-        @Test
-        void twoHandlesDoNotConflict() {
-            // Separate invocations emit types under distinct internal names;
-            // using both handles in the same scope must not collide.
-            assertEquals(true, run("""
-                macro constructPair() = {
-                  type First(int)
-                  type Second(int)
-                  pure First.get() -> int = () { this.0 }
-                  pure Second.get() -> int = () { this.0 }
-                  emit { first: First, second: Second }
-                }
-
-                let p1 = constructPair()
-                let p2 = constructPair()
-
-                type A = p1.first
-                type B = p2.second
-
-                A(10).get() == 10 && B(20).get() == 20
-                """));
-        }
-    }
-
     // ── Macro conditional blocks ───────────────────────────────────────────
     //
     // `<! if COND !> { A } <! else !> { B }` appears inside a macro body.
@@ -1392,7 +1286,7 @@ x + y
 
         @Test void symbolLiteralSelectsFirstBranch() {
             assertEquals(10L, run("""
-                macro withBoost(flavor) = {
+                macro withBoost<flavor> = {
                   type Wrapper(int)
                   <! if flavor == :fast !> {
                     pure Wrapper.go() -> int = () { this.0 * 2 }
@@ -1402,14 +1296,14 @@ x + y
                   emit Wrapper
                 }
 
-                type Fast = withBoost(:fast)
+                type Fast = withBoost<:fast>
                 Fast(5).go()
                 """));
         }
 
         @Test void symbolLiteralSelectsElseBranch() {
             assertEquals(5L, run("""
-                macro withBoost(flavor) = {
+                macro withBoost<flavor> = {
                   type Wrapper(int)
                   <! if flavor == :fast !> {
                     pure Wrapper.go() -> int = () { this.0 * 2 }
@@ -1419,7 +1313,7 @@ x + y
                   emit Wrapper
                 }
 
-                type Slow = withBoost(:slow)
+                type Slow = withBoost<:slow>
                 Slow(5).go()
                 """));
         }
@@ -1427,7 +1321,7 @@ x + y
         @Test void emptyElseAsIncludeOnlyIf() {
             // `<! if X !> { decl } <! else !> {}` = "include only when X"
             assertEquals(42L, run("""
-                macro maybeExtra(include) = {
+                macro maybeExtra<include> = {
                   type Box(int)
                   <! if include == :yes !> {
                     pure Box.boost() -> int = () { this.0 + 40 }
@@ -1435,14 +1329,14 @@ x + y
                   emit Box
                 }
 
-                type B = maybeExtra(:yes)
+                type B = maybeExtra<:yes>
                 B(2).boost()
                 """));
         }
 
         @Test void intComparisonSelectsBranch() {
             assertEquals(99L, run("""
-                macro threshold(limit) = {
+                macro threshold<limit> = {
                   type T(int)
                   <! if limit > 50 !> {
                     pure T.val() -> int = () { 99 }
@@ -1452,7 +1346,7 @@ x + y
                   emit T
                 }
 
-                type Big = threshold(100)
+                type Big = threshold<100>
                 Big(0).val()
                 """));
         }
@@ -1460,7 +1354,7 @@ x + y
         @Test void logicalAndBothBranches() {
             // flavor == :fast && bits > 16 — both must hold for true branch
             assertEquals(true, run("""
-                macro choose(flavor, bits) = {
+                macro choose<flavor, bits> = {
                   type T(int)
                   <! if flavor == :fast && bits > 16 !> {
                     pure T.tag() -> bool = () { true }
@@ -1470,7 +1364,7 @@ x + y
                   emit T
                 }
 
-                type Both = choose(:fast, 32)
+                type Both = choose<:fast, 32>
                 Both(0).tag()
                 """));
         }
@@ -1478,7 +1372,7 @@ x + y
         @Test void logicalOrShortCircuits() {
             // :fast || :blue is satisfied by :fast alone
             assertEquals(true, run("""
-                macro choose(flavor) = {
+                macro choose<flavor> = {
                   type T(int)
                   <! if flavor == :fast || flavor == :blue !> {
                     pure T.tag() -> bool = () { true }
@@ -1488,7 +1382,7 @@ x + y
                   emit T
                 }
 
-                type Fast = choose(:fast)
+                type Fast = choose<:fast>
                 Fast(0).tag()
                 """));
         }
@@ -1496,7 +1390,7 @@ x + y
         @Test void nestedConditionals() {
             // Outer picks :fast branch, inner picks :tagged sub-option
             assertEquals(7L, run("""
-                macro build(flavor, variant) = {
+                macro build<flavor, variant> = {
                   type T(int)
                   <! if flavor == :fast !> {
                     <! if variant == :tagged !> {
@@ -1510,7 +1404,7 @@ x + y
                   emit T
                 }
 
-                type X = build(:fast, :tagged)
+                type X = build<:fast, :tagged>
                 X(0).val()
                 """));
         }
@@ -1518,7 +1412,7 @@ x + y
         @Test void bodyPositionInsideMatchArm() {
             // Conditional gates the body of a single match arm
             assertEquals(100L, run("""
-                macro pick(which) = {
+                macro pick<which> = {
                   type T(int)
                   pure T.eval() -> int = () {
                     match this.0
@@ -1528,14 +1422,14 @@ x + y
                   emit T
                 }
 
-                type X = pick(:big)
+                type X = pick<:big>
                 X(0).eval()
                 """));
         }
 
         @Test void missingElseIsParseError() {
             assertThrows(SpnParseException.class, () -> run("""
-                macro bad() = {
+                macro bad<> = {
                   type T(int)
                   <! if true !> {
                     pure T.a() -> int = () { 1 }
@@ -1543,14 +1437,14 @@ x + y
                   emit T
                 }
 
-                type Oops = bad()
+                type Oops = bad<>
                 """));
         }
 
         @Test void unresolvableIdentifierIsError() {
             // `unknownVar` isn't a macro param, isn't a literal — error
             assertThrows(SpnParseException.class, () -> run("""
-                macro bad() = {
+                macro bad<> = {
                   type T(int)
                   <! if unknownVar == :x !> {
                     pure T.a() -> int = () { 1 }
@@ -1558,7 +1452,7 @@ x + y
                   emit T
                 }
 
-                type Oops = bad()
+                type Oops = bad<>
                 """));
         }
     }
@@ -1725,10 +1619,10 @@ x + y
 
                 signature Additive (@+)
 
-                macro deriveDouble(T requires Additive) = {
+                macro deriveDouble<T requires Additive> = {
                   pure T.doubled() -> T = () { this + this }
                 }
-                deriveDouble(Box)
+                deriveDouble<Box>
 
                 Box(3).doubled().0
                 """));
@@ -1741,10 +1635,10 @@ x + y
 
                 signature Additive (@+)
 
-                macro deriveDouble(T requires Additive) = {
+                macro deriveDouble<T requires Additive> = {
                   pure T.doubled() -> T = () { this + this }
                 }
-                deriveDouble(Naked)
+                deriveDouble<Naked>
                 """));
         }
 
@@ -1755,10 +1649,10 @@ x + y
 
                 signature FullSet (@+, @-, @*)
 
-                macro needs(T requires FullSet) = {
+                macro needs<T requires FullSet> = {
                   pure T.noop() -> T = () { this }
                 }
-                needs(Empty)
+                needs<Empty>
                 """));
             String msg = ex.getMessage();
             assertTrue(msg.contains("@+"), "error should mention @+: " + msg);
@@ -1777,10 +1671,10 @@ x + y
 
                 signature Describable (@com.myapp.describe)
 
-                macro withDescribe(T requires Describable) = {
+                macro withDescribe<T requires Describable> = {
                   pure T.tag() -> string = () { this.@com.myapp.describe() }
                 }
-                withDescribe(Box)
+                withDescribe<Box>
 
                 Box(7).tag()
                 """));
@@ -1798,10 +1692,10 @@ x + y
                 signature Multiplicative (@*, @/)
                 signature Ring (Additive, Multiplicative)
 
-                macro ringOps(T requires Ring) = {
+                macro ringOps<T requires Ring> = {
                   pure T.thrice() -> T = () { this + this + this }
                 }
-                ringOps(Box)
+                ringOps<Box>
                 """));
         }
     }
@@ -2148,5 +2042,61 @@ x + y
                   | TComplex(scale = s) -> s.isZero()
                 """));
         }
+    }
+
+    // ── Angle-bracket macro syntax ─────────────────────────────────────────
+    //
+    // New macro declaration + invocation form: `macro Name<P> = {...}` at
+    // definition, `Name<Arg>` at call sites. Same-args invocations memoize
+    // to the same emitted type (file-scoped singleton identity).
+
+    @Nested
+    class AngleBracketMacros {
+
+        @Test void angleBracketDeclAndTypeAliasInvocation() {
+            // Declaration uses <T>; invocation uses <T>; emitted type gets
+            // aliased under the user-chosen name and its methods are
+            // reachable through the alias.
+            assertEquals(42L, run("""
+                macro Pair<T> = {
+                  type P
+                  pure P(T, T) -> P = (a, b) {
+                    let this.a = a
+                    let this.b = b
+                    this(a, b)
+                  }
+                  pure P.sum() -> T = () { this.a + this.b }
+                  emit P
+                }
+
+                type IntPair = Pair<int>
+                IntPair(20, 22).sum()
+                """));
+        }
+
+        @Test void sameArgsReuseMemoizedSingleton() {
+            // Two aliases bound to the same macro+args must refer to the
+            // same underlying type. Constructing through one alias and
+            // reading through the other must typecheck and return the value.
+            assertEquals(7L, run("""
+                macro Box<T> = {
+                  type B
+                  pure B(T) -> B = (v) {
+                    let this.v = v
+                    this(v)
+                  }
+                  pure B.get() -> T = () { this.v }
+                  emit B
+                }
+
+                type IntBoxA = Box<int>
+                type IntBoxB = Box<int>
+                let b = IntBoxA(7)
+                -- B's get() is resolvable even though b was built through A,
+                -- because the singleton means IntBoxA ≡ IntBoxB.
+                b.get()
+                """));
+        }
+
     }
 }

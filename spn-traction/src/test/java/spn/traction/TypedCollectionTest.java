@@ -1,43 +1,11 @@
 package spn.traction;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import spn.lang.ClasspathModuleLoader;
-import spn.lang.FilesystemModuleLoader;
-import spn.lang.SpnParser;
-import spn.language.SpnModuleRegistry;
-import spn.node.SpnRootNode;
-import spn.type.SpnSymbolTable;
-
-import java.nio.file.Files;
-import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class TypedCollectionTest {
-
-    private SpnSymbolTable symbolTable;
-    private SpnModuleRegistry registry;
-
-    @BeforeEach
-    void setUp() {
-        symbolTable = new SpnSymbolTable();
-        registry = new SpnModuleRegistry();
-        spn.stdlib.gen.StdlibModuleLoader.registerAll(registry);
-        registry.addLoader(new ClasspathModuleLoader(null, symbolTable));
-        Path root = Path.of(System.getProperty("user.dir"));
-        if (!Files.isRegularFile(root.resolve("module.spn")))
-            root = root.resolve("spn-traction");
-        registry.addLoader(new FilesystemModuleLoader(
-                root, "sibarum.spn.traction", null, symbolTable));
-    }
-
-    private Object run(String source) {
-        SpnParser parser = new SpnParser(source, null, null, symbolTable, registry);
-        SpnRootNode root = parser.parse();
-        return root.getCallTarget().call();
-    }
+class TypedCollectionTest extends TractionTestBase {
 
     @Nested
     class TypedArray {
@@ -46,9 +14,9 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type RationalArray = constructTypedArray(Rational)
+                type RationalArray = Array<Rational>
 
-                let arr = RationalArray([])
+                let arr = RationalArray()
                 let arr2 = arr.push(Rational(3, 4))
                 arr2.length() == 1
                 """));
@@ -59,10 +27,10 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type RationalArray = constructTypedArray(Rational)
+                type RationalArray = Array<Rational>
 
-                let arr = RationalArray([]).push(Rational(1, 2)).push(Rational(3, 4))
-                arr.get(0) == Rational(1, 2) && arr.get(1) == Rational(3, 4)
+                let arr = RationalArray().push(Rational(1, 2)).push(Rational(3, 4))
+                arr[0] == Rational(1, 2) && arr[1] == Rational(3, 4)
                 """));
         }
 
@@ -72,10 +40,10 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type RationalArray = constructTypedArray(Rational)
+                type RationalArray = Array<Rational>
 
-                let arr = RationalArray([]).push(5)
-                arr.get(0) == Rational(5, 1)
+                let arr = RationalArray().push(5)
+                arr[0] == Rational(5, 1)
                 """));
         }
 
@@ -87,11 +55,11 @@ class TypedCollectionTest {
                 type Box(int)
                 type Pair(int, int)
 
-                type BoxArray = constructTypedArray(Box)
-                type PairArray = constructTypedArray(Pair)
+                type BoxArray = Array<Box>
+                type PairArray = Array<Pair>
 
-                let ba = BoxArray([]).push(Box(1)).push(Box(2))
-                let pa = PairArray([]).push(Pair(3, 4))
+                let ba = BoxArray().push(Box(1)).push(Box(2))
+                let pa = PairArray().push(Pair(3, 4))
                 ba.length() == 2 && pa.length() == 1
                 """));
         }
@@ -104,7 +72,7 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type RationalSet = constructTypedSet(Rational)
+                type RationalSet = Set<Rational>
 
                 let s = RationalSet()
                 let s2 = s.add(Rational(1, 2)).add(Rational(3, 4))
@@ -118,7 +86,7 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type RationalSet = constructTypedSet(Rational)
+                type RationalSet = Set<Rational>
 
                 let s = RationalSet().add(Rational(1, 2)).add(Rational(1, 2))
                 s.size()
@@ -130,7 +98,7 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type RationalSet = constructTypedSet(Rational)
+                type RationalSet = Set<Rational>
 
                 let s = RationalSet().add(Rational(1, 2)).add(Rational(3, 4))
                 let s2 = s.remove(Rational(1, 2))
@@ -144,7 +112,7 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type RationalSet = constructTypedSet(Rational)
+                type RationalSet = Set<Rational>
 
                 let s = RationalSet().add(5)
                 s.size() == 1
@@ -158,8 +126,8 @@ class TypedCollectionTest {
                 type Box(int)
                 type Pair(int, int)
 
-                type BoxSet = constructTypedSet(Box)
-                type PairSet = constructTypedSet(Pair)
+                type BoxSet = Set<Box>
+                type PairSet = Set<Pair>
 
                 let bs = BoxSet().add(Box(1)).add(Box(2))
                 let ps = PairSet().add(Pair(3, 4))
@@ -175,10 +143,10 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type ColorMap = constructTypedDict(Symbol, Rational)
+                type ColorMap = Dict<Symbol, Rational>
 
                 let m = ColorMap().put(:red, Rational(1, 2))
-                m.get(:red) == Rational(1, 2)
+                m[:red] == Rational(1, 2)
                 """));
         }
 
@@ -187,7 +155,7 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type ColorMap = constructTypedDict(Symbol, Rational)
+                type ColorMap = Dict<Symbol, Rational>
 
                 let m = ColorMap().put(:red, Rational(1, 2)).put(:blue, Rational(3, 4))
                 m.size() == 2 && m.has(:red) && m.has(:green) == false
@@ -199,10 +167,10 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type ColorMap = constructTypedDict(Symbol, Rational)
+                type ColorMap = Dict<Symbol, Rational>
 
                 let m = ColorMap().put(:red, Rational(1, 2)).put(:red, Rational(9, 1))
-                m.size() == 1 && m.get(:red) == Rational(9, 1)
+                m.size() == 1 && m[:red] == Rational(9, 1)
                 """));
         }
 
@@ -211,7 +179,7 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type ColorMap = constructTypedDict(Symbol, Rational)
+                type ColorMap = Dict<Symbol, Rational>
 
                 let m = ColorMap().put(:red, Rational(1, 2)).put(:blue, Rational(3, 4))
                 let m2 = m.remove(:red)
@@ -225,10 +193,10 @@ class TypedCollectionTest {
                 import Collections
                 import numerics.rational
 
-                type ColorMap = constructTypedDict(Symbol, Rational)
+                type ColorMap = Dict<Symbol, Rational>
 
                 let m = ColorMap().put(:red, 5)
-                m.get(:red) == Rational(5, 1)
+                m[:red] == Rational(5, 1)
                 """));
         }
 
@@ -238,8 +206,8 @@ class TypedCollectionTest {
 
                 type Score(int)
 
-                type Scorecard = constructTypedDict(Symbol, Score)
-                type Roster = constructTypedDict(Symbol, Score)
+                type Scorecard = Dict<Symbol, Score>
+                type Roster = Dict<Symbol, Score>
 
                 let sc = Scorecard().put(:red, Score(5))
                 let r = Roster().put(:alice, Score(10)).put(:bob, Score(20))

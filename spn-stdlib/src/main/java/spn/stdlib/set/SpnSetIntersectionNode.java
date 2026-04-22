@@ -16,7 +16,7 @@ import spn.type.SpnSetValue;
  *   intersection({1, 2, 3}, {2, 3, 4}) -> {2, 3}
  * </pre>
  */
-@SpnBuiltin(name = "intersection", module = "Set", params = {"left", "right"}, returns = "Set", receiver = "Set")
+@SpnBuiltin(name = "intersection", module = "Set", params = {"left", "right"}, returns = "Set", receiver = "UntypedSet")
 @NodeChild("left")
 @NodeChild("right")
 @NodeInfo(shortName = "intersection")

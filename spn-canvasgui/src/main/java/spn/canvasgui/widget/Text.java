@@ -50,6 +50,18 @@ public class Text extends Component {
     private int selAnchor = -1;
     private double lastActionTime;
 
+    // Multi-click state: 1=single, 2=double (word), 3=triple (line).
+    // Counted on PRESS within the multi-click time/slop window.
+    private int clickCount;
+    private double lastClickTime;
+    private float lastClickX, lastClickY;
+    // When dragging after a double/triple click, extend selection by whole
+    // word/line units anchored to the initial word/line bounds.
+    private boolean wordDragging, lineDragging;
+    private int dragAnchorStart, dragAnchorEnd;
+
+    private float lineHeightMult = 1.0f;
+
     private Consumer<String> onChange = s -> {};
 
     // Paint-time cache — read by onEvent for hit-testing and cursor math.
@@ -58,7 +70,7 @@ public class Text extends Component {
     private String cachedWrappedText;
     private boolean cachedMultiline, cachedWordWrap;
     private float cachedPadX;
-    private float cachedLineH;
+    private float cachedLineAdvance;
 
     /** One screen row of text after splitting on {@code \n} and optional wrap. */
     private record VisualLine(String content, int startOffset, int endOffset,
@@ -71,6 +83,7 @@ public class Text extends Component {
         this.r = theme.textR;
         this.g = theme.textG;
         this.b = theme.textB;
+        this.lineHeightMult = theme.textLineHeightMult;
     }
 
     public String text() { return text; }
@@ -128,6 +141,11 @@ public class Text extends Component {
         return this;
     }
 
+    public Text setLineHeightMult(float m) {
+        if (lineHeightMult != m) { lineHeightMult = m; invalidate(); }
+        return this;
+    }
+
     public SpnSymbol fontSymbol() { return fontSymbol; }
 
     private SdfFontRenderer resolveFont(GuiContext ctx) {
@@ -158,10 +176,11 @@ public class Text extends Component {
     public Size measure(Constraints c, GuiContext ctx) {
         float padX = editable ? ctx.rem(theme.textEditPadXRem) : 0;
         float lineH = resolveFont(ctx).getLineHeight(scale);
+        float lineAdvance = lineH * lineHeightMult;
 
         if (!multiline) {
             float w = resolveFont(ctx).getTextWidth(text, scale) + 2 * padX;
-            return new Size(c.clampW(w), c.clampH(lineH));
+            return new Size(c.clampW(w), c.clampH(lineAdvance));
         }
 
         float wrapWidth = Math.max(0, c.maxW() - 2 * padX);
@@ -171,7 +190,7 @@ public class Text extends Component {
             if (line.widthPx() > maxLineW) maxLineW = line.widthPx();
         }
         float w = maxLineW + 2 * padX;
-        float h = Math.max(1, visualLines.size()) * lineH;
+        float h = Math.max(1, visualLines.size()) * lineAdvance;
         return new Size(c.clampW(w), c.clampH(h));
     }
 
@@ -179,10 +198,13 @@ public class Text extends Component {
     public void paint(List<GuiCommand> out, GuiContext ctx) {
         float padX = editable ? ctx.rem(theme.textEditPadXRem) : 0;
         float lineH = resolveFont(ctx).getLineHeight(scale);
+        float lineAdvance = lineH * lineHeightMult;
+        // Vertical offset that centers the glyph band inside an expanded line slot.
+        float textOffset = (lineAdvance - lineH) * 0.5f;
         float wrapWidth = Math.max(0, bounds().w() - 2 * padX);
         rebuildVisualLinesIfStale(wrapWidth, ctx);
         cachedPadX = padX;
-        cachedLineH = lineH;
+        cachedLineAdvance = lineAdvance;
 
         if (hasSelection()) {
             int s = Math.min(cursor, selAnchor);
@@ -196,17 +218,17 @@ public class Text extends Component {
                 int eInLine = Math.min(line.content().length(), e - lineStart);
                 float x0 = padX + line.charOffsetsPx()[sInLine];
                 float x1 = padX + line.charOffsetsPx()[eInLine];
-                float y = li * lineH;
+                float y = li * lineAdvance;
                 out.add(new GuiCommand.Draw(new DrawCommand.SetFill(
                         theme.textSelectionR, theme.textSelectionG, theme.textSelectionB)));
-                out.add(new GuiCommand.Draw(new DrawCommand.FillRect(x0, y, x1 - x0, lineH)));
+                out.add(new GuiCommand.Draw(new DrawCommand.FillRect(x0, y, x1 - x0, lineAdvance)));
             }
         }
 
         SdfFontRenderer resolved = resolveFont(ctx);
         for (int li = 0; li < visualLines.size(); li++) {
             VisualLine line = visualLines.get(li);
-            float baseline = li * lineH + lineH * 0.8f;
+            float baseline = li * lineAdvance + textOffset + lineH * 0.8f;
             out.add(new GuiCommand.TextRun(padX, baseline, line.content(), scale, r, g, b, resolved));
         }
 
@@ -214,7 +236,7 @@ public class Text extends Component {
             int[] pos = offsetToVisual(cursor);
             VisualLine line = visualLines.get(pos[0]);
             float cx = padX + line.charOffsetsPx()[pos[1]];
-            float cy = pos[0] * lineH;
+            float cy = pos[0] * lineAdvance + textOffset;
             float cw = ctx.rem(theme.textCursorWidthRem);
             out.add(new GuiCommand.Draw(new DrawCommand.SetFill(
                     theme.textCursorR, theme.textCursorG, theme.textCursorB)));
@@ -339,7 +361,7 @@ public class Text extends Component {
 
     private int localToOffset(float localX, float localY) {
         if (visualLines == null || visualLines.isEmpty()) return 0;
-        int li = (int) (localY / cachedLineH);
+        int li = (int) (localY / cachedLineAdvance);
         if (li < 0) li = 0;
         if (li >= visualLines.size()) li = visualLines.size() - 1;
         VisualLine line = visualLines.get(li);
@@ -361,21 +383,68 @@ public class Text extends Component {
         if (e instanceof GuiEvent.Pointer p) {
             switch (p.phase()) {
                 case PRESS -> {
-                    cursor = localToOffset(p.localX(), p.localY());
-                    selAnchor = -1;
+                    int idx = localToOffset(p.localX(), p.localY());
+                    double t = now();
+                    boolean sameSpot = (t - lastClickTime) < theme.textMultiClickTimeSec
+                            && Math.abs(p.localX() - lastClickX) <= theme.textMultiClickSlopPx
+                            && Math.abs(p.localY() - lastClickY) <= theme.textMultiClickSlopPx;
+                    clickCount = (sameSpot && clickCount < 3) ? clickCount + 1 : 1;
+                    lastClickTime = t;
+                    lastClickX = p.localX();
+                    lastClickY = p.localY();
+                    switch (clickCount) {
+                        case 2 -> {
+                            int[] wb = wordBoundsAt(idx);
+                            dragAnchorStart = wb[0];
+                            dragAnchorEnd = wb[1];
+                            selAnchor = wb[0];
+                            cursor = wb[1];
+                            wordDragging = true;
+                            lineDragging = false;
+                        }
+                        case 3 -> {
+                            int ls = logicalLineStart(idx);
+                            int le = logicalLineEnd(idx);
+                            dragAnchorStart = ls;
+                            dragAnchorEnd = le;
+                            selAnchor = ls;
+                            cursor = le;
+                            wordDragging = false;
+                            lineDragging = true;
+                        }
+                        default -> {
+                            cursor = idx;
+                            selAnchor = -1;
+                            wordDragging = false;
+                            lineDragging = false;
+                        }
+                    }
                     resetBlink();
+                    invalidate();
                     return true;
                 }
                 case MOVE -> {
                     if (pressed()) {
                         int idx = localToOffset(p.localX(), p.localY());
-                        if (selAnchor < 0) selAnchor = cursor;
-                        cursor = idx;
+                        if (wordDragging) {
+                            extendByWord(idx);
+                        } else if (lineDragging) {
+                            extendByLine(idx);
+                        } else {
+                            if (selAnchor < 0) selAnchor = cursor;
+                            cursor = idx;
+                        }
                         resetBlink();
+                        invalidate();
                         return true;
                     }
                 }
-                case CLICK, RELEASE, ENTER, EXIT -> { return true; }
+                case RELEASE -> {
+                    wordDragging = false;
+                    lineDragging = false;
+                    return true;
+                }
+                case CLICK, ENTER, EXIT -> { return true; }
             }
         }
 
@@ -389,8 +458,16 @@ public class Text extends Component {
             boolean shift = Mod.shift(mods);
             boolean ctrl = Mod.ctrl(mods);
             switch (k.key()) {
-                case LEFT -> { moveCursor(-1, shift); return true; }
-                case RIGHT -> { moveCursor(1, shift); return true; }
+                case LEFT -> {
+                    int dest = ctrl ? prevWordBoundary(cursor) : cursor - 1;
+                    setCursorPos(dest, shift);
+                    return true;
+                }
+                case RIGHT -> {
+                    int dest = ctrl ? nextWordBoundary(cursor) : cursor + 1;
+                    setCursorPos(dest, shift);
+                    return true;
+                }
                 case UP -> { verticalMove(-1, shift); return true; }
                 case DOWN -> { verticalMove(1, shift); return true; }
                 case HOME -> { setCursorPos(lineStartOffset(cursor), shift); return true; }
@@ -399,8 +476,18 @@ public class Text extends Component {
                     if (multiline && editable) { insertString("\n"); return true; }
                     return false;
                 }
-                case BACKSPACE -> { if (editable) { backspace(); return true; } }
-                case DELETE -> { if (editable) { deleteForward(); return true; } }
+                case BACKSPACE -> {
+                    if (editable) {
+                        if (ctrl) backspaceWord(); else backspace();
+                        return true;
+                    }
+                }
+                case DELETE -> {
+                    if (editable) {
+                        if (ctrl) deleteWordForward(); else deleteForward();
+                        return true;
+                    }
+                }
                 case A -> { if (ctrl && (selectable || editable)) { selectAll(); return true; } }
                 case C -> { if (ctrl) { copy(); return true; } }
                 case X -> { if (ctrl && editable) { cut(); return true; } }
@@ -444,6 +531,27 @@ public class Text extends Component {
         }
     }
 
+    private void backspaceWord() {
+        if (hasSelection()) { deleteSelectedRange(); return; }
+        if (cursor == 0) return;
+        int target = prevWordBoundary(cursor);
+        text = text.substring(0, target) + text.substring(cursor);
+        cursor = target;
+        onChange.accept(text);
+        resetBlink();
+        invalidate();
+    }
+
+    private void deleteWordForward() {
+        if (hasSelection()) { deleteSelectedRange(); return; }
+        if (cursor >= text.length()) return;
+        int target = nextWordBoundary(cursor);
+        text = text.substring(0, cursor) + text.substring(target);
+        onChange.accept(text);
+        resetBlink();
+        invalidate();
+    }
+
     private void deleteSelectedRange() {
         int s = Math.min(cursor, selAnchor);
         int e = Math.max(cursor, selAnchor);
@@ -453,10 +561,6 @@ public class Text extends Component {
         onChange.accept(text);
         resetBlink();
         invalidate();
-    }
-
-    private void moveCursor(int delta, boolean extend) {
-        setCursorPos(cursor + delta, extend);
     }
 
     private void verticalMove(int dir, boolean extend) {
@@ -518,6 +622,86 @@ public class Text extends Component {
         cursor = text.length();
         resetBlink();
         invalidate();
+    }
+
+    // ── Word / line boundaries ─────────────────────────────────────────
+
+    private static boolean isWordChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_';
+    }
+
+    /** Returns {start, end} of the identifier-run containing {@code offset};
+     *  collapses to {offset, offset} if the position is not adjacent to one. */
+    private int[] wordBoundsAt(int offset) {
+        int len = text.length();
+        int anchor = -1;
+        if (offset < len && isWordChar(text.charAt(offset))) anchor = offset;
+        else if (offset > 0 && offset <= len && isWordChar(text.charAt(offset - 1))) anchor = offset - 1;
+        if (anchor < 0) return new int[]{offset, offset};
+        int s = anchor, e = anchor + 1;
+        while (s > 0 && isWordChar(text.charAt(s - 1))) s--;
+        while (e < len && isWordChar(text.charAt(e))) e++;
+        return new int[]{s, e};
+    }
+
+    /** Skip whitespace leftward, then skip non-whitespace leftward. */
+    private int prevWordBoundary(int offset) {
+        int o = Math.min(offset, text.length());
+        while (o > 0 && Character.isWhitespace(text.charAt(o - 1))) o--;
+        while (o > 0 && !Character.isWhitespace(text.charAt(o - 1))) o--;
+        return o;
+    }
+
+    /** Skip non-whitespace rightward, then skip whitespace rightward. */
+    private int nextWordBoundary(int offset) {
+        int len = text.length();
+        int o = Math.max(0, offset);
+        while (o < len && !Character.isWhitespace(text.charAt(o))) o++;
+        while (o < len && Character.isWhitespace(text.charAt(o))) o++;
+        return o;
+    }
+
+    /** Start of the logical line (between {@code \n}s) containing {@code offset}. */
+    private int logicalLineStart(int offset) {
+        int o = Math.min(offset, text.length());
+        while (o > 0 && text.charAt(o - 1) != '\n') o--;
+        return o;
+    }
+
+    /** End of the logical line containing {@code offset}, exclusive of the trailing {@code \n}. */
+    private int logicalLineEnd(int offset) {
+        int len = text.length();
+        int o = Math.max(0, offset);
+        while (o < len && text.charAt(o) != '\n') o++;
+        return o;
+    }
+
+    private void extendByWord(int pointerOffset) {
+        if (pointerOffset < dragAnchorStart) {
+            int[] wb = wordBoundsAt(pointerOffset);
+            selAnchor = dragAnchorEnd;
+            cursor = wb[0];
+        } else if (pointerOffset > dragAnchorEnd) {
+            int[] wb = wordBoundsAt(pointerOffset);
+            selAnchor = dragAnchorStart;
+            cursor = wb[1];
+        } else {
+            selAnchor = dragAnchorStart;
+            cursor = dragAnchorEnd;
+        }
+    }
+
+    private void extendByLine(int pointerOffset) {
+        if (pointerOffset < dragAnchorStart) {
+            selAnchor = dragAnchorEnd;
+            cursor = logicalLineStart(pointerOffset);
+        } else if (pointerOffset > dragAnchorEnd) {
+            selAnchor = dragAnchorStart;
+            cursor = logicalLineEnd(pointerOffset);
+        } else {
+            selAnchor = dragAnchorStart;
+            cursor = dragAnchorEnd;
+        }
     }
 
     private void resetBlink() { lastActionTime = now(); }

@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -24,7 +25,11 @@ import java.util.stream.Collectors;
  * <ul>
  *   <li>Primitive keywords: {@code int}, {@code float}, {@code string}, {@code bool}</li>
  *   <li>Named types via the struct / type / variant registries</li>
- *   <li>Parameterised collections: {@code Array<T>}, {@code Set<T>}, {@code Dict<T>}</li>
+ *   <li>Untyped collections: {@code UntypedArray}, {@code UntypedSet}, {@code UntypedDict}.
+ *       Legacy parameterised form {@code Array<T>}/{@code Set<T>}/{@code Dict<T>} is
+ *       still accepted during the macro-v2 migration and produces the same untyped
+ *       builtin; once the stdlib {@code Array<T>}/{@code Set<T>}/{@code Dict<K,V>}
+ *       macros are in place, this legacy path is removed.</li>
  *   <li>Tuple types: {@code (T, U, V)}</li>
  *   <li>Anonymous unions: {@code Circle | Rectangle | Triangle}</li>
  *   <li>Function types named via {@code functionDescriptorRegistry}</li>
@@ -50,18 +55,34 @@ final class TypeParser {
      *  for IDE go-to-def. May be null. */
     private final BiConsumer<SpnParseToken, String> typeRefRecorder;
 
+    /** Names of currently-known macros. Used to detect {@code MacroName<Args>}
+     *  appearing at a type position, so it delegates to the outer parser's
+     *  expansion path instead of the legacy {@code Array<T>} parametric
+     *  builtin parsing. May be null during bootstrap. */
+    private final Set<String> macroNames;
+
+    /** Trigger a macro expansion for a name already consumed by this parser.
+     *  Called with the name token; the callback is expected to parse the
+     *  opening delimiter + args + closer, run expansion, and return the
+     *  resolved {@link FieldType} of the emitted type. May be null. */
+    private final Function<SpnParseToken, FieldType> macroTypeExpander;
+
     TypeParser(SpnTokenizer tokens,
                Map<String, SpnStructDescriptor> structRegistry,
                Map<String, SpnTypeDescriptor> typeRegistry,
                Map<String, SpnVariantSet> variantRegistry,
                Map<String, SpnFunctionDescriptor> functionDescriptorRegistry,
-               BiConsumer<SpnParseToken, String> typeRefRecorder) {
+               BiConsumer<SpnParseToken, String> typeRefRecorder,
+               Set<String> macroNames,
+               Function<SpnParseToken, FieldType> macroTypeExpander) {
         this.tokens = tokens;
         this.structRegistry = structRegistry;
         this.typeRegistry = typeRegistry;
         this.variantRegistry = variantRegistry;
         this.functionDescriptorRegistry = functionDescriptorRegistry;
         this.typeRefRecorder = typeRefRecorder;
+        this.macroNames = macroNames;
+        this.macroTypeExpander = macroTypeExpander;
     }
 
     /**
@@ -143,16 +164,15 @@ final class TypeParser {
             tokens.advance();
             String name = tok.text();
 
-            // Check for generic parameters: Collection<Long>
-            if (tokens.match("<")) {
-                FieldType inner = parseFieldType();
-                tokens.expect(">");
-                return switch (name) {
-                    case "Array", "Collection" -> FieldType.ofArray(inner);
-                    case "Set" -> FieldType.ofSet(inner);
-                    case "Dict" -> FieldType.ofDictionary(inner);
-                    default -> FieldType.UNTYPED;
-                };
+            // Macro invocation at type position: MacroName<Args> dispatches
+            // to the outer parser's expansion machinery, which consumes the
+            // angle-bracketed args, memoizes, and returns the emitted type.
+            // All Name<T> in type position flows through macros — builtins
+            // like Array/Set/Dict are declared as stdlib macros that emit
+            // the untyped builtin.
+            if (macroNames != null && macroTypeExpander != null
+                    && macroNames.contains(name) && tokens.check("<")) {
+                return macroTypeExpander.apply(tok);
             }
 
             return switch (name) {
@@ -161,9 +181,9 @@ final class TypeParser {
                 case "string", "String" -> FieldType.STRING;
                 case "bool", "Boolean" -> FieldType.BOOLEAN;
                 case "Symbol" -> FieldType.SYMBOL;
-                case "Array", "Collection" -> FieldType.ofArray(FieldType.UNTYPED);
-                case "Set" -> FieldType.ofSet(FieldType.UNTYPED);
-                case "Dict" -> FieldType.ofDictionary(FieldType.UNTYPED);
+                case "Array", "UntypedArray", "Collection" -> FieldType.ofArray(FieldType.UNTYPED);
+                case "Set", "UntypedSet" -> FieldType.ofSet(FieldType.UNTYPED);
+                case "Dict", "UntypedDict" -> FieldType.ofDictionary(FieldType.UNTYPED);
                 case "Tuple" -> FieldType.ofTuple(SpnTupleDescriptor.untyped(0));
                 default -> {
                     // Check registries

@@ -16,7 +16,7 @@ import spn.type.SpnSetValue;
  *   isSubset({1, 2}, {1, 2, 3}) -> true
  * </pre>
  */
-@SpnBuiltin(name = "isSubset", module = "Set", params = {"left", "right"}, returns = "Boolean", receiver = "Set")
+@SpnBuiltin(name = "isSubset", module = "Set", params = {"left", "right"}, returns = "Boolean", receiver = "UntypedSet")
 @NodeChild("left")
 @NodeChild("right")
 @NodeInfo(shortName = "isSubset")

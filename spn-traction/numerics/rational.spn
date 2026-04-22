@@ -71,7 +71,7 @@ pure compare(Rational, Rational) -> int = (q1, q2) {
   (q1 - q2).0
 }
 
-deriveOrderingFromInt(Rational, compare)
+deriveOrderingFromInt<Rational, compare>
 
 const Rational.one = Rational(1,1)
 const Rational.zero = Rational(0,1)

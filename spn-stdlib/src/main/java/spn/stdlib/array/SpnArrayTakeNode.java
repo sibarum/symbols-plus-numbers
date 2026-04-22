@@ -18,7 +18,7 @@ import java.util.Arrays;
  *   take([1, 2, 3, 4, 5], 3) -> [1, 2, 3]
  * </pre>
  */
-@SpnBuiltin(name = "take", module = "Array", params = {"array", "count"}, returns = "Array", receiver = "Array")
+@SpnBuiltin(name = "take", module = "Array", params = {"array", "count"}, returns = "Array", receiver = "UntypedArray")
 @NodeChild("array")
 @NodeChild("count")
 @NodeInfo(shortName = "take")

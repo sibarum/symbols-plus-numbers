@@ -12,7 +12,7 @@ import spn.type.SpnSetValue;
 /**
  * Returns the number of elements in a set.
  */
-@SpnBuiltin(name = "size", module = "Set", params = {"set"}, returns = "Long", receiver = "Set")
+@SpnBuiltin(name = "size", module = "Set", params = {"set"}, returns = "Long", receiver = "UntypedSet")
 @NodeChild("set")
 @NodeInfo(shortName = "setSize")
 public abstract class SpnSetSizeNode extends SpnExpressionNode {

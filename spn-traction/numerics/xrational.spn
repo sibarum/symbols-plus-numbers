@@ -74,7 +74,7 @@ pure compare(XRational, XRational) -> int = (q1, q2) {
   (q1 - q2).0
 }
 
-deriveOrderingFromInt(XRational, compare)
+deriveOrderingFromInt<XRational, compare>
 
 -- Canonical forms
 const XRational.one = XRational(1,1)

@@ -17,7 +17,7 @@ import spn.type.SpnSymbol;
  *   remove({:a 1, :b 2}, :a) -> {:b 2}
  * </pre>
  */
-@SpnBuiltin(name = "remove", module = "Dict", params = {"dict", "key"}, returns = "Dict", receiver = "Dict")
+@SpnBuiltin(name = "remove", module = "Dict", params = {"dict", "key"}, returns = "Dict", receiver = "UntypedDict")
 @NodeChild("dict")
 @NodeChild("key")
 @NodeInfo(shortName = "remove")

@@ -23,7 +23,7 @@ import java.util.Map;
  *   entries({:name "Alice"}) -> [(:name, "Alice")]
  * </pre>
  */
-@SpnBuiltin(name = "entries", module = "Dict", params = {"dict"}, returns = "Array", receiver = "Dict")
+@SpnBuiltin(name = "entries", module = "Dict", params = {"dict"}, returns = "Array", receiver = "UntypedDict")
 @NodeChild("dict")
 @NodeInfo(shortName = "entries")
 public abstract class SpnDictEntriesNode extends SpnExpressionNode {

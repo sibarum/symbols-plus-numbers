@@ -8,15 +8,26 @@ import com.oracle.truffle.api.nodes.NodeInfo;
 import spn.language.SpnException;
 import spn.node.SpnExpressionNode;
 import spn.type.SpnArrayValue;
+import spn.type.SpnDictionaryValue;
+import spn.type.SpnSymbol;
 
 /**
- * Accesses an element of a SpnArrayValue by index.
+ * Subscript access for builtin collection values.
  *
- * Index is 0-based. Out-of-bounds access throws SpnException.
+ * <p>Dispatches at runtime:
+ * <ul>
+ *   <li>{@code SpnArrayValue[long]} — 0-based element lookup, bounds-checked.</li>
+ *   <li>{@code SpnDictionaryValue[SpnSymbol]} — key lookup; throws on missing key.</li>
+ * </ul>
+ *
+ * <p>User-defined types get subscripting via the {@code []} method on the
+ * receiver (see {@code pure TypeName[](args) -> ret} syntax). The parser
+ * dispatches those through {@code SpnMethodInvokeNode} and only falls back
+ * here for builtin collections.
  *
  * <pre>
- *   var access = SpnArrayAccessNodeGen.create(readArray, readIndex);
- *   // if array = [10, 20, 30] and index = 1, result = 20
+ *   arr[1]        -> SpnArrayValue.get(1)
+ *   dict[:key]    -> SpnDictionaryValue.get(:key)
  * </pre>
  */
 @NodeChild("array")
@@ -35,13 +46,26 @@ public abstract class SpnArrayAccessNode extends SpnExpressionNode {
         return array.get(i);
     }
 
-    @Fallback
-    protected Object typeError(Object array, Object index) {
-        if (!(array instanceof SpnArrayValue)) {
-            throw new SpnException("Expected an array, got: "
-                    + SpnTypeName.of(array), this);
+    @Specialization
+    protected Object dictAccess(SpnDictionaryValue dict, SpnSymbol key) {
+        Object value = dict.get(key);
+        if (value == null && !dict.containsKey(key)) {
+            throw new SpnException("Key :" + key.name() + " not found in dictionary", this);
         }
-        throw new SpnException("Array index must be a Long, got: "
-                + SpnTypeName.of(index), this);
+        return value;
+    }
+
+    @Fallback
+    protected Object typeError(Object receiver, Object index) {
+        if (receiver instanceof SpnArrayValue) {
+            throw new SpnException("Array index must be a Long, got: "
+                    + SpnTypeName.of(index), this);
+        }
+        if (receiver instanceof SpnDictionaryValue) {
+            throw new SpnException("Dict key must be a Symbol, got: "
+                    + SpnTypeName.of(index), this);
+        }
+        throw new SpnException("Subscript on unsupported type: "
+                + SpnTypeName.of(receiver), this);
     }
 }

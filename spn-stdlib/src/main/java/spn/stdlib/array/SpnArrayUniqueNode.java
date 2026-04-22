@@ -16,7 +16,7 @@ import java.util.LinkedHashSet;
 /**
  * Returns an array with duplicate elements removed, preserving first occurrence order.
  */
-@SpnBuiltin(name = "unique", module = "Array", params = {"array"}, returns = "Array", receiver = "Array")
+@SpnBuiltin(name = "unique", module = "Array", params = {"array"}, returns = "Array", receiver = "UntypedArray")
 @NodeChild("array")
 @NodeInfo(shortName = "unique")
 public abstract class SpnArrayUniqueNode extends SpnExpressionNode {

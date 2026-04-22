@@ -20,7 +20,7 @@ import java.util.*;
  * Groups array elements by a key function.
  * groupBy([1, 2, 3, 4], isEven) -> {:true [2, 4], :false [1, 3]}
  */
-@SpnBuiltin(name = "groupBy", module = "Array", params = {"array"}, returns = "Array", receiver = "Array")
+@SpnBuiltin(name = "groupBy", module = "Array", params = {"array"}, returns = "Array", receiver = "UntypedArray")
 @SpnParamHint(name = "keyFn", function = true)
 @NodeChild("array")
 @NodeInfo(shortName = "groupBy")

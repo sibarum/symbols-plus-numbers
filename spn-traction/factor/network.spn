@@ -1,0 +1,286 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Phase-Valued Network — prime factorization substrate
+-- ═══════════════════════════════════════════════════════════════════════
+-- Every weight and activation is a TComplex, so each layer computes
+--     z_j = Σ w_ij · x_i       (complex-product sum; composes rotations)
+--     a_j = activate(z_j)      (−cos·π bump on |z|; phase preserved)
+--
+-- Task: prime factorization. Each output neuron corresponds to a prime p
+-- in the output bank; the phase of that neuron encodes the exponent c_p
+-- of p in N's factorization, quantized to maxExp equally-spaced phases
+-- around the unit circle.
+--
+-- This file only implements the forward pass + encode/decode. Training
+-- (Kuramoto-style phase coupling) lives in a separate file once the
+-- substrate is verified to work.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import numerics.rational
+import numerics.tcomplex
+import Math (cos, sin, atan2, sqrt, round, toFloat)
+import Collections
+
+-- Typed aliases for the complex-valued layer arithmetic.
+type IntVec = Array<int>
+type ComplexVec = Array<TComplex>
+type ComplexMat = Array<ComplexVec>
+
+-- π as zero-arg pure fns (SPN has no built-in π).
+pure pi() -> float = () { 3.141592653589793 }
+pure twoPi() -> float = () { 6.283185307179586 }
+
+-- ── Float ↔ Rational bridge ─────────────────────────────────────────────
+-- TComplex is built on Rational, but -cos is transcendental. Quantize to
+-- a fixed denominator so round-trips are predictable. 10000 is roomy
+-- enough to survive several stages of arithmetic before canonicalization
+-- erodes precision.
+pure ratDenom() -> int = () { 10000 }
+
+pure floatToRational(float) -> Rational = (x) {
+  Rational(round(x * toFloat(ratDenom())), ratDenom())
+}
+
+pure ratToFloat(Rational) -> float = ((n, d)) {
+  match d
+  | 0 -> 0.0
+  | _ -> toFloat(n) / toFloat(d)
+}
+
+-- Reconstruct a TComplex from a cartesian (re, im) — mirrors the idiom
+-- used inside tcomplex's own product/sum: tangent = im/re and scale
+-- absorbs whatever factor the Rational constructor stole via gcd.
+pure fromCartesian(Rational, Rational) -> TComplex = (re, im) {
+  match (re, im)
+  | ((0, _), (0, _)) -> TComplex(Rational.zero, Rational.zero)
+  | ((_, _), (0, _)) -> TComplex(re, Rational.zero)
+  | ((0, _), (_, _)) -> TComplex(im, Rational.omega)
+  | _ -> {
+      let tan = im / re
+      let scale = re / Rational(tan.1, 1)
+      TComplex(scale, tan)
+    }
+}
+
+-- ── Input encoding ──────────────────────────────────────────────────────
+-- Spectral divisibility feature for integer N against prime p:
+--   max(0, -cos(N·π/p))
+-- Peaks at 1 when N is an odd multiple of p, because -cos(k·π) = +1 for
+-- odd k and -1 for even k (negative lobe clamped). One nonzero spike per
+-- 2p-integer period — the network can combine these across primes to
+-- reconstruct exponents.
+pure divFeature(int, int) -> float = (n, p) {
+  let raw = -cos(toFloat(n) * pi() / toFloat(p))
+  match
+  | raw < 0.0 -> 0.0
+  | _         -> raw
+}
+
+-- Lift a scalar to a TComplex on the real axis (tangent = 0 → θ = 0).
+pure liftReal(float) -> TComplex = (x) {
+  TComplex(floatToRational(x), Rational.zero)
+}
+
+-- Encode integer N into a TComplex feature vector using a prime bank.
+pure encodeInput(int, IntVec) -> ComplexVec = (n, primes) {
+  let out = ComplexVec()
+  let i = 0
+  let k = primes.length()
+  while {i < k} do {
+    out = out.push(liftReal(divFeature(n, primes[i])))
+    i = i + 1
+  }
+  out
+}
+
+-- ── Network types ───────────────────────────────────────────────────────
+-- Weights shape: [outDim × inDim] of TComplex (outer index = output neuron).
+-- Biases shape: [outDim].
+type PLayer(weights: ComplexMat, biases: ComplexVec)
+
+pure PLayer(ComplexMat, ComplexVec) -> PLayer = (w, b) {
+  this(w, b)
+}
+
+type PLayerArray = Array<PLayer>
+
+type PNetwork(layers: PLayerArray)
+
+pure PNetwork(PLayerArray) -> PNetwork = (layers) {
+  this(layers)
+}
+
+-- Additive identity for TComplex.
+pure zeroC() -> TComplex = () {
+  TComplex(Rational.zero, Rational.zero)
+}
+
+-- ── Complex linear algebra ──────────────────────────────────────────────
+pure matVecMulC(ComplexMat, ComplexVec)
+    -> ComplexVec = (mat, x) {
+  let out = ComplexVec()
+  let i = 0
+  let outDim = mat.length()
+  while {i < outDim} do {
+    let row = mat[i]
+    let inDim = row.length()
+    let acc = zeroC()
+    let j = 0
+    while {j < inDim} do {
+      acc = acc + (row[j] * x[j])
+      j = j + 1
+    }
+    out = out.push(acc)
+    i = i + 1
+  }
+  out
+}
+
+pure addVecC(ComplexVec, ComplexVec) -> ComplexVec = (a, b) {
+  let out = ComplexVec()
+  let i = 0
+  let n = a.length()
+  while {i < n} do {
+    out = out.push(a[i] + b[i])
+    i = i + 1
+  }
+  out
+}
+
+-- ── Magnitude / activation ──────────────────────────────────────────────
+-- |z| computed via the cartesian projection — a couple of Rational→float
+-- conversions, but exactness isn't needed for the activation threshold.
+pure magnitudeFloat(TComplex) -> float = (z) {
+  let (re, im) = z.toCartesian()
+  let rf = ratToFloat(re)
+  let imf = ratToFloat(im)
+  sqrt(rf*rf + imf*imf)
+}
+
+-- The −cos·π bump clamped to [0, 1]. Zero for x ∈ [0, 0.5], rises to 1
+-- at x = 1, then descends to 0 at 1.5, then stays at 0 until the next
+-- resonance at 2.5. Acts as a band-pass that favors unit-magnitude
+-- activations — the regime where phases carry most of the information.
+pure bump01(float) -> float = (x) {
+  let absX = match | x < 0.0 -> -x | _ -> x
+  let raw = -cos(absX * pi())
+  match
+  | raw < 0.0 -> 0.0
+  | raw > 1.0 -> 1.0
+  | _         -> raw
+}
+
+-- Rescale a TComplex to a new magnitude, preserving phase. The current
+-- magnitude is |z| = |scale|·√(1+tan²); we pull scale to (newMag / √(1+tan²))
+-- keeping its sign so the quadrant doesn't flip.
+pure rescale(TComplex, float) -> TComplex = (z, newMag) {
+  let (s, t) = z
+  let tf = ratToFloat(t)
+  let k = sqrt(1.0 + tf*tf)
+  let sSign = match | ratToFloat(s) < 0.0 -> -1.0 | _ -> 1.0
+  TComplex(floatToRational(sSign * newMag / k), t)
+}
+
+pure activate(TComplex) -> TComplex = (z) {
+  rescale(z, bump01(magnitudeFloat(z)))
+}
+
+pure mapActivate(ComplexVec) -> ComplexVec = (zs) {
+  let out = ComplexVec()
+  let i = 0
+  let n = zs.length()
+  while {i < n} do {
+    out = out.push(activate(zs[i]))
+    i = i + 1
+  }
+  out
+}
+
+-- ── Forward pass ────────────────────────────────────────────────────────
+pure forwardLayerC(PLayer, ComplexVec) -> ComplexVec
+    = (layer, x) {
+  mapActivate(addVecC(matVecMulC(layer.weights, x), layer.biases))
+}
+
+pure forwardC(PNetwork, ComplexVec) -> ComplexVec = (net, x) {
+  let a = x
+  let i = 0
+  let n = net.layers.length()
+  while {i < n} do {
+    a = forwardLayerC(net.layers[i], a)
+    i = i + 1
+  }
+  a
+}
+
+-- ── Output decoding ─────────────────────────────────────────────────────
+-- Recover the phase angle of a TComplex output in [0, 2π). Uses atan2
+-- on the cartesian projection — cheap and correct across all quadrants.
+pure argOf(TComplex) -> float = (z) {
+  let (re, im) = z.toCartesian()
+  let raw = atan2(ratToFloat(im), ratToFloat(re))
+  match
+  | raw < 0.0 -> raw + twoPi()
+  | _         -> raw
+}
+
+-- Quantize an angle to an exponent class in {0, 1, ..., maxExp-1}. Each
+-- class owns a slice of width 2π/maxExp around its centre k·(2π/maxExp).
+pure decodeExponent(float, int) -> int = (angle, maxExp) {
+  let step = twoPi() / toFloat(maxExp)
+  let raw = round(angle / step)
+  let m = raw % maxExp
+  match
+  | m < 0 -> m + maxExp
+  | _     -> m
+}
+
+-- Encode an exponent class as a target TComplex on the unit circle. This
+-- is where Kuramoto training will pull the output phases toward.
+pure exponentTarget(int, int) -> TComplex = (c, maxExp) {
+  let angle = twoPi() * toFloat(c) / toFloat(maxExp)
+  fromCartesian(floatToRational(cos(angle)), floatToRational(sin(angle)))
+}
+
+-- ── Weight initialization ───────────────────────────────────────────────
+-- Deterministic LCG, matching the kuramoto/nn demos. Independent streams
+-- per (layer, i, j, salt) so no accidental correlations.
+pure lcgHash(int, int, int) -> int = (s, i, salt) {
+  let m = 2147483648       -- 2^31
+  let a = 1103515245
+  let c = 12345
+  let s1 = (a * s + c) % m
+  let s2 = (a * (s1 + i) + c) % m
+  (a * (s2 + salt) + c) % m
+}
+
+pure rand01(int, int, int) -> float = (s, i, salt) {
+  toFloat(lcgHash(s, i, salt)) / 2147483648.0
+}
+
+-- Random unit-magnitude weight at a uniform angle in [-π, π).
+pure randWeightC(int, int, int, int) -> TComplex = (s, layer, i, j) {
+  let angle = (rand01(s, layer * 1000 + i * 100 + j, 7) - 0.5) * twoPi()
+  fromCartesian(floatToRational(cos(angle)), floatToRational(sin(angle)))
+}
+
+pure initPLayer(int, int, int, int) -> PLayer = (layerIdx, inDim, outDim, s) {
+  let w = ComplexMat()
+  let i = 0
+  while {i < outDim} do {
+    let row = ComplexVec()
+    let j = 0
+    while {j < inDim} do {
+      row = row.push(randWeightC(s, layerIdx, i, j))
+      j = j + 1
+    }
+    w = w.push(row)
+    i = i + 1
+  }
+  let b = ComplexVec()
+  let k = 0
+  while {k < outDim} do {
+    b = b.push(zeroC())
+    k = k + 1
+  }
+  PLayer(w, b)
+}
