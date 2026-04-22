@@ -1698,6 +1698,67 @@ x + y
                 ringOps<Box>
                 """));
         }
+
+        @Test void multiSignatureRequiresSucceedsWhenAllSatisfied() {
+            // Box satisfies both Additive and Stringable → passes A & S
+            assertEquals(8L, run("""
+                type Box(int)
+                pure +(Box, Box) -> Box = (a, b) { Box(a.0 + b.0) }
+                pure Box.@stringify() -> string = () { "box" }
+
+                signature Additive (@+)
+                signature Stringable (@stringify)
+
+                macro twice<T requires Additive & Stringable> = {
+                  pure T.twice() -> T = () { this + this }
+                }
+                twice<Box>
+
+                Box(4).twice().0
+                """));
+        }
+
+        @Test void multiSignatureFailsNamesOnlyUnsatisfied() {
+            // Box satisfies Additive but not Stringable. Error should cite
+            // only Stringable, not Additive.
+            SpnParseException ex = assertThrows(SpnParseException.class, () -> run("""
+                type Box(int)
+                pure +(Box, Box) -> Box = (a, b) { Box(a.0 + b.0) }
+
+                signature Additive (@+)
+                signature Stringable (@stringify)
+
+                macro needs<T requires Additive & Stringable> = {
+                  pure T.noop() -> T = () { this }
+                }
+                needs<Box>
+                """));
+            String msg = ex.getMessage();
+            assertTrue(msg.contains("Stringable"), "error should mention Stringable: " + msg);
+            assertTrue(msg.contains("@stringify"), "error should mention @stringify: " + msg);
+            assertTrue(!msg.contains("Additive"),
+                    "error should NOT mention the satisfied signature Additive: " + msg);
+        }
+
+        @Test void multiSignatureFailsNamesBothWhenBothMissing() {
+            // Naked satisfies neither → both signatures named in the error.
+            SpnParseException ex = assertThrows(SpnParseException.class, () -> run("""
+                type Naked(int)
+
+                signature Additive (@+)
+                signature Stringable (@stringify)
+
+                macro needs<T requires Additive & Stringable> = {
+                  pure T.noop() -> T = () { this }
+                }
+                needs<Naked>
+                """));
+            String msg = ex.getMessage();
+            assertTrue(msg.contains("Additive"), "error should mention Additive: " + msg);
+            assertTrue(msg.contains("Stringable"), "error should mention Stringable: " + msg);
+            assertTrue(msg.contains("@+"), "error should mention @+: " + msg);
+            assertTrue(msg.contains("@stringify"), "error should mention @stringify: " + msg);
+        }
     }
 
     // ── Qualified-key import shortening (stage 3) ─────────────────────────

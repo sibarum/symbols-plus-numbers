@@ -88,7 +88,7 @@ public class SpnParser {
     private final Map<String, List<FactoryEntry>> factoryRegistry = new LinkedHashMap<>();
 
     // Macro registry: "Name" → MacroDef (compile-time code template)
-    record MacroParam(String name, String requiredSignature) {}
+    record MacroParam(String name, List<String> requiredSignatures) {}
     record MacroDef(String name, List<MacroParam> params, List<SpnParseToken> bodyTokens) {
         /** Convenience accessor: just the names. */
         public List<String> paramNames() {
@@ -577,12 +577,15 @@ public class SpnParser {
         List<MacroParam> params = new ArrayList<>();
         while (!tokens.check(">")) {
             String paramName = tokens.advance().text();
-            String requiredSig = null;
+            List<String> requiredSigs = List.of();
             if (tokens.match("requires")) {
-                SpnParseToken sigTok = tokens.advance();
-                requiredSig = sigTok.text();
+                requiredSigs = new ArrayList<>();
+                requiredSigs.add(tokens.advance().text());
+                while (tokens.match("&")) {
+                    requiredSigs.add(tokens.advance().text());
+                }
             }
-            params.add(new MacroParam(paramName, requiredSig));
+            params.add(new MacroParam(paramName, requiredSigs));
             tokens.match(",");
         }
         tokens.expect(">");
@@ -674,18 +677,30 @@ public class SpnParser {
         // Check `requires` constraints on macro params.
         for (int i = 0; i < macro.params().size(); i++) {
             MacroParam p = macro.params().get(i);
-            if (p.requiredSignature() == null) continue;
+            if (p.requiredSignatures().isEmpty()) continue;
             List<SpnParseToken> argTokens = args.get(i);
+            String joinedSigs = String.join(" & ", p.requiredSignatures());
             if (argTokens.size() != 1 || argTokens.get(0).type() != TokenType.TYPE_NAME) {
                 throw tokens.error("Parameter '" + p.name() + "' of macro '" + macro.name()
-                        + "' requires signature '" + p.requiredSignature()
+                        + "' requires signature '" + joinedSigs
                         + "' but got a non-type argument", nameTok);
             }
             String typeName = argTokens.get(0).text();
-            List<String> missing = signatureMissingKeys(p.requiredSignature(), typeName);
+            LinkedHashSet<String> missing = new LinkedHashSet<>();
+            List<String> unsatisfiedSigs = new ArrayList<>();
+            for (String sig : p.requiredSignatures()) {
+                List<String> sigMissing = signatureMissingKeys(sig, typeName);
+                if (!sigMissing.isEmpty()) {
+                    unsatisfiedSigs.add(sig);
+                    missing.addAll(sigMissing);
+                }
+            }
             if (!missing.isEmpty()) {
-                throw tokens.error("Type '" + typeName + "' doesn't satisfy signature '"
-                        + p.requiredSignature() + "': missing " + String.join(", ", missing),
+                String sigLabel = unsatisfiedSigs.size() == 1
+                        ? "signature '" + unsatisfiedSigs.get(0) + "'"
+                        : "signatures '" + String.join(" & ", unsatisfiedSigs) + "'";
+                throw tokens.error("Type '" + typeName + "' doesn't satisfy "
+                        + sigLabel + ": missing " + String.join(", ", missing),
                         nameTok);
             }
         }

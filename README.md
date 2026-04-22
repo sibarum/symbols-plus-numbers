@@ -171,11 +171,11 @@ arr.items                               -- compile error: private field
 - **`emit`** keyword transmits a declaration from the macro's scope to the caller. One emit per macro — `type X = macro<Arg>` binds the single emitted type under a user-chosen name.
 - **Memoized invocations** — `Array<Rational>` used twice in the same file refers to the same emitted type. Type aliases bound to the same macro+args are interchangeable.
 - **Conditional blocks** — `<! if COND !> { ... } <! else !> { ... }` selects between branches at expansion time based on macro-param values. Works for both conditional bodies and conditional declarations (see below).
-- **Scoped isolation** — internal helpers are discarded after the macro completes; only `emit`-ted names (plus any operator overloads and promotions) survive.
+- **Scoped isolation** — once a macro uses `emit`, all other named helpers it declares are discarded on completion; only emitted names plus operator overloads and promotions survive. A macro that doesn't `emit` anything (e.g. `deriveOrderingFromInt`, which only registers operator overloads) keeps everything it declares — the scoping kicks in specifically when `emit` narrows what escapes.
 - **Private constructor fields** — `let this.field = expr` creates encapsulated state, accessible only from methods on the same type.
 - **Multiple dispatch** — macro-generated functions participate in type-dispatched overloading.
 - **Macro-aware error messages** — parse errors inside an expanded body are tagged with the macro invocation site (`[in macro name(file:line)]`), so diagnostics point back to the caller rather than the internal expansion.
-- **Signature constraints** — `macro foo<T requires Ring> = { ... }` checks at the call site that T has impls for every dispatch key the signature lists; missing keys are named in the error (see "Qualified Dispatch Keys" below).
+- **Signature constraints** — `macro foo<T requires Ring> = { ... }` checks at the call site that T has impls for every dispatch key the signature lists; missing keys are named in the error. Multiple signatures compose with `&`: `<T requires Additive & Stringable>` requires both (see "Qualified Dispatch Keys" below).
 
 **User-definable subscript:**
 
@@ -284,6 +284,20 @@ deriveArithmetic<Box>        -- parse error: "Box doesn't satisfy Ring: missing 
 ```
 
 The error names the specific missing keys at the macro invocation site — dispatch failures don't have to happen deep inside macro expansion.
+
+**Composing signatures at the use site.** Multiple signatures can be required together with `&`:
+
+```
+signature Additive (@+, @-)
+signature Stringable (@stringify)
+
+macro describePair<T requires Additive & Stringable> = {
+  pure T.pair() -> T = () { this + this }
+  pure T.show() -> string = () { this.@stringify() }
+}
+```
+
+Only the *unsatisfied* signatures are named in the error — if T satisfies `Additive` but not `Stringable`, the error cites only `Stringable` and its missing keys. This avoids having to pre-declare every useful intersection (`signature AddStringable (Additive, Stringable)`) as a global name.
 
 ### Unary Operator Dispatch
 
@@ -528,7 +542,7 @@ The `TypeGraph` records every declaration (types, functions, operators, promotio
 - **Newlines are statement boundaries.** No semicolons. Operators on a new line start a new expression (same-line rule for function calls, binary minus, and parenthesized expressions).
 - **Definition order matters.** Each line can use everything above it. Unary operators before binary operators that use them. Types before functions that reference them. The file reads as a dependency chain.
 - **No `if` keyword.** Conditionals are subject-less guard matches: `match | cond -> a | _ -> b`. One canonical form for all branching.
-- **Macros are compile-time impure functions.** Declare with `macro Name<P> = { ... }` and invoke with `Name<Arg>`. `emit` controls what single declaration escapes to the caller's scope. Replaces generics: `type RationalArray = Array<Rational>`. Macro parameters can carry `requires` constraints — `macro foo<T requires Ring>` — to specify polymorphism without a separate type-variable system. Invocations memoize: `Array<Rational>` twice in the same file refers to the same emitted type.
+- **Macros are compile-time impure functions.** Declare with `macro Name<P> = { ... }` and invoke with `Name<Arg>`. `emit` controls what single declaration escapes to the caller's scope. Replaces generics: `type RationalArray = Array<Rational>`. Macro parameters can carry `requires` constraints — `macro foo<T requires Ring>` or composed as `<T requires Additive & Stringable>` — to specify polymorphism without a separate type-variable system. Invocations memoize: `Array<Rational>` twice in the same file refers to the same emitted type.
 - **Dispatch is one mechanism.** Operators (`a + b`), method calls (`a.foo()`), free-function calls (`foo(a, b)`), and signature-constrained generics (`macro<T requires Sig>`) all resolve via the same global table — find an entry matching the arg types, with promotion as a relaxation. Qualified keys (`@com.foo.bar`) are the universal name for a dispatch slot; operators are pre-registered keys; `signature` declarations name sets of required keys. No parallel typeclass / trait / interface system.
 - **Encapsulation via constructor fields.** `let this.field = expr` in a constructor creates private state, accessible only from methods on the same type. No runtime reflection.
 
