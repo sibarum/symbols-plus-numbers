@@ -1,3 +1,4 @@
+
 -- ═══════════════════════════════════════════════════════════════════════
 -- Phase-Valued Factorization Demo — forward pass only (untrained)
 -- ═══════════════════════════════════════════════════════════════════════
@@ -20,6 +21,7 @@ import Array (append, concat)
 import String (formatNum)
 import spn.canvas.draw
 import factor.network
+import factor.train
 
 -- ── Configuration ───────────────────────────────────────────────────────
 -- `IntVec` is `Array<int>` exported from factor.network; using it here
@@ -162,8 +164,11 @@ pure drawWeights(PLayer, int, int, float, float, float) -> Array
 }
 
 -- ── Prediction string helpers ───────────────────────────────────────────
--- Build "[c2, c3, c5]" from a TComplex output vector.
-pure decodedString(Array<TComplex>, int) -> string = (outputs, maxE) {
+-- Build "[c2, c3, c5]" from a TComplex output vector. Uses `ComplexVec`
+-- from factor.network rather than inlining `Array<TComplex>` — the macro
+-- memoization is file-scoped, so an inline re-invocation produces a
+-- different descriptor from network's ComplexVec and breaks dispatch.
+pure decodedString(ComplexVec, int) -> string = (outputs, maxE) {
   let s = "["
   let j = 0
   let m = outputs.length()
@@ -226,32 +231,60 @@ pure exampleForElapsed(float, int) -> int = (elapsed, rangeN) {
   | _       -> 2 + idx
 }
 
+-- How many training epochs the network should have completed by `elapsed`.
+-- Epochs ramp up over time so the user watches the dials converge from
+-- random; capped at `maxEpochs` so per-frame cost plateaus.
+pure epochsForElapsed(float, int) -> int = (elapsed, maxEpochs) {
+  let raw = round(elapsed / 0.5)
+  match
+  | raw < 0         -> 0
+  | raw > maxEpochs -> maxEpochs
+  | _               -> raw
+}
+
+-- Training hyperparameters: range, max epochs, finite-difference step, lr.
+-- Trained over [2, 10) (eight integers covering 2^k, 3^k, 5^k, 2·3, etc.);
+-- the display sweeps a broader [2, 31) so the viewer can also see how
+-- the learned phases generalize to unseen N.
+pure trainStartN() -> int = () { 2 }
+pure trainEndN()   -> int = () { 10 }
+pure maxEpochs()   -> int = () { 12 }
+pure gradEps()     -> float = () { 0.05 }
+pure learnRate()   -> float = () { 0.2 }
+
 action drawFrame(float) -> int = (elapsed) {
   let ps = primes()
   let k = ps.length()
   let mE = maxExp()
 
-  -- Fixed random weights — same every frame. PLayerArray is exported
-  -- from factor.network.
-  let net = PNetwork(PLayerArray().push(initPLayer(0, k, k, seed())))
+  -- Train progressively: each frame runs epoch(elapsed) gradient sweeps
+  -- from a fixed seed, so the display is deterministic and the dials
+  -- animate smoothly toward the correct phases as training proceeds.
+  let initialNet = PNetwork(PLayerArray(initPLayer(0, k, k, seed())))
+  let epochs = epochsForElapsed(elapsed, maxEpochs())
+  let net = train(initialNet, ps, mE, trainStartN(), trainEndN(),
+                  epochs, gradEps(), learnRate())
 
   -- Cycle N through [2, 31).
   let n = exampleForElapsed(elapsed, 30)
 
   let features = encodeInput(n, ps)
   let outputs = forwardC(net, features)
+  let loss = totalLoss(net, ps, mE, trainStartN(), trainEndN())
 
   let centerY = 380.0
   let cmds = [CmdClear(0.07, 0.08, 0.10)]
 
-  -- Title
+  -- Title + live training status
   cmds = concat(cmds, [
     CmdFill(0.92, 0.92, 0.96),
     CmdText(260.0, 40.0,
-      "Phase Factorizer — forward pass (untrained)", 0.32),
+      "Phase Factorizer — finite-differences SGD", 0.32),
     CmdFill(0.55, 0.6, 0.68),
     CmdText(260.0, 66.0,
-      "weights random; outputs will not match truth yet", 0.22)
+      "epoch " ++ formatNum(epochs) ++ " / " ++ formatNum(maxEpochs())
+        ++ "   training loss = " ++ formatNum(loss),
+      0.22)
   ])
 
   -- Big N + factorization banner

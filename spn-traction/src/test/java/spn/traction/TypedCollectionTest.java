@@ -85,6 +85,132 @@ class TypedCollectionTest extends TractionTestBase {
                 """));
         }
 
+        @Test void variadicConstructThenMethodCall() {
+            // Reproduces factor demo error: IntVec(2,3,5) then .length() on
+            // the result. Demo was failing with "expects TypedArray$1, got
+            // SpnStructValue" — runtime type stamp missing on the variadic
+            // ctor's return value.
+            assertEquals(3L, run("""
+                import Collections
+
+                type IntVec = Array<int>
+
+                pure primes() -> IntVec = () { IntVec(2, 3, 5) }
+
+                let ps = primes()
+                ps.length()
+                """));
+        }
+
+        @Test void variadicConstructCrossModule() {
+            // factor.network declares `type IntVec = Array<int>`. Pull it
+            // from there, build via variadic ctor, call .length(). This is
+            // the exact shape the demo uses.
+            assertEquals(3L, run("""
+                import factor.network
+
+                pure primes() -> IntVec = () { IntVec(2, 3, 5) }
+
+                let ps = primes()
+                ps.length()
+                """));
+        }
+
+        @Test void variadicConstructInsideAction() {
+            // factor/demo.spn invokes this pattern from `action drawFrame`.
+            assertEquals(3L, run("""
+                import factor.network
+
+                pure primes() -> IntVec = () { IntVec(2, 3, 5) }
+
+                action frame() -> int = () {
+                    let ps = primes()
+                    ps.length()
+                }
+                frame()
+                """));
+        }
+
+        @Test void variadicConstructWithFullDemoImports() {
+            // Mirror demo imports (minus Canvas which traction tests can't
+            // load). If the module load order affects the macro expansion
+            // counter or memoization, this is where it would show.
+            assertEquals(3L, run("""
+                import Math (cos, sin, toFloat, round)
+                import Array (append, concat)
+                import String (formatNum)
+                import factor.network
+
+                pure primes() -> IntVec = () { IntVec(2, 3, 5) }
+
+                let ps = primes()
+                ps.length()
+                """));
+        }
+
+        @Test void crossFileMacroExpansionsHaveUniqueInternalNames() {
+            // Regression test for the factor demo bug: two files each
+            // expanding a macro used to restart `$N` at 1, producing
+            // colliding internal names `TypedArray$1` with distinct
+            // descriptors. Nominal dispatch then failed on values crossing
+            // file boundaries. Since the counter moved onto
+            // SpnModuleRegistry, every expansion across the build has a
+            // globally-unique suffix.
+            //
+            // The test exercises both patterns: aliasing an imported type
+            // AND re-expanding the same macro locally. Dispatch on each
+            // receiver must reach the correct method based on the value's
+            // actual descriptor.
+            Object result = run("""
+                import factor.network
+
+                type LocalCV = Array<TComplex>
+
+                let a = ComplexVec()
+                let b = LocalCV()
+                a.length() + b.length()
+                """);
+            assertEquals(0L, result);
+        }
+
+        @Test void variadicFactoryInMultiImportContext() {
+            // Demo has many typed-collection aliases from factor.network:
+            // IntVec, ComplexVec, ComplexMat, PLayerArray. Each is a
+            // separate Array<T> macro expansion. Try to tease out whether
+            // dispatch of IntVec(...).length() gets confused by the
+            // sibling expansions.
+            assertEquals(3L, run("""
+                import factor.network
+                import numerics.tcomplex
+                import numerics.rational
+
+                pure primes() -> IntVec = () { IntVec(2, 3, 5) }
+
+                -- Exercise several sibling typed-array aliases to see if
+                -- any collision in macro memoization or method dispatch
+                -- trips up the variadic path.
+                let ps = primes()
+                let cv = ComplexVec()
+                let cm = ComplexMat()
+                ps.length()
+                """));
+        }
+
+        @Test void variadicConstructPassedToMethodTakingTypedArg() {
+            // network.spn has `pure encodeInput(int, IntVec) -> ComplexVec`.
+            // Demo passes `primes()` result into `encodeInput(n, ps)`. This
+            // exercises the full path: variadic ctor → typed function param.
+            assertEquals(3L, run("""
+                import factor.network
+
+                pure primes() -> IntVec = () { IntVec(2, 3, 5) }
+
+                let ps = primes()
+                let features = encodeInput(12, ps)
+                features.length()
+                """));
+        }
+
         @Test void variadicConstructPromotesCompatibleElements() {
             // RationalArray(Rational(1,2), 3) — 3 promotes to Rational
             // element-by-element, just like regular arg promotion.

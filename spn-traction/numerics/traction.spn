@@ -1,0 +1,56 @@
+-------------------------------------------------
+type Traction(num: int, denom: int)
+
+pure Traction(int, int) -> Traction = (num, denom) {
+  match (num, denom)
+  | (a,b) | a == b -> this(1,1)
+  | _ -> this(num, denom)
+}
+
+pure +(Traction, Traction) -> Traction = ((n1,d1), (n2,d2)) {
+  Traction(n1*d2 + n2*d1, d1*d2)
+}
+
+pure *(Traction, Traction) -> Traction = ((n1,d1), (n2,d2)) {
+  Traction(n1*n2, d1*d2)
+}
+
+pure Traction.neg() -> Traction = () {
+  match this
+  | Traction(0,_) -> Traction(0, -this.denom)
+  | _ -> Traction(-this.num, this.denom)
+}
+
+pure -(Traction, Traction) -> Traction = (t1, t2) {
+  t1 + t2.neg()
+}
+
+pure Traction.inv() -> Traction = () {
+  Traction(this.denom, this.num)
+}
+
+pure /(Traction, Traction) -> Traction = (t1, t2) {
+  t1 * t2.inv()
+}
+
+---------------------------------------------------------
+type TractionComplex(scale: Traction, tangent: Traction)
+
+pure TractionComplex() -> TractionComplex = () {
+  this(Traction(1,1), Traction(1,0))
+}
+
+pure TractionComplex(Traction, Traction) -> TractionComplex = (t1, t2) {
+  this(t1, t2)
+}
+
+pure TractionComplex(int, int, int) -> TractionComplex = (a, b, c) {
+  this(Traction(1, c), Traction(b, a))
+}
+
+pure *_dot(TractionComplex, TractionComplex) -> TractionComplex = ((s1,t1), (s2,t2)) {
+  
+}
+
+--
+

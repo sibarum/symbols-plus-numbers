@@ -17,6 +17,20 @@ public final class SpnModuleRegistry {
     private final List<ModuleLoader> loaders = new ArrayList<>();
     private final Set<String> loading = new LinkedHashSet<>();
 
+    /** Cross-parser counter for macro-expansion uniquification. Before this
+     *  was shared, each parser restarted at 1 — so two modules each
+     *  expanding a macro would both name their internal type "Foo$1", with
+     *  different struct descriptors. Nominal identity then broke across
+     *  module boundaries because `"Foo$1" in module A != "Foo$1" in module B`.
+     *  The counter now lives here so every expansion across the whole
+     *  compilation unit gets a globally-unique suffix. */
+    private int macroExpansionCounter = 0;
+
+    /** Allocate the next unique suffix for a macro-expanded internal type name. */
+    public int nextMacroExpansionId() {
+        return ++macroExpansionCounter;
+    }
+
     /** Register a module by its namespace. */
     public void register(String namespace, SpnModule module) {
         modules.put(namespace, module);

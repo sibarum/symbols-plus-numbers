@@ -67,7 +67,7 @@ public final class SpnArrayLiteralNode extends SpnExpressionNode {
             if (!elementType.accepts(elements[i])) {
                 throw new SpnException(
                         "Array element at index " + i + " expects " + elementType.describe()
-                                + ", got " + elements[i].getClass().getSimpleName(),
+                                + ", got " + spn.language.SpnTypeName.of(elements[i]),
                         this);
             }
         }

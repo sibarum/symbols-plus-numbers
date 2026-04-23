@@ -89,4 +89,25 @@ class PhaseFactorTest extends TractionTestBase {
             magnitudeFloat(a) < 0.001
             """));
     }
+
+    @Test void trainingReducesLoss() {
+        // Finite-differences SGD should strictly decrease loss on a small
+        // training set over a handful of epochs. Range is intentionally
+        // small (N ∈ [2, 6), 3 epochs) because each gradient step runs
+        // 4 · 9 = 36 forward passes per example through a Rational-backed
+        // TComplex network — not fast.
+        assertEquals(true, run("""
+            import factor.train
+
+            let ps = IntVec(2, 3, 5)
+            let mE = 5
+            let net0 = PNetwork(PLayerArray(initPLayer(0, 3, 3, 42)))
+
+            let lossBefore = totalLoss(net0, ps, mE, 2, 6)
+            let trained = train(net0, ps, mE, 2, 6, 3, 0.05, 0.2)
+            let lossAfter = totalLoss(trained, ps, mE, 2, 6)
+
+            lossAfter < lossBefore
+            """));
+    }
 }

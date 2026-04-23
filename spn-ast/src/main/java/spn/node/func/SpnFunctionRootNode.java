@@ -164,11 +164,15 @@ public final class SpnFunctionRootNode extends RootNode {
                 continue;
             }
 
-            throw new SpnException("Argument '" + descriptor.getParams()[i].name()
+            String actual = SpnTypeName.of(args[i]);
+            String msg = "Argument '" + descriptor.getParams()[i].name()
                     + "' of function '" + descriptor.getName()
                     + "' expects " + paramTypes[i].describe()
-                    + ", got " + args[i].getClass().getSimpleName(),
-                    this);
+                    + ", got " + actual;
+            if (sourceLine >= 0) {
+                throw new SpnException(msg, sourceFile, sourceLine, sourceCol);
+            }
+            throw new SpnException(msg, this);
         }
     }
 

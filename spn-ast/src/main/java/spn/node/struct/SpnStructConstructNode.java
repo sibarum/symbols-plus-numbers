@@ -74,7 +74,7 @@ public final class SpnStructConstructNode extends SpnExpressionNode {
                         "Field '" + descriptor.getFields()[i].name()
                                 + "' of " + descriptor.getName()
                                 + " expects " + fieldTypes[i].describe()
-                                + ", got " + values[i].getClass().getSimpleName()
+                                + ", got " + spn.language.SpnTypeName.of(values[i])
                                 + " (" + values[i] + ")",
                         this);
             }

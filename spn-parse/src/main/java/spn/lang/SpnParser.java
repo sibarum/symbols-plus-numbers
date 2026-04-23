@@ -109,7 +109,11 @@ public class SpnParser {
     // rejects multi-emit when the caller uses `type X = macro<...>`.
     private final LinkedHashMap<String, EmittedEntry> macroEmittedBundle = new LinkedHashMap<>();
     private static final String MACRO_END_SENTINEL = "__MACRO_END__";
-    private int macroExpansionCounter = 0; // unique suffix for internal type names
+    // Local counter kept as a fallback when no module registry is available
+    // (standalone snippet parsing in unit tests). When a registry is present
+    // we use its cross-parser counter instead so internal names never
+    // collide across files.
+    private int macroExpansionCounter = 0;
     private final Map<String, MacroDef> macroRegistry = new LinkedHashMap<>();
     // Memoization: same (macroName, arg-token-text) → same emitted internal type
     // name. Gives `Array<int>` identity across multiple invocations in the same
@@ -728,8 +732,13 @@ public class SpnParser {
         // Uniquify internal type names to prevent collisions between multiple
         // invocations of the same macro. Only rename types that were declared
         // IN THE ORIGINAL BODY (not substituted from parameters).
-        macroExpansionCounter++;
-        String suffix = "$" + macroExpansionCounter;
+        int exp;
+        if (moduleRegistry != null) {
+            exp = moduleRegistry.nextMacroExpansionId();
+        } else {
+            exp = ++macroExpansionCounter;
+        }
+        String suffix = "$" + exp;
         // Find internal type names from the ORIGINAL body (before substitution)
         Set<String> internalTypeNames = new HashSet<>();
         List<SpnParseToken> bodyTokens = macro.bodyTokens();
@@ -4428,27 +4437,10 @@ public class SpnParser {
                 }
             }
 
-            // Arity match with promotion — fixed factories.
-            for (FactoryEntry fe : factories) {
-                if (fe.descriptor().isVariadic()) continue;
-                if (fe.arity() == args.size()) {
-                    recordFactoryCall(nameTok, name, fe);
-                    String qualifiedName = name + "/" + args.size();
-                    promoteArgs(args, qualifiedName);
-                    SpnExpressionNode callNode = new spn.node.func.SpnInvokeNode(
-                            fe.callTarget(), args.toArray(new SpnExpressionNode[0]));
-                    if (fe.descriptor().hasTypedReturn()) {
-                        trackType(callNode, fe.descriptor().getReturnType());
-                    }
-                    return at(callNode, nameTok);
-                }
-            }
-
-            // Variadic fallback: a variadic factory matches when we have at
-            // least `fixedArity` args. Each tail arg must match (or promote
-            // to) the variadic element type. The tail is packed into a single
-            // UntypedArray expression so the callee receives a normal
-            // (fixed + 1)-arg invocation.
+            // Variadic pass BEFORE fixed-arity promotion. A fixed-arity
+            // candidate that doesn't type-match the args shouldn't win over
+            // a variadic candidate that does: e.g. `Array<PLayer>(somePLayer)`
+            // must not be captured by the 1-arg `(UntypedArray)` ctor.
             for (FactoryEntry fe : factories) {
                 SpnFunctionDescriptor desc = fe.descriptor();
                 if (!desc.isVariadic()) continue;
@@ -4480,6 +4472,23 @@ public class SpnParser {
                     trackType(callNode, desc.getReturnType());
                 }
                 return at(callNode, nameTok);
+            }
+
+            // Fixed-arity fallback with promotion — last resort when no
+            // exact-type fixed match and no variadic match succeeded.
+            for (FactoryEntry fe : factories) {
+                if (fe.descriptor().isVariadic()) continue;
+                if (fe.arity() == args.size()) {
+                    recordFactoryCall(nameTok, name, fe);
+                    String qualifiedName = name + "/" + args.size();
+                    promoteArgs(args, qualifiedName);
+                    SpnExpressionNode callNode = new spn.node.func.SpnInvokeNode(
+                            fe.callTarget(), args.toArray(new SpnExpressionNode[0]));
+                    if (fe.descriptor().hasTypedReturn()) {
+                        trackType(callNode, fe.descriptor().getReturnType());
+                    }
+                    return at(callNode, nameTok);
+                }
             }
         }
 
