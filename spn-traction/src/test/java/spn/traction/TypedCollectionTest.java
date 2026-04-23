@@ -47,6 +47,58 @@ class TypedCollectionTest extends TractionTestBase {
                 """));
         }
 
+        @Test void constructFromArrayLiteral() {
+            // MyArray([1, 2, 3]) — the underlying TypedArray ctor takes an
+            // UntypedArray, so an array literal should flow straight in.
+            assertEquals(true, run("""
+                import Collections
+
+                type IntArray = Array<int>
+
+                let a = IntArray([1, 2, 3])
+                a.length() == 3 && a[0] == 1 && a[2] == 3
+                """));
+        }
+
+        @Test void constructFromVariadicArgs() {
+            // IntArray(1, 2, 3) — variadic ctor checks each element is int.
+            assertEquals(true, run("""
+                import Collections
+
+                type IntArray = Array<int>
+
+                let a = IntArray(1, 2, 3)
+                a.length() == 3 && a[0] == 1 && a[2] == 3
+                """));
+        }
+
+        @Test void variadicConstructRejectsWrongElementType() {
+            // IntArray("a", "b") — strings don't promote to int, variadic
+            // dispatch must fail at parse.
+            assertThrows(spn.lang.SpnParseException.class, () -> run("""
+                import Collections
+
+                type IntArray = Array<int>
+
+                let a = IntArray("a", "b")
+                a.length()
+                """));
+        }
+
+        @Test void variadicConstructPromotesCompatibleElements() {
+            // RationalArray(Rational(1,2), 3) — 3 promotes to Rational
+            // element-by-element, just like regular arg promotion.
+            assertEquals(true, run("""
+                import Collections
+                import numerics.rational
+
+                type RationalArray = Array<Rational>
+
+                let a = RationalArray(Rational(1, 2), 3)
+                a.length() == 2 && a[1] == Rational(3, 1)
+                """));
+        }
+
         @Test void multipleTypedArraysDontConflict() {
             // Two different typed arrays from the same macro
             assertEquals(true, run("""

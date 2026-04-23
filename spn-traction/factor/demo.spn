@@ -16,14 +16,16 @@
 
 import Canvas
 import Math (cos, sin, toFloat, round)
-import Array (length, append, concat)
+import Array (append, concat)
 import String (formatNum)
 import spn.canvas.draw
 import factor.network
 
 -- ── Configuration ───────────────────────────────────────────────────────
+-- `IntVec` is `Array<int>` exported from factor.network; using it here
+-- keeps the prime bank type-compatible with `encodeInput`.
 pure seed() -> int = () { 42 }
-pure primes() -> Array<int> = () { append(append(append([], 2), 3), 5) }
+pure primes() -> IntVec = () { IntVec(2, 3, 5) }
 pure maxExp() -> int = () { 5 }
 
 -- ── True factorization (for display / comparison) ───────────────────────
@@ -164,7 +166,7 @@ pure drawWeights(PLayer, int, int, float, float, float) -> Array
 pure decodedString(Array<TComplex>, int) -> string = (outputs, maxE) {
   let s = "["
   let j = 0
-  let m = length(outputs)
+  let m = outputs.length()
   while {j < m} do {
     let c = decodeExponent(argOf(outputs[j]), maxE)
     s = s ++ formatNum(c)
@@ -174,10 +176,10 @@ pure decodedString(Array<TComplex>, int) -> string = (outputs, maxE) {
   s ++ "]"
 }
 
-pure truthString(int, Array<int>) -> string = (n, ps) {
+pure truthString(int, IntVec) -> string = (n, ps) {
   let s = "["
   let j = 0
-  let m = length(ps)
+  let m = ps.length()
   while {j < m} do {
     s = s ++ formatNum(trueExp(n, ps[j]))
     s = s ++ match | j < m - 1 -> ", " | _ -> ""
@@ -186,14 +188,14 @@ pure truthString(int, Array<int>) -> string = (n, ps) {
   s ++ "]"
 }
 
--- Pretty-print 12 as "2 * 3^1" given primes bank. Built inline (no
--- intermediate Array<string>) because an empty-literal array starts as
--- Array<_>, and the opacity of _ blocks ++ on later reads.
-pure factorizationString(int, Array<int>) -> string = (n, ps) {
+-- Pretty-print 12 as "2 * 3^1" given a prime bank. Built inline (no
+-- intermediate string array) because accumulating into a string keeps
+-- all types concrete.
+pure factorizationString(int, IntVec) -> string = (n, ps) {
   let s = ""
   let any = false
   let j = 0
-  let m = length(ps)
+  let m = ps.length()
   while {j < m} do {
     let e = trueExp(n, ps[j])
     match
@@ -226,11 +228,12 @@ pure exampleForElapsed(float, int) -> int = (elapsed, rangeN) {
 
 action drawFrame(float) -> int = (elapsed) {
   let ps = primes()
-  let k = length(ps)
+  let k = ps.length()
   let mE = maxExp()
 
-  -- Fixed random weights — same every frame.
-  let net = PNetwork(append([], initPLayer(0, k, k, seed())))
+  -- Fixed random weights — same every frame. PLayerArray is exported
+  -- from factor.network.
+  let net = PNetwork(PLayerArray().push(initPLayer(0, k, k, seed())))
 
   -- Cycle N through [2, 31).
   let n = exampleForElapsed(elapsed, 30)

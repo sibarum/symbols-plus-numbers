@@ -1761,6 +1761,139 @@ x + y
         }
     }
 
+    // ── Variadic params (T...) grammar ────────────────────────────────────
+    //
+    // `pure foo(int...) -> int` and `pure foo(string, int...) -> int` parse;
+    // the descriptor records variadic=true with element type = last param.
+    // Variadic is last-param-only and disallowed on operators and producers.
+
+    @Nested
+    class VariadicGrammar {
+
+        @Test void variadicOnlyParamParses() {
+            // Body doesn't use the param — Phase 1 is grammar-only.
+            run("""
+                pure foo(int...) -> int = (xs) { 0 }
+                42
+                """);
+        }
+
+        @Test void variadicAfterFixedParamParses() {
+            run("""
+                pure foo(string, int...) -> int = (s, xs) { 0 }
+                42
+                """);
+        }
+
+        @Test void variadicInMiddlePositionFails() {
+            assertThrows(SpnParseException.class, () -> run("""
+                pure foo(int..., string) -> int = (xs, s) { 0 }
+                42
+                """));
+        }
+
+        @Test void multipleVariadicsFail() {
+            assertThrows(SpnParseException.class, () -> run("""
+                pure foo(int..., string...) -> int = (xs, ys) { 0 }
+                42
+                """));
+        }
+
+        @Test void operatorVariadicFails() {
+            // Operators are strictly unary or binary; variadic would break that.
+            assertThrows(SpnParseException.class, () -> run("""
+                pure +(int...) -> int = (xs) { 0 }
+                42
+                """));
+        }
+
+        @Test void methodVariadicParses() {
+            // Receiver + variadic tail. The receiver is last-but-one, the
+            // variadic tail is last — order preserved.
+            run("""
+                type Box(int)
+                pure Box.fold(int...) -> int = (xs) { this.0 }
+                42
+                """);
+        }
+
+        @Test void factoryVariadicParses() {
+            // Inside a factory body, raw construction is `this(...)`, not
+            // the factory name itself. The variadic xs isn't exercised in
+            // Phase 1 — only the signature parsing matters here.
+            run("""
+                type Pile(int)
+                pure Pile(int...) -> Pile = (xs) { this(0) }
+                42
+                """);
+        }
+
+        // ── Dispatch (Phase 2) ───────────────────────────────────────────
+        //
+        // A variadic factory dispatches on `args.size() >= fixedArity`. The
+        // tail is packed into an UntypedArray before the call; inside the
+        // body the variadic param sees that array.
+
+        @Test void variadicFactoryDispatchesWithMultipleArgs() {
+            // Pile(2, 3, 5) hits `pure Pile(int...)`. Body sums the first
+            // three tail elements — proves dispatch reached the variadic
+            // factory AND the tail was packed as a subscriptable array.
+            assertEquals(10L, run("""
+                type Pile(int)
+                pure Pile(int...) -> Pile = (xs) { this(xs[0] + xs[1] + xs[2]) }
+
+                Pile(2, 3, 5).0
+                """));
+        }
+
+        @Test void variadicFactoryEmptyCall() {
+            // No args → empty packed array → dispatch still reaches the body.
+            // Body stores a sentinel so we can distinguish a successful
+            // zero-variadic dispatch from a parse failure.
+            assertEquals(42L, run("""
+                type Pile(int)
+                pure Pile(int...) -> Pile = (xs) { this(42) }
+
+                Pile().0
+                """));
+        }
+
+        @Test void variadicFactoryReadsTailElement() {
+            // Subscript the packed tail inside the body.
+            assertEquals(7L, run("""
+                type Pile(int)
+                pure Pile(int...) -> Pile = (xs) { this(xs[1]) }
+
+                Pile(3, 7, 11).0
+                """));
+        }
+
+        @Test void fixedFactoryWinsOverVariadicAtSameArity() {
+            // Both `pure Pile(int)` and `pure Pile(int...)` exist. A 1-arg
+            // call must pick the fixed one — confirmed by the int being used
+            // doubled rather than packed-and-length'd.
+            assertEquals(10L, run("""
+                type Pile(int)
+                pure Pile(int) -> Pile = (n) { this(n * 2) }
+                pure Pile(int...) -> Pile = (xs) { this(999) }
+
+                Pile(5).0
+                """));
+        }
+
+        @Test void variadicFactoryWrongElementTypeFails() {
+            // Pile(int...) with a string in the tail should fail dispatch,
+            // then fall through to "unknown type" since no fixed factory
+            // matches either.
+            assertThrows(SpnParseException.class, () -> run("""
+                type Pile(int)
+                pure Pile(int...) -> Pile = (xs) { this(0) }
+
+                Pile(1, "oops", 3)
+                """));
+        }
+    }
+
     // ── Qualified-key import shortening (stage 3) ─────────────────────────
     //
     // `import com.myapp.(serialize)` aliases `serialize` in method-call

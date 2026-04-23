@@ -37,6 +37,12 @@ macro Array<T> = {
   pure TypedArray() -> TypedArray = () {
     TypedArray([])
   }
+  -- Variadic ctor: `IntArray(1, 2, 3)` — each arg is element-type-checked
+  -- against T, the tail is packed into an array, handed straight to the
+  -- raw struct constructor which stores it as this.items.
+  pure TypedArray(T...) -> TypedArray = (items) {
+    this(items)
+  }
   pure TypedArray.push(T) -> TypedArray = (item) {
     TypedArray(append(this.items, item))
   }

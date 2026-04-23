@@ -162,9 +162,14 @@ deriveOrderingFromInt<Rational, compare>
 -- Typed collection wrapper (stdlib)
 import Collections
 type RationalArray = Array<Rational>
-let arr = RationalArray().push(5)      -- 5 promoted to Rational automatically
-arr[0] == Rational(5, 1)                -- subscript returns the typed element
-arr.items                               -- compile error: private field
+let arr = RationalArray(Rational(1, 2), 5)   -- variadic ctor, 5 promoted to Rational
+arr[0] == Rational(1, 2)                      -- subscript returns the typed element
+arr.items                                     -- compile error: private field
+
+-- Equivalent construction forms:
+let a = RationalArray()                      -- empty
+let b = RationalArray([Rational(1, 2), 5])   -- from an untyped-array literal
+let c = RationalArray().push(Rational(1, 2)).push(5)  -- builder chain
 ```
 
 **Macro features:**
@@ -191,7 +196,7 @@ macro Array<T> = {
 }
 
 type IntArray = Array<int>
-let xs = IntArray().push(1).push(2)
+let xs = IntArray(1, 2)   -- variadic ctor; equivalent to IntArray().push(1).push(2)
 xs[0]         -- int, not _ — typechecks for arithmetic, match narrowing, etc.
 ```
 
@@ -545,6 +550,7 @@ The `TypeGraph` records every declaration (types, functions, operators, promotio
 - **Macros are compile-time impure functions.** Declare with `macro Name<P> = { ... }` and invoke with `Name<Arg>`. `emit` controls what single declaration escapes to the caller's scope. Replaces generics: `type RationalArray = Array<Rational>`. Macro parameters can carry `requires` constraints — `macro foo<T requires Ring>` or composed as `<T requires Additive & Stringable>` — to specify polymorphism without a separate type-variable system. Invocations memoize: `Array<Rational>` twice in the same file refers to the same emitted type.
 - **Dispatch is one mechanism.** Operators (`a + b`), method calls (`a.foo()`), free-function calls (`foo(a, b)`), and signature-constrained generics (`macro<T requires Sig>`) all resolve via the same global table — find an entry matching the arg types, with promotion as a relaxation. Qualified keys (`@com.foo.bar`) are the universal name for a dispatch slot; operators are pre-registered keys; `signature` declarations name sets of required keys. No parallel typeclass / trait / interface system.
 - **Encapsulation via constructor fields.** `let this.field = expr` in a constructor creates private state, accessible only from methods on the same type. No runtime reflection.
+- **Typed varargs.** The last parameter of any `pure` signature can be declared `T...` to accept zero or more trailing args of type `T`. Each arg is element-type-checked (with promotion) at the call site; inside the body the param is `Array<T>`. Exact-arity overloads always beat variadic overloads — `pure foo(int, int)` wins over `pure foo(int...)` for a two-arg call.
 
 ## Getting Started
 

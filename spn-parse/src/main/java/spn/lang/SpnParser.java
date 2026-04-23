@@ -1048,7 +1048,8 @@ public class SpnParser {
             }
         }
 
-        List<FieldType> paramTypes = parseParamTypeList();
+        ParamList paramList = parseParamTypeList();
+        List<FieldType> paramTypes = paramList.types();
         FieldType returnType = parseOptionalReturnType();
 
         // Build the descriptor for the slot. No body; callers provide impls.
@@ -1056,6 +1057,7 @@ public class SpnParser {
                 ? SpnFunctionDescriptor.pure(fqn) : SpnFunctionDescriptor.impure(fqn);
         for (int i = 0; i < paramTypes.size(); i++) db.param("_" + i, paramTypes.get(i));
         db.returns(returnType);
+        if (paramList.variadic()) db.variadic();
         SpnFunctionDescriptor descriptor = db.build();
 
         // Duplicate registration is a conflict — a key is owned exactly once.
@@ -2307,13 +2309,17 @@ public class SpnParser {
             }
         }
 
-        List<FieldType> paramTypes = parseParamTypeList();
+        ParamList userParams = parseParamTypeList();
         FieldType returnType = parseOptionalReturnType();
 
-        // Prepend receiver type
+        // Prepend receiver type. Variadic (when present) always applies to
+        // the user's last param, which remains the last overall after prepend.
         FieldType receiverType = resolveTypeByName(typeName);
         if (receiverType == null) throw tokens.error("Unknown type for method: " + typeName, nameTok);
-        paramTypes.add(0, receiverType);
+        List<FieldType> allParams = new ArrayList<>();
+        allParams.add(receiverType);
+        allParams.addAll(userParams.types());
+        ParamList paramList = new ParamList(allParams, userParams.variadic());
 
         String methodKey = typeName + "." + methodName;
 
@@ -2322,9 +2328,10 @@ public class SpnParser {
             rejectOrphanBody(nameTok, "method '" + methodKey + "'");
             SpnFunctionDescriptor.Builder db = isPure
                     ? SpnFunctionDescriptor.pure(methodKey) : SpnFunctionDescriptor.impure(methodKey);
-            db.param("this", paramTypes.get(0));
-            for (int i = 1; i < paramTypes.size(); i++) db.param("_" + (i - 1), paramTypes.get(i));
+            db.param("this", allParams.get(0));
+            for (int i = 1; i < allParams.size(); i++) db.param("_" + (i - 1), allParams.get(i));
             db.returns(returnType);
+            if (paramList.variadic()) db.variadic();
             functionDescriptorRegistry.put(methodKey, db.build());
             return null;
         }
@@ -2332,7 +2339,7 @@ public class SpnParser {
         tokens.expect("=");
         String outerMethodType = currentMethodTypeName;
         currentMethodTypeName = typeName;
-        parseFunctionBody(methodKey, paramTypes, returnType, isPure, true, methodTok);
+        parseFunctionBody(methodKey, paramList, returnType, isPure, true, methodTok);
         currentMethodTypeName = outerMethodType;
         return null;
     }
@@ -2341,7 +2348,8 @@ public class SpnParser {
     private SpnStatementNode parseFactoryDecl(boolean isPure, SpnParseToken nameTok) {
         String typeName = tokens.advance().text(); // consume TypeName
 
-        List<FieldType> paramTypes = parseParamTypeList();
+        ParamList paramList = parseParamTypeList();
+        List<FieldType> paramTypes = paramList.types();
         FieldType returnType = parseOptionalReturnType();
 
         if (!tokens.check("=")) {
@@ -2350,8 +2358,12 @@ public class SpnParser {
         }
         tokens.expect("=");
 
-        // Use arity-qualified name to prevent collisions between overloaded factories
-        String qualifiedName = typeName + "/" + paramTypes.size();
+        // Arity-qualified name prevents collisions between overloaded factories.
+        // Variadic factories use a distinct 'V' marker so they don't collide with
+        // a fixed factory of the same min-arity.
+        String qualifiedName = paramList.variadic()
+                ? typeName + "/V" + paramTypes.size()
+                : typeName + "/" + paramTypes.size();
 
         // Set factory context so this(args) resolves to raw construction
         String outerFactory = currentFactoryTypeName;
@@ -2359,7 +2371,7 @@ public class SpnParser {
         currentFactoryTypeName = typeName;
         currentFactoryArity = paramTypes.size();
 
-        parseFunctionBody(qualifiedName, paramTypes, returnType, isPure, false, nameTok);
+        parseFunctionBody(qualifiedName, paramList, returnType, isPure, false, nameTok);
 
         currentFactoryTypeName = outerFactory;
         currentFactoryArity = outerArity;
@@ -2381,8 +2393,14 @@ public class SpnParser {
         String name = isOperator ? tokens.advance().text()
                 : expectIdentifier().text();
 
-        List<FieldType> paramTypes = parseParamTypeList();
+        ParamList paramList = parseParamTypeList();
+        List<FieldType> paramTypes = paramList.types();
         FieldType returnType = parseOptionalReturnType();
+
+        if (isOperator && paramList.variadic()) {
+            throw tokens.error("Operators may not be variadic (strict unary or binary arity)",
+                    declTok);
+        }
 
         if (!tokens.check("=")) {
             rejectOrphanBody(declTok, (isOperator ? "operator '" : "function '") + name + "'");
@@ -2390,7 +2408,7 @@ public class SpnParser {
         }
         tokens.expect("=");
 
-        parseFunctionBody(name, paramTypes, returnType, isPure, false, declTok);
+        parseFunctionBody(name, paramList, returnType, isPure, false, declTok);
 
         // Register operator overload + enforce the unary/binary mutex.
         if (isOperator && !paramTypes.isEmpty()) {
@@ -2426,16 +2444,47 @@ public class SpnParser {
         return null;
     }
 
-    /** Shared: parse (Type, Type, ...) parameter type list. */
-    private List<FieldType> parseParamTypeList() {
+    /** Result of parsing a {@code (Type, Type, ...)} param type list. When
+     *  {@link #variadic} is true, the last entry in {@link #types} is the
+     *  element type of the variadic tail (declared as {@code T...}). */
+    record ParamList(List<FieldType> types, boolean variadic) {
+        int size() { return types.size(); }
+    }
+
+    /** Shared: parse (Type, Type, ...) parameter type list. Supports a
+     *  trailing {@code T...} on the final param to mark variadic.
+     *  Variadic in any non-final position is a parse error. */
+    private ParamList parseParamTypeList() {
         tokens.expect("(");
         List<FieldType> paramTypes = new ArrayList<>();
+        boolean variadic = false;
         while (!tokens.check(")")) {
+            if (variadic) {
+                throw tokens.error("Variadic parameter (T...) must be the last "
+                        + "parameter — nothing may follow it");
+            }
             paramTypes.add(parseFieldType());
+            if (matchEllipsis()) {
+                variadic = true;
+            }
             tokens.match(",");
         }
         tokens.expect(")");
-        return paramTypes;
+        return new ParamList(paramTypes, variadic);
+    }
+
+    /** Consume three consecutive {@code .} tokens as an ellipsis ({@code ...}),
+     *  returning true if matched. The lexer doesn't produce a single ellipsis
+     *  token, so we match dot-by-dot at parse sites where {@code ...} is
+     *  grammatically meaningful (currently only variadic param markers). */
+    private boolean matchEllipsis() {
+        if (!tokens.check(".")) return false;
+        SpnParseToken p1 = tokens.peek(1);
+        SpnParseToken p2 = tokens.peek(2);
+        if (p1 == null || !p1.text().equals(".")) return false;
+        if (p2 == null || !p2.text().equals(".")) return false;
+        tokens.advance(); tokens.advance(); tokens.advance();
+        return true;
     }
 
     /** Shared: parse optional -> ReturnType. */
@@ -2474,24 +2523,15 @@ public class SpnParser {
         }
     }
 
-    private SpnStatementNode parseFunctionBody(String name, List<FieldType> paramTypes,
-                                                FieldType returnType, boolean isPure) {
-        return parseFunctionBody(name, paramTypes, returnType, isPure, false, null);
-    }
-
-    private SpnStatementNode parseFunctionBody(String name, List<FieldType> paramTypes,
-                                                FieldType returnType, boolean isPure, boolean isMethod) {
-        return parseFunctionBody(name, paramTypes, returnType, isPure, isMethod, null);
-    }
-
     /**
      * @param nameTok position of the function's name identifier. When non-null,
      *   the TypeGraph node records the name's line/col so go-to-def lands on
      *   the declaration name itself rather than the opening brace of the body.
      */
-    private SpnStatementNode parseFunctionBody(String name, List<FieldType> paramTypes,
+    private SpnStatementNode parseFunctionBody(String name, ParamList paramList,
                                                 FieldType returnType, boolean isPure, boolean isMethod,
                                                 SpnParseToken nameTok) {
+        List<FieldType> paramTypes = paramList.types();
         tokens.expect("(");
         List<ParamDecl> params = new ArrayList<>();
 
@@ -2566,6 +2606,13 @@ public class SpnParser {
                         SpnReadLocalVariableNodeGen.create(userParamSlots[i]), bindSlots));
             } else {
                 FieldType ft = i < paramTypes.size() ? paramTypes.get(i) : null;
+                // Variadic tail: in-body shape is Array<T> — subscript gives
+                // T, arithmetic/dispatch on elements works. At runtime the
+                // packed arg is an UntypedArray, but the element type info is
+                // what's useful inside the body.
+                if (paramList.variadic() && i == paramTypes.size() - 1) {
+                    ft = FieldType.ofArray(ft);
+                }
                 userParamSlots[i] = currentScope.addLocal(p.name(), ft);
                 paramNames.add(p.name());
                 recordLocalBinding(p.name(), p.nameTok(), TypeGraph.Kind.PARAMETER);
@@ -2607,6 +2654,17 @@ public class SpnParser {
         for (int i = 0; i < paramNames.size(); i++) {
             FieldType ft = i < paramTypes.size() ? paramTypes.get(i) : FieldType.UNTYPED;
             descBuilder.param(paramNames.get(i), ft);
+        }
+        // Variadic applies to the last user-declared param. If the function is
+        // ALSO a producer (yields), the __yieldCtx__ would come after — that
+        // combination is disallowed (a producer's trailing arg is the yield
+        // context, which is never user-facing and can't be variadic).
+        if (paramList.variadic()) {
+            if (isProducer) {
+                throw tokens.error("Variadic parameters are not supported on "
+                        + "producer (yielding) functions");
+            }
+            descBuilder.variadic();
         }
         if (isProducer) {
             descBuilder.param("__yieldCtx__");
@@ -4346,8 +4404,11 @@ public class SpnParser {
             FieldType[] argTypes = new FieldType[args.size()];
             for (int i = 0; i < args.size(); i++) argTypes[i] = inferType(args.get(i));
 
-            // Try exact type match first
+            // Try exact type match first — fixed (non-variadic) factories only.
+            // Variadic factories are tried as a fallback below so a fixed
+            // factory of the same arity always wins.
             for (FactoryEntry fe : factories) {
+                if (fe.descriptor().isVariadic()) continue;
                 if (fe.arity() != args.size()) continue;
                 FieldDescriptor[] params = fe.descriptor().getParams();
                 boolean match = true;
@@ -4367,8 +4428,9 @@ public class SpnParser {
                 }
             }
 
-            // Arity match with promotion
+            // Arity match with promotion — fixed factories.
             for (FactoryEntry fe : factories) {
+                if (fe.descriptor().isVariadic()) continue;
                 if (fe.arity() == args.size()) {
                     recordFactoryCall(nameTok, name, fe);
                     String qualifiedName = name + "/" + args.size();
@@ -4380,6 +4442,44 @@ public class SpnParser {
                     }
                     return at(callNode, nameTok);
                 }
+            }
+
+            // Variadic fallback: a variadic factory matches when we have at
+            // least `fixedArity` args. Each tail arg must match (or promote
+            // to) the variadic element type. The tail is packed into a single
+            // UntypedArray expression so the callee receives a normal
+            // (fixed + 1)-arg invocation.
+            for (FactoryEntry fe : factories) {
+                SpnFunctionDescriptor desc = fe.descriptor();
+                if (!desc.isVariadic()) continue;
+                int fixed = desc.fixedArity();
+                if (args.size() < fixed) continue;
+
+                FieldType elementType = desc.variadicElementType();
+                if (!resolver.tryMatchVariadicTail(args, fixed, elementType)) continue;
+
+                // Pack the tail into a single array-literal expression.
+                List<SpnExpressionNode> tail = new ArrayList<>(
+                        args.subList(fixed, args.size()));
+                args.subList(fixed, args.size()).clear();
+                SpnArrayLiteralNode packed = new SpnArrayLiteralNode(
+                        FieldType.UNTYPED,
+                        tail.toArray(new SpnExpressionNode[0]));
+                trackType(packed, FieldType.ofArray(FieldType.UNTYPED));
+                args.add(packed);
+
+                // Promote the fixed prefix using the descriptor — promoteArgs
+                // is variadic-aware and skips the last (now-packed) slot.
+                String qualifiedName = name + "/V" + (fixed + 1);
+                promoteArgs(args, qualifiedName);
+
+                recordFactoryCall(nameTok, name, fe);
+                SpnExpressionNode callNode = new spn.node.func.SpnInvokeNode(
+                        fe.callTarget(), args.toArray(new SpnExpressionNode[0]));
+                if (desc.hasTypedReturn()) {
+                    trackType(callNode, desc.getReturnType());
+                }
+                return at(callNode, nameTok);
             }
         }
 

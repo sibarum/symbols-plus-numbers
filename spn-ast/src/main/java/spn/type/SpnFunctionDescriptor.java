@@ -38,13 +38,23 @@ public final class SpnFunctionDescriptor {
     private final boolean pure;
     private final FieldDescriptor[] params;
     private final FieldType returnType;
+    private final boolean variadic;
+    /** Element type of the variadic tail as declared by the user (before
+     *  the param slot was swapped to UntypedArray for runtime). Null when
+     *  the function is not variadic. Kept as a side channel so dispatch
+     *  can type-check tail args against T while the param's runtime type
+     *  is the packed-array shape. */
+    private final FieldType variadicElementType;
 
     private SpnFunctionDescriptor(String name, boolean pure,
-                                   FieldDescriptor[] params, FieldType returnType) {
+                                   FieldDescriptor[] params, FieldType returnType,
+                                   boolean variadic, FieldType variadicElementType) {
         this.name = name;
         this.pure = pure;
         this.params = params;
         this.returnType = returnType;
+        this.variadic = variadic;
+        this.variadicElementType = variadicElementType;
     }
 
     /** Starts building a pure function descriptor. */
@@ -73,6 +83,29 @@ public final class SpnFunctionDescriptor {
 
     public int arity() {
         return params.length;
+    }
+
+    /** True if the last parameter is variadic (declared as {@code T...}).
+     *  Variadic functions accept any number of trailing args (zero or more);
+     *  those args are packed into an array and handed to the function as its
+     *  final parameter value. */
+    public boolean isVariadic() {
+        return variadic;
+    }
+
+    /** Number of fixed (non-variadic) parameters. For non-variadic
+     *  functions this equals {@link #arity()}. For variadic, it's
+     *  {@code arity() - 1} — everything before the trailing {@code T...}. */
+    public int fixedArity() {
+        return variadic ? params.length - 1 : params.length;
+    }
+
+    /** Element type of the variadic tail as declared (e.g. {@code int} in
+     *  {@code (int...)}), or null if not variadic. Distinct from the
+     *  variadic param's {@link FieldDescriptor#type()}, which reflects the
+     *  runtime slot type (UntypedArray). */
+    public FieldType variadicElementType() {
+        return variadicElementType;
     }
 
     public FieldType getReturnType() {
@@ -120,6 +153,8 @@ public final class SpnFunctionDescriptor {
         private final boolean pure;
         private final List<FieldDescriptor> params = new ArrayList<>();
         private FieldType returnType = FieldType.UNTYPED;
+        private boolean variadic = false;
+        private FieldType variadicElementType = null;
 
         private Builder(String name, boolean pure) {
             this.name = name;
@@ -144,11 +179,31 @@ public final class SpnFunctionDescriptor {
             return this;
         }
 
+        /** Marks the last parameter as variadic. The last param's declared
+         *  type is remembered as the variadic element type and its runtime
+         *  slot type is replaced with UntypedArray — at call time the packed
+         *  tail arrives as an array, element-matching happens at dispatch. */
+        public Builder variadic() {
+            if (params.isEmpty()) {
+                throw new IllegalStateException(
+                        "variadic() requires at least one parameter");
+            }
+            this.variadic = true;
+            int last = params.size() - 1;
+            FieldDescriptor tail = params.get(last);
+            this.variadicElementType = tail.type();
+            params.set(last, FieldDescriptor.typed(
+                    tail.name(), FieldType.ofArray(FieldType.UNTYPED)));
+            return this;
+        }
+
         public SpnFunctionDescriptor build() {
             return new SpnFunctionDescriptor(
                     name, pure,
                     params.toArray(new FieldDescriptor[0]),
-                    returnType);
+                    returnType,
+                    variadic,
+                    variadicElementType);
         }
     }
 }

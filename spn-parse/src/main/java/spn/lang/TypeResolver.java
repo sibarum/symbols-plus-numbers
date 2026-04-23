@@ -415,7 +415,13 @@ public final class TypeResolver {
         SpnFunctionDescriptor desc = functionDescriptorRegistry.get(funcName);
         if (desc == null) return;
         FieldDescriptor[] params = desc.getParams();
-        for (int i = 0; i < args.size() && i < params.length; i++) {
+        // For variadic functions, the last param is the variadic tail. By the
+        // time promoteArgs runs on a variadic dispatch, the tail has already
+        // been type-checked and packed into a single array arg by the caller
+        // (see tryMatchVariadicTail). Skip the tail slot here so we don't try
+        // to promote an UntypedArray to the declared element type.
+        int promotable = desc.isVariadic() ? params.length - 1 : params.length;
+        for (int i = 0; i < args.size() && i < promotable; i++) {
             FieldType argType = inferType(args.get(i));
             FieldType paramType = params[i].type();
             if (argType == null || paramType == null) continue;
@@ -431,6 +437,33 @@ public final class TypeResolver {
                 }
             }
         }
+    }
+
+    /** Promote each tail arg (from {@code fromIndex} to end of {@code args})
+     *  to match {@code elementType}. Returns true if every tail arg matches
+     *  directly or via a promotion chain; false on the first mismatch, with
+     *  {@code args} partially mutated (caller should abandon this dispatch
+     *  candidate). Untyped element type accepts anything. */
+    public boolean tryMatchVariadicTail(List<SpnExpressionNode> args,
+                                         int fromIndex, FieldType elementType) {
+        if (elementType instanceof FieldType.Untyped) return true;
+        for (int i = fromIndex; i < args.size(); i++) {
+            FieldType argType = inferType(args.get(i));
+            if (argType == null) continue;
+            if (typesMatch(elementType, argType)) continue;
+            List<PromotionStep> steps = buildPromotionChain(argType);
+            boolean ok = false;
+            for (PromotionStep step : steps) {
+                if (step.typeDesc.equals(elementType.describe())) {
+                    args.set(i, applyPromotionChain(args.get(i), step));
+                    trackType(args.get(i), elementType);
+                    ok = true;
+                    break;
+                }
+            }
+            if (!ok) return false;
+        }
+        return true;
     }
 
     /**
