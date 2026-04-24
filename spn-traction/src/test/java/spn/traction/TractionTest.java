@@ -75,7 +75,7 @@ class TractionTest extends TractionTestBase {
                 import numerics.traction
                 let tc = TractionComplex(3, 4, 5)
                 let v = (tc * tc).cart()
-                v.0 == Rational(-7, 25) && v.1 == Rational(24, 25)
+                v.0 == Traction(-7, 25) && v.1 == Traction(24, 25)
                 """));
         }
     }
@@ -94,7 +94,7 @@ class TractionTest extends TractionTestBase {
                 import numerics.traction
                 let tc = TractionComplex(3, 4, 5)
                 let v = (tc + tc.neg()).cart()
-                v.0 == Rational(1, 25) && v.1 == Rational(1, 25)
+                v.0 == Traction(1, 25) && v.1 == Traction(1, 25)
                 """));
         }
     }
@@ -112,7 +112,7 @@ class TractionTest extends TractionTestBase {
                 import numerics.traction
                 let tc = TractionComplex(3, 4, 5)
                 let v = (tc * TractionComplex.i).cart()
-                v.0 == Rational(-4, 5) && v.1 == Rational(3, 5)
+                v.0 == Traction(-4, 5) && v.1 == Traction(3, 5)
                 """));
         }
 

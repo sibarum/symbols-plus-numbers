@@ -1,17 +1,18 @@
 -- ═══════════════════════════════════════════════════════════════════════
--- Vec3 — 3D vector over Rational
+-- Vec3 — 3D vector over float
 -- ═══════════════════════════════════════════════════════════════════════
--- All arithmetic is exact. No floating point, no transcendentals.
--- Dot and cross products use qualified operator suffixes (*_dot, *_cross).
+-- Observable projection of a rotation pipeline: exact-rational math
+-- happens inside TractionComplex/TractionQuaternion, and Vec3 holds the
+-- float projection for display and culling. Standard IEEE arithmetic,
+-- so subtraction and negation behave normally.
 
 import Ordering
-import numerics.traction
 
-type Vec3(x: Traction, y: Traction, z: Traction)
+type Vec3(x: float, y: float, z: float)
 
 -- ── constructors ────────────────────────────────────────────────────
 
-pure Vec3(Traction, Traction, Traction) -> Vec3 = (x, y, z) {
+pure Vec3(float, float, float) -> Vec3 = (x, y, z) {
   this(x, y, z)
 }
 
@@ -25,42 +26,36 @@ pure -(Vec3, Vec3) -> Vec3 = ((x1, y1, z1), (x2, y2, z2)) {
   Vec3(x1 - x2, y1 - y2, z1 - z2)
 }
 
--- Unary negation as a method (mutex rule: operator is binary OR unary).
--- `-v` expressions fall back to this via the parser.
 pure Vec3.neg() -> Vec3 = () {
   let (x, y, z) = this
-  Vec3(x.neg(), y.neg(), z.neg())
+  Vec3(-x, -y, -z)
 }
 
--- Scalar multiplication: Rational * Vec3
-pure *(Traction, Vec3) -> Vec3 = (k, (x, y, z)) {
+pure *(float, Vec3) -> Vec3 = (k, (x, y, z)) {
   Vec3(k * x, k * y, k * z)
 }
 
--- Dot product: Vec3 *_dot Vec3 -> Rational
-pure *_dot(Vec3, Vec3) -> Traction = ((x1, y1, z1), (x2, y2, z2)) {
+pure *_dot(Vec3, Vec3) -> float = ((x1, y1, z1), (x2, y2, z2)) {
   x1*x2 + y1*y2 + z1*z2
 }
 
--- Cross product: Vec3 *_cross Vec3 -> Vec3
 pure *_cross(Vec3, Vec3) -> Vec3 = ((x1, y1, z1), (x2, y2, z2)) {
   Vec3(y1*z2 - z1*y2, z1*x2 - x1*z2, x1*y2 - y1*x2)
 }
 
--- ── equality & comparison ───────────────────────────────────────────
+-- ── equality ────────────────────────────────────────────────────────
 
 pure ==(Vec3, Vec3) -> bool = ((x1, y1, z1), (x2, y2, z2)) {
   x1 == x2 && y1 == y2 && z1 == z2
 }
 
--- Squared magnitude (avoids square root — stays exact)
-pure Vec3.sqMag() -> Traction = () {
+pure Vec3.sqMag() -> float = () {
   this *_dot this
 }
 
 -- ── constants ───────────────────────────────────────────────────────
 
-const Vec3.zero = Vec3(0, 0, 0)
-const Vec3.ex = Vec3(1, 0, 0)
-const Vec3.ey = Vec3(0, 1, 0)
-const Vec3.ez = Vec3(0, 0, 1)
+const Vec3.zero = Vec3(0.0, 0.0, 0.0)
+const Vec3.ex = Vec3(1.0, 0.0, 0.0)
+const Vec3.ey = Vec3(0.0, 1.0, 0.0)
+const Vec3.ez = Vec3(0.0, 0.0, 1.0)

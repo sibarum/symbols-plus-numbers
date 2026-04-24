@@ -30,10 +30,10 @@ class NeuralSignatureTest extends TractionTestBase {
             let q_k = TractionQuaternion(tc0, tci)
 
             let result = q_i.compose(q_j)
-            let r1 = result.real.cart()
-            let i1 = result.imag.cart()
-            let k1 = q_k.real.cart()
-            let k2 = q_k.imag.cart()
+            let r1 = result.real.cartF()
+            let i1 = result.imag.cartF()
+            let k1 = q_k.real.cartF()
+            let k2 = q_k.imag.cartF()
             r1.0 == k1.0 && r1.1 == k1.1 && i1.0 == k2.0 && i1.1 == k2.1
             """));
     }

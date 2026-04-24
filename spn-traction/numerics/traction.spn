@@ -1,5 +1,5 @@
 
-import Math (abs, sign, max, bitWidth, shr, shl)
+import Math (abs, sign, max, bitWidth, shr, shl, toFloat)
 import Ordering
 
 
@@ -105,9 +105,24 @@ promote int -> Traction = (i) {
   Traction(i)
 }
 
+pure Traction.toFloat() -> float = ((n, d)) {
+  match d
+  | 0 -> 0.0
+  | _ -> toFloat(n) / toFloat(d)
+}
+
 ----------------------------------------------------
 
+-- Exact-arithmetic 2D vector over Traction. Used in rotation pipelines
+-- where every coordinate stays rational.
 type Vector2(Traction, Traction)
+
+-- Float projection of Vector2 — the observable form. Crossing into floats
+-- canonicalizes: two mathematically-equal Tractions with different internal
+-- representations (e.g. (0, 1) vs (0, 10000) post-renormalize) collapse to
+-- the same float. Use this for tests and anywhere a downstream consumer
+-- expects decimals.
+type FVec2(float, float)
 
 ---------------------------------------------------------
 type TractionComplex(scale: Traction, tangent: Traction)
@@ -170,6 +185,17 @@ pure TractionComplex.cart() -> Vector2 = () {
   let (a, b) = this.scale
   let (n, d) = this.tangent
   Vector2(Traction(a*d, b), Traction(a*n, b))
+}
+
+-- Float projection of cart(). Computes the same geometric value
+-- (scale · (d, n) / b) directly in floats, so the result compares by
+-- value rather than by Traction internal representation.
+pure TractionComplex.cartF() -> FVec2 = () {
+  let (a, b) = this.scale
+  let (n, d) = this.tangent
+  match b
+  | 0 -> FVec2(0.0, 0.0)
+  | _ -> FVec2(toFloat(a*d) / toFloat(b), toFloat(a*n) / toFloat(b))
 }
 
 pure *_dot(TractionComplex, TractionComplex) -> Traction = ((s1,t1), (s2,t2)) {

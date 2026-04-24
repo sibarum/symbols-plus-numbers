@@ -25,15 +25,6 @@ import numerics.traction
 import numerics.vec3
 import numerics.rational
 
--- Rational → float (matches tcomplex_demo.spn's helper; the `promote
--- Rational -> float` in rational.spn would be an alternative, but the
--- parser currently chokes on `let name: type = expr` annotations).
-pure ratToFloat(Traction) -> float = (r) {
-  match r.1
-  | 0 -> 0
-  | _ -> toFloat(r.0) / toFloat(r.1)
-}
-
 -- ── packing Vec3 ↔ TractionQuaternion ──────────────────────────────
 --
 -- A pure-imaginary quaternion V = 0 + x·i + y·j + z·k, under the
@@ -52,10 +43,10 @@ pure toQuat(int, int, int) -> TractionQuaternion = (x, y, z) {
 }
 
 -- Extract (x, y, z) from a quaternion that's pure-imaginary after
--- q·V·q.conj(). real.cart() is (0, x); imag.cart() is (y, z).
+-- q·V·q.conj(). real.cartF() is (0, x); imag.cartF() is (y, z).
 pure fromQuat(TractionQuaternion) -> Vec3 = (q) {
-  let r = q.real.cart()
-  let i = q.imag.cart()
+  let r = q.real.cartF()
+  let i = q.imag.cartF()
   Vec3(r.1, i.0, i.1)
 }
 
@@ -64,12 +55,10 @@ pure rotate(TractionQuaternion, int, int, int) -> Vec3 = (q, x, y, z) {
   fromQuat(q * toQuat(x, y, z) * q.conj())
 }
 
--- ── projection: Rational Vec3 → pixel coords ───────────────────────
+-- ── projection: Vec3 → pixel coords ────────────────────────────────
 
 pure project(Vec3, float, float, float) -> (float, float) = (v, cx, cy, s) {
-  let vx = ratToFloat(v.x)
-  let vy = ratToFloat(v.y)
-  (cx + s * vx, cy - s * vy)
+  (cx + s * v.x, cy - s * v.y)
 }
 
 -- ── back-face culling via Vec3 dot product ─────────────────────────
@@ -80,7 +69,7 @@ pure project(Vec3, float, float, float) -> (float, float) = (v, cx, cy, s) {
 
 pure isVisible(Vec3, Vec3, Vec3) -> bool = (a, b, c) {
   let normal = (b - a) *_cross (c - a)
-  (normal *_dot Vec3.ez) > Traction.zero
+  (normal *_dot Vec3.ez) > 0.0
 }
 
 -- Draw the 4 edges of a face, with a bright stroke if visible and a
