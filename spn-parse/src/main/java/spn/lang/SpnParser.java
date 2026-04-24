@@ -4105,11 +4105,10 @@ public class SpnParser {
             return new SpnLongLiteralNode(Long.parseLong(text));
         }
 
-        // String literal
+        // String literal — may contain ${expr} interpolations
         if (tok.type() == TokenType.STRING) {
             tokens.advance();
-            String raw = tok.text();
-            return new SpnStringLiteralNode(unescapeString(raw));
+            return parseStringLiteralOrTemplate(tok.text());
         }
 
         // Symbol literal :name
@@ -5058,6 +5057,89 @@ public class SpnParser {
                   .replace("\\t", "\t")
                   .replace("\\\\", "\\")
                   .replace("\\\"", "\"");
+    }
+
+    /**
+     * Parse a string literal that may contain {@code ${expr}} interpolations.
+     * Writes a plain {@link SpnStringLiteralNode} when no interpolation is present,
+     * or a {@link SpnStringTemplateNode} otherwise. Use {@code \$} to escape a
+     * literal {@code $}.
+     */
+    private SpnExpressionNode parseStringLiteralOrTemplate(String raw) {
+        String body = raw;
+        if (body.startsWith("\"") && body.endsWith("\"")) {
+            body = body.substring(1, body.length() - 1);
+        }
+
+        List<String> literals = new ArrayList<>();
+        List<SpnExpressionNode> exprs = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+
+        int i = 0;
+        int len = body.length();
+        while (i < len) {
+            char c = body.charAt(i);
+            if (c == '\\' && i + 1 < len) {
+                char n = body.charAt(i + 1);
+                switch (n) {
+                    case 'n'  -> cur.append('\n');
+                    case 't'  -> cur.append('\t');
+                    case '\\' -> cur.append('\\');
+                    case '"'  -> cur.append('"');
+                    case '$'  -> cur.append('$');
+                    default   -> { cur.append(c); cur.append(n); }
+                }
+                i += 2;
+                continue;
+            }
+            if (c == '$' && i + 1 < len && body.charAt(i + 1) == '{') {
+                int depth = 1;
+                int start = i + 2;
+                int j = start;
+                while (j < len) {
+                    char cj = body.charAt(j);
+                    if (cj == '{') depth++;
+                    else if (cj == '}') {
+                        depth--;
+                        if (depth == 0) break;
+                    }
+                    j++;
+                }
+                if (depth != 0) {
+                    throw tokens.error("Unterminated ${...} in string literal");
+                }
+                literals.add(cur.toString());
+                cur.setLength(0);
+                exprs.add(parseInterpolatedExpr(body.substring(start, j)));
+                i = j + 1;
+                continue;
+            }
+            cur.append(c);
+            i++;
+        }
+        literals.add(cur.toString());
+
+        if (exprs.isEmpty()) {
+            return new SpnStringLiteralNode(literals.get(0));
+        }
+        return new SpnStringTemplateNode(
+                literals.toArray(new String[0]),
+                exprs.toArray(new SpnExpressionNode[0]));
+    }
+
+    private SpnExpressionNode parseInterpolatedExpr(String exprText) {
+        List<SpnParseToken> inner = new SpnTokenizer(exprText).allTokens();
+        if (inner.isEmpty()) {
+            throw tokens.error("Empty ${} in string literal");
+        }
+        int startPos = tokens.mark();
+        tokens.injectAt(inner);
+        SpnExpressionNode node = parseExpression();
+        int consumed = tokens.mark() - startPos;
+        if (consumed != inner.size()) {
+            throw tokens.error("Unexpected tokens after expression in ${...}");
+        }
+        return node;
     }
 
     private boolean isUnaryMinus() {

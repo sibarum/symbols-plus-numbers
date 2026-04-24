@@ -260,7 +260,7 @@ pure epochsForElapsed(float, int) -> int = (elapsed, maxEpochs) {
 pure trainStartN() -> int = () { 2 }
 pure trainEndN()   -> int = () { 6 }
 pure maxEpochs()   -> int = () { 60 }
-pure learnRate()   -> float = () { 0.05 }
+pure learnRate()   -> float = () { 0.01 }
 
 -- Build the initial net from a deterministic seed. The renderer derives
 -- column count from net.layers.length(), so adding or removing a layer

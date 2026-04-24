@@ -140,6 +140,11 @@ public class SpnTokenizer {
         tokens.addAll(pos, injected);
     }
 
+    /** Snapshot of the full token list (post-construction). Used for sub-parses. */
+    public List<SpnParseToken> allTokens() {
+        return new ArrayList<>(tokens);
+    }
+
     public SpnParseException error(String message) {
         SpnParseToken tok = peek();
         if (tok != null) {

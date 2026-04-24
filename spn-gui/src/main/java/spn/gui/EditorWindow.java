@@ -783,6 +783,25 @@ public class EditorWindow {
         byModule.forEach((name, builder) -> registry.register(name, builder.build()));
     }
 
+    /**
+     * Open a file (or switch to its tab) and position the cursor at {@code line}
+     * (1-indexed). Used by clickable log links.
+     */
+    public void openFileAtLine(Path path, int line, int col) {
+        try {
+            loadFile(path);
+        } catch (IOException e) {
+            flash("Cannot open " + path + ": " + e.getMessage(), true);
+            return;
+        }
+        EditorTab et = getActiveEditorTab();
+        if (et != null && line > 0) {
+            int row = Math.max(0, line - 1);
+            int c = Math.max(0, col - 1);
+            et.getTextArea().setCursorPosition(row, c);
+        }
+    }
+
     void openFile() {
         EditorTab activeTab = getActiveEditorTab();
         Path activePath = activeTab != null ? activeTab.getFilePath() : null;

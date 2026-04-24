@@ -20,6 +20,7 @@
         <module>spn-pkg</module>
         <module>spn-intellij-plugin</module>
         <module>spn-gui</module>
+        <module>spn-cli</module>
         <module>spn-stdlib</module>
         <module>spn-canvas</module>
         <module>spn-fonts</module>
