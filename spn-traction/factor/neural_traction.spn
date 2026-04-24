@@ -18,7 +18,7 @@ import Math (cos, sin, sqrt, round, toFloat)
 
 pure ratDenom() -> int = () { 10000 }
 
-pure ratToFloat(Rational) -> float = ((n, d)) {
+pure ratToFloat(Traction) -> float = ((n, d)) {
   match d
   | 0 -> 0.0
   | _ -> toFloat(n) / toFloat(d)
@@ -69,11 +69,9 @@ pure magnitudeFloat(TractionQuaternion) -> float = (q) {
 
 pure bump01(float) -> float = (x) {
   let absX = match | x < 0.0 -> -x | _ -> x
-  let raw = -cos(absX * 3.141592653589793)
   match
-  | raw < 0.0 -> 0.0
-  | raw > 1.0 -> 1.0
-  | _         -> raw
+  | absX > 1.0 -> 1.0
+  | _          -> absX
 }
 
 -- ── NeuralWeight methods ────────────────────────────────────────────────
@@ -104,14 +102,16 @@ pure TractionQuaternion.aggregate(TractionQuaternion) -> TractionQuaternion
   renormalize(this + other)
 }
 
--- Bump activation: rescale to magnitude bump01(|q|), preserving direction.
+-- Activation: project onto the unit 3-sphere — keep direction, force
+-- |q|=1. This matches the phase-valued task (only angle is semantic)
+-- and dodges the 10000-denom Rational rounding that kills sub-1e-4
+-- magnitudes when they appear in downstream ops.
 pure TractionQuaternion.activate() -> TractionQuaternion = () {
   let mag = magnitudeFloat(this)
-  let bumped = bump01(mag)
   match
   | mag < 0.000000000001 -> this
   | _ -> {
-      let factor = bumped / mag
+      let factor = 1.0 / mag
       let (w, x, y, z) = cartesianOf(this)
       quatFromCart4(w * factor, x * factor, y * factor, z * factor)
     }

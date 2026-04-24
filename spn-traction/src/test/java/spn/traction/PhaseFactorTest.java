@@ -70,14 +70,19 @@ class PhaseFactorTest extends TractionTestBase {
             """));
     }
 
-    @Test void activationSuppressesSubHalfMagnitude() {
+    @Test void activationProjectsToUnitSphere() {
+        // The activation keeps direction and forces |q|=1 (phase-valued
+        // task: only the angle carries semantic content). Previously the
+        // activation was a bump that zeroed sub-0.5 magnitudes, which
+        // produced a zero-trap local minimum during training.
         assertEquals(true, run("""
             import factor.network
             import numerics.traction
 
             let q = liftReal(0.3)
             let a = q.activate()
-            magnitudeFloat(a) < 0.001
+            let m = magnitudeFloat(a)
+            m > 0.999 && m < 1.001
             """));
     }
 

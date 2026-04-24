@@ -28,7 +28,7 @@ import numerics.rational
 -- Rational → float (matches tcomplex_demo.spn's helper; the `promote
 -- Rational -> float` in rational.spn would be an alternative, but the
 -- parser currently chokes on `let name: type = expr` annotations).
-pure ratToFloat(Rational) -> float = (r) {
+pure ratToFloat(Traction) -> float = (r) {
   match r.1
   | 0 -> 0
   | _ -> toFloat(r.0) / toFloat(r.1)
@@ -80,7 +80,7 @@ pure project(Vec3, float, float, float) -> (float, float) = (v, cx, cy, s) {
 
 pure isVisible(Vec3, Vec3, Vec3) -> bool = (a, b, c) {
   let normal = (b - a) *_cross (c - a)
-  (normal *_dot Vec3.ez) > Rational.zero
+  (normal *_dot Vec3.ez) > Traction.zero
 }
 
 -- Draw the 4 edges of a face, with a bright stroke if visible and a

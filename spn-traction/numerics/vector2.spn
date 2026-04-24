@@ -1,6 +1,6 @@
 import numerics.rational
+import numerics.traction
 
 
 
-type Vector2(Rational, Rational)
 

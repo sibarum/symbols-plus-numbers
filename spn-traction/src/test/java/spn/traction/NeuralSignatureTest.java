@@ -81,14 +81,17 @@ class NeuralSignatureTest extends TractionTestBase {
             """));
     }
 
-    @Test void activateZerosBelowHalfMagnitude() {
-        // bump01(0.3) = 0, so activating a quaternion of magnitude 0.3 zeros it.
+    @Test void activateProjectsToUnitSphere() {
+        // The activation normalizes to |q|=1 regardless of input magnitude
+        // (phase-valued task). The old bump-with-dead-zone design zeroed
+        // sub-0.5 magnitudes and created a training zero-trap.
         assertEquals(true, run("""
             import factor.neural_traction
 
             let q = quatFromCart4(0.3, 0.0, 0.0, 0.0)
             let a = q.activate()
-            magnitudeFloat(a) < 0.001
+            let m = magnitudeFloat(a)
+            m > 0.999 && m < 1.001
             """));
     }
 

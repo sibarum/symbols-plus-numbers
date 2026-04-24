@@ -1,5 +1,7 @@
-import numerics.vector2
+
 import Math (abs, sign, max, bitWidth, shr, shl)
+import Ordering
+
 
 -------------------------------------------------
 type Traction(num: int, denom: int)
@@ -37,6 +39,13 @@ pure Traction(int, int) -> Traction = (num, denom) {
         }
     }
 }
+
+
+pure Traction(int) -> Traction = (n) {
+  this(n, 1)
+}
+
+const Traction.zero = Traction(0,1)
 
 pure +(Traction, Traction) -> Traction = ((n1,d1), (n2,d2)) {
   Traction(n1*d2 + n2*d1, d1*d2)
@@ -82,9 +91,23 @@ pure /(Traction, Traction) -> Traction = (t1, t2) {
   t1 * t2.inv()
 }
 
+pure compare(Traction, Traction) -> int = (t1, t2) {
+  (t1 - t2).0
+}
+
+deriveOrderingFromInt<Traction, compare>
+
 pure Traction.conj() -> Traction = () {
   Traction(-this.num, this.denom)
 }
+
+promote int -> Traction = (i) {
+  Traction(i)
+}
+
+----------------------------------------------------
+
+type Vector2(Traction, Traction)
 
 ---------------------------------------------------------
 type TractionComplex(scale: Traction, tangent: Traction)
@@ -146,7 +169,7 @@ pure -(TractionComplex, TractionComplex) -> TractionComplex = (tc1, tc2) {
 pure TractionComplex.cart() -> Vector2 = () {
   let (a, b) = this.scale
   let (n, d) = this.tangent
-  Vector2(Rational(a*d, b), Rational(a*n, b))
+  Vector2(Traction(a*d, b), Traction(a*n, b))
 }
 
 pure *_dot(TractionComplex, TractionComplex) -> Traction = ((s1,t1), (s2,t2)) {

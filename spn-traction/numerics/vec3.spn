@@ -4,14 +4,14 @@
 -- All arithmetic is exact. No floating point, no transcendentals.
 -- Dot and cross products use qualified operator suffixes (*_dot, *_cross).
 
-import numerics.rational
 import Ordering
+import numerics.traction
 
-type Vec3(x: Rational, y: Rational, z: Rational)
+type Vec3(x: Traction, y: Traction, z: Traction)
 
 -- ── constructors ────────────────────────────────────────────────────
 
-pure Vec3(Rational, Rational, Rational) -> Vec3 = (x, y, z) {
+pure Vec3(Traction, Traction, Traction) -> Vec3 = (x, y, z) {
   this(x, y, z)
 }
 
@@ -33,12 +33,12 @@ pure Vec3.neg() -> Vec3 = () {
 }
 
 -- Scalar multiplication: Rational * Vec3
-pure *(Rational, Vec3) -> Vec3 = (k, (x, y, z)) {
+pure *(Traction, Vec3) -> Vec3 = (k, (x, y, z)) {
   Vec3(k * x, k * y, k * z)
 }
 
 -- Dot product: Vec3 *_dot Vec3 -> Rational
-pure *_dot(Vec3, Vec3) -> Rational = ((x1, y1, z1), (x2, y2, z2)) {
+pure *_dot(Vec3, Vec3) -> Traction = ((x1, y1, z1), (x2, y2, z2)) {
   x1*x2 + y1*y2 + z1*z2
 }
 
@@ -54,7 +54,7 @@ pure ==(Vec3, Vec3) -> bool = ((x1, y1, z1), (x2, y2, z2)) {
 }
 
 -- Squared magnitude (avoids square root — stays exact)
-pure Vec3.sqMag() -> Rational = () {
+pure Vec3.sqMag() -> Traction = () {
   this *_dot this
 }
 

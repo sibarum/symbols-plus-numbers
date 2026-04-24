@@ -41,8 +41,14 @@ pure divFeature(int, int) -> float = (n, p) {
   | _         -> raw
 }
 
+-- Lift a real feature value into a pure-real quaternion. The floor
+-- prevents "exact zero" inputs: the algebraic update rule computes
+-- newWTarget = w * x * err * x^-1, which is 0 whenever x=0 and would
+-- drag the weight toward zero on every coprime-N training example,
+-- destroying the weight after a few epochs.
 pure liftReal(float) -> TractionQuaternion = (x) {
-  quatFromCart4(x, 0.0, 0.0, 0.0)
+  let safe = match | x < 0.01 -> 0.01 | _ -> x
+  quatFromCart4(safe, 0.0, 0.0, 0.0)
 }
 
 pure encodeInput(int, IntVec) -> QVec = (n, primes) {
@@ -98,14 +104,18 @@ pure exponentTarget(int, int) -> TractionQuaternion = (c, maxExp) {
 }
 
 -- ── Weight initialization ───────────────────────────────────────────────
--- Deterministic LCG. Independent streams per (layer, i, j, salt).
+-- Non-linear hash. A plain LCG `(a*x + c) % m` is linear in its input —
+-- even with Knuth-style multiplicative input mixing, neighboring seeds
+-- (e.g., i=0 vs i=100 at stride 100) produced weights on a straight line
+-- instead of decorrelated directions, so three "random" output rows came
+-- out as near-copies of each other. `x*x % m` breaks the linearity.
 pure lcgHash(int, int, int) -> int = (s, i, salt) {
   let m = 2147483648
-  let a = 1103515245
   let c = 12345
-  let s1 = (a * s + c) % m
-  let s2 = (a * (s1 + i) + c) % m
-  (a * (s2 + salt) + c) % m
+  let combined = (s * 2654435761 + i * 2246822519 + salt * 3266489917) % m
+  let s1 = (combined * combined + c) % m
+  let s2 = (s1 * 1103515245 + c) % m
+  (s2 * s2 + c) % m
 }
 
 pure rand01(int, int, int) -> float = (s, i, salt) {
