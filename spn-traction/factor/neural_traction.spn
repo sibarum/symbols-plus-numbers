@@ -41,30 +41,32 @@ pure bump01(float) -> float = (x) {
 
 -- ── NeuralWeight methods ────────────────────────────────────────────────
 
+-- Compose renormalizes — necessary because compose chains multiply scale
+-- denominators (10⁴ → 10⁸ → 10¹² → bit-budget collapse), unlike aggregate
+-- where the b==d fast path keeps things bounded across a single neuron's
+-- sum. This is the one cart roundtrip that's load-bearing; the rest were
+-- prophylactic and removable.
 pure TractionQuaternion.compose(TractionQuaternion) -> TractionQuaternion
     = (other) {
   renormalize(this * other)
 }
 
--- Compute the inverse in cartesian space rather than calling
--- TractionQuaternion.inv(), whose exact formula multiplies Traction
--- denominators into the 10^20 range on a bounded input — Truffle's
--- overflow-to-double rewrite then poisons downstream Traction(int, int)
--- calls. For q = (w, x, y, z), q⁻¹ = (w, -x, -y, -z) / |q|².
+-- Inverse via the Traction-native inv() in numerics.traction. The cartesian
+-- workaround used to be necessary because the exact formula compounded
+-- denominators into 10^20 range, but the b==d fast path in TC + cleared
+-- the path that drove that growth. This keeps invert in Traction-land and
+-- removes a cartesian roundtrip from every weight update and interp step.
 pure TractionQuaternion.invert() -> TractionQuaternion = () {
-  let (w, x, y, z) = cartesianOf(this)
-  let n2 = w*w + x*x + y*y + z*z
-  match
-  | n2 < 0.000000000001 -> this
-  | _ -> {
-      let s = 1.0 / n2
-      quatFromCart4(w * s, -x * s, -y * s, -z * s)
-    }
+  this.inv()
 }
 
+-- Aggregate without renormalize. The b==d fast path means a single TC +
+-- TC (which is what + on TQ reduces to) doesn't blow up scale denominators
+-- on its own — only the chained compose path does. compose still
+-- renormalizes, so the sum chain inside one neuron stays bounded.
 pure TractionQuaternion.aggregate(TractionQuaternion) -> TractionQuaternion
     = (other) {
-  renormalize(this + other)
+  this + other
 }
 
 -- Activation: identity. Un-normalized experiment — let magnitude flow

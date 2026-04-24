@@ -315,9 +315,47 @@ pure quatFromCart4(float, float, float, float) -> TractionQuaternion
   TractionQuaternion(tcFromCart(w, x), tcFromCart(y, z))
 }
 
+-- Round-to-nearest integer division. Half cases round away from zero,
+-- matching what `Math.round(p/q)` would give for the float p/q.
+pure roundDiv(int, int) -> int = (p, q) {
+  match q
+  | 0 -> 0
+  | _ -> {
+      let s = sign(p) * sign(q)
+      let r = (abs(p) + abs(q) / 2) / abs(q)
+      s * r
+    }
+}
+
+-- Rescale a TractionComplex to scale=(1, denom) without crossing through
+-- floats. Algebraically equivalent to tcFromCart(cartF(tc).0, cartF(tc).1):
+--   cart = (a·d/b, a·n/b)  →  rebuild tangent at denom
+--   newDen = round(denom·a·d / b),  newNum = round(denom·a·n / b)
+-- All integer arithmetic. The same quantization step the float-based
+-- renormalize already paid, just without the round-trip.
+pure TractionComplex.rescale(int) -> TractionComplex = (denom) {
+  let (a, b) = this.scale
+  let (n, d) = this.tangent
+  match
+  | a == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
+  | b == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
+  | _ -> {
+      let newDen = roundDiv(denom * a * d, b)
+      let newNum = roundDiv(denom * a * n, b)
+      match
+      | newDen == 0 && newNum == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
+      | _ -> TractionComplex(Traction(1, denom), Traction(newNum, newDen))
+    }
+}
+
+-- Traction-native renormalize. Rebuilds each half at scale=(1, denom)
+-- via integer rescale instead of cart→float→tcFromCart. Same value
+-- semantics as the original cart-based version (modulo round-half edge
+-- cases), zero float arithmetic, no allocation of the intermediate
+-- 4-tuple.
 pure renormalize(TractionQuaternion) -> TractionQuaternion = (q) {
-  let (w, x, y, z) = cartesianOf(q)
-  quatFromCart4(w, x, y, z)
+  let denom = tractionDenom()
+  TractionQuaternion(q.real.rescale(denom), q.imag.rescale(denom))
 }
 
 -- Axis-angle constructor. Builds the unit rotation quaternion
