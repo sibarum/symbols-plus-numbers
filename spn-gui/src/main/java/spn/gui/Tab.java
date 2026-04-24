@@ -39,6 +39,9 @@ public interface Tab {
     /** Called when this tab becomes the active tab. */
     default void onActivated() {}
 
+    /** Called when this tab stops being the active tab (switch away or close). */
+    default void onDeactivated() {}
+
     /** Called when this tab is about to be closed. Return false to cancel. */
     default boolean onClose() { return true; }
 }

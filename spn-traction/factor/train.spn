@@ -22,6 +22,24 @@ pure trueExp(int, int) -> int = (n, p) {
   count
 }
 
+-- True if at least one prime in ps divides n exactly. Used to filter
+-- training examples and loss averaging: numbers whose factorization
+-- falls entirely outside the prime bank carry no signal the network
+-- could learn, so they're skipped rather than anchoring the net at
+-- the all-zero-exponent target.
+pure hasFactorIn(int, IntVec) -> bool = (n, ps) {
+  let i = 0
+  let k = ps.length()
+  let found = false
+  while {i < k} do {
+    match
+    | n % ps[i] == 0 -> { found = true }
+    | _              -> { 0 }
+    i = i + 1
+  }
+  found
+}
+
 -- For integer N and prime bank ps, produce a QVec of target quaternions
 -- matching the true factorization. Each exponent maps to its class on
 -- the unit circle in the real-half plane.
@@ -65,23 +83,38 @@ pure exampleLoss(QNet, IntVec, int, int) -> float = (net, ps, n, maxExp) {
 pure totalLoss(QNet, IntVec, int, int, int) -> float
     = (net, ps, maxExp, startN, endN) {
   let total = 0.0
+  let count = 0
   let n = startN
   while {n < endN} do {
-    total = total + exampleLoss(net, ps, n, maxExp)
+    match
+    | hasFactorIn(n, ps) -> {
+        total = total + exampleLoss(net, ps, n, maxExp)
+        count = count + 1
+      }
+    | _ -> { 0 }
     n = n + 1
   }
-  total / toFloat(endN - startN)
+  match
+  | count == 0 -> 0.0
+  | _          -> total / toFloat(count)
 }
 
--- Train one epoch over the N ∈ [startN, endN) range.
+-- Train one epoch over the N ∈ [startN, endN) range. N's whose
+-- factorization has no prime in ps are skipped — no valid target exists
+-- for them, and including them would pull every output toward the
+-- exponent-0 phase, biasing the network toward "no factors here."
 pure trainEpoch(QNet, IntVec, int, int, int, float) -> QNet
     = (net, ps, maxExp, startN, endN, lr) {
   let cur = net
   let n = startN
   while {n < endN} do {
-    let inputs = encodeInput(n, ps)
-    let targets = targetsFor(n, ps, maxExp)
-    cur = cur.trainStep(inputs, targets, lr)
+    match
+    | hasFactorIn(n, ps) -> {
+        let inputs = encodeInput(n, ps)
+        let targets = targetsFor(n, ps, maxExp)
+        cur = cur.trainStep(inputs, targets, lr)
+      }
+    | _ -> { 0 }
     n = n + 1
   }
   cur

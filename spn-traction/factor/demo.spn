@@ -30,7 +30,7 @@ import numerics.traction
 -- ── Configuration ───────────────────────────────────────────────────────
 pure seed() -> int = () { 42 }
 pure primes() -> IntVec = () { IntVec(2, 3, 5) }
-pure maxExp() -> int = () { 5 }
+pure maxExp() -> int = () { 3 }
 
 -- ── True factorization (for display) ────────────────────────────────────
 pure trueExp(int, int) -> int = (n, p) {
@@ -63,8 +63,17 @@ pure phaseColor(float) -> (float, float, float) = (angle) {
 }
 
 -- ── Layout ──────────────────────────────────────────────────────────────
-pure inputX()  -> float = () { 250.0 }
-pure outputX() -> float = () { 680.0 }
+-- Columns are spaced evenly between leftX and rightX. With one layer the
+-- layout is two columns (input, output); each additional layer inserts
+-- another column without the renderer needing to know how many.
+pure leftX()  -> float = () { 200.0 }
+pure rightX() -> float = () { 760.0 }
+
+pure columnX(int, int) -> float = (c, total) {
+  match
+  | total <= 1 -> (leftX() + rightX()) / 2.0
+  | _          -> leftX() + toFloat(c) * (rightX() - leftX()) / toFloat(total - 1)
+}
 
 pure neuronY(int, int, float) -> float = (idx, total, centerY) {
   let spacing = 90.0
@@ -87,8 +96,10 @@ pure drawInput(float, float, float, float, int) -> Array
 
 -- ── Drawing: output dial ────────────────────────────────────────────────
 -- Main needle = real-half phase (decoded). Inner needle = imag-half phase.
-pure drawDial(TractionQuaternion, float, float, float, int, int) -> Array
-    = (q, cx, cy, r, prime, maxE) {
+-- drawDialBody renders the dial without any label; drawDial appends the
+-- "p=N" prime label for input/output columns.
+pure drawDialBody(TractionQuaternion, float, float, float, int) -> Array
+    = (q, cx, cy, r, maxE) {
   let mag = magnitudeFloat(q)
   let angle = argOf(q)
   let (cr, cg, cb) = phaseColor(angle)
@@ -129,17 +140,18 @@ pure drawDial(TractionQuaternion, float, float, float, int, int) -> Array
   let ilen = r * 0.55 * iMag
   let ix = cx + ilen * cos(imagAngle)
   let iy = cy - ilen * sin(imagAngle)
-  let withImag = concat(mainNeedle, [
+  concat(mainNeedle, [
     CmdStroke(0.75, 0.85, 0.95), CmdStrokeWeight(1.2),
     CmdLine(cx, cy, ix, iy)
   ])
+}
 
-  let label = [
+pure drawDial(TractionQuaternion, float, float, float, int, int) -> Array
+    = (q, cx, cy, r, prime, maxE) {
+  concat(drawDialBody(q, cx, cy, r, maxE), [
     CmdFill(0.7, 0.75, 0.85),
     CmdText(cx + r + 16.0, cy + 6.0, "p=" ++ formatNum(prime), 0.26)
-  ]
-
-  concat(withImag, label)
+  ])
 }
 
 -- ── Drawing: weights as colored lines ───────────────────────────────────
@@ -247,12 +259,18 @@ pure epochsForElapsed(float, int) -> int = (elapsed, maxEpochs) {
 -- point.
 pure trainStartN() -> int = () { 2 }
 pure trainEndN()   -> int = () { 6 }
-pure maxEpochs()   -> int = () { 30 }
-pure learnRate()   -> float = () { 0.2 }
+pure maxEpochs()   -> int = () { 60 }
+pure learnRate()   -> float = () { 0.05 }
 
--- Build the initial single-layer net from a deterministic seed.
+-- Build the initial net from a deterministic seed. The renderer derives
+-- column count from net.layers.length(), so adding or removing a layer
+-- here automatically updates the visualization.
 pure buildInitialNet(int) -> QNet = (k) {
-  QNet().pushLayer(initQWeights(k, k, 0, seed()), initQBiases(k))
+  let h = k
+  QNet()
+    .pushLayer(initQWeights(k, h, 0, seed()), initQBiases(h))
+    .pushLayer(initQWeights(h, k, 1, seed()), initQBiases(k))
+    .pushLayer(initQWeights(k, h, 2, seed()), initQBiases(h))
 }
 
 action drawFrame(float) -> int = (elapsed) {
@@ -268,7 +286,9 @@ action drawFrame(float) -> int = (elapsed) {
   let n = exampleForElapsed(elapsed, 30)
 
   let features = encodeInput(n, ps)
-  let outputs = net.forward(features)
+  let acts = net.forwardAll(features)
+  let nCols = acts.length()
+  let outputs = acts[nCols - 1]
   let initialLoss = totalLoss(initialNet, ps, mE,
                               trainStartN(), trainEndN())
   let loss = totalLoss(net, ps, mE, trainStartN(), trainEndN())
@@ -304,25 +324,52 @@ action drawFrame(float) -> int = (elapsed) {
 
   cmds = concat(cmds, [
     CmdFill(0.6, 0.64, 0.72),
-    CmdText(inputX() - 45.0, 260.0, "inputs", 0.24),
-    CmdText(outputX() - 30.0, 260.0, "outputs", 0.24)
+    CmdText(columnX(0, nCols) - 45.0, 260.0, "inputs", 0.24),
+    CmdText(columnX(nCols - 1, nCols) - 30.0, 260.0, "outputs", 0.24)
   ])
 
-  cmds = concat(cmds, drawWeights(net.layers[0].weights, k, k, centerY,
-                                   inputX(), outputX()))
+  -- Weight banks: one between each adjacent column pair.
+  let li = 0
+  let nLayers = net.layers.length()
+  while {li < nLayers} do {
+    let weights = net.layers[li].weights
+    let inDim = acts[li].length()
+    let outDim = acts[li + 1].length()
+    cmds = concat(cmds, drawWeights(weights, inDim, outDim, centerY,
+                                     columnX(li, nCols),
+                                     columnX(li + 1, nCols)))
+    li = li + 1
+  }
 
+  -- Input column (col 0): input dots with prime labels.
   let i = 0
   while {i < k} do {
     let fval = divFeature(n, ps[i])
     let y = neuronY(i, k, centerY)
-    cmds = concat(cmds, drawInput(fval, inputX(), y, 22.0, ps[i]))
+    cmds = concat(cmds, drawInput(fval, columnX(0, nCols), y, 22.0, ps[i]))
     i = i + 1
   }
 
+  -- Hidden columns (col 1 .. nCols-2): unlabeled dials.
+  let c = 1
+  while {c < nCols - 1} do {
+    let col = acts[c]
+    let dim = col.length()
+    let hi = 0
+    while {hi < dim} do {
+      let y = neuronY(hi, dim, centerY)
+      cmds = concat(cmds, drawDialBody(col[hi], columnX(c, nCols), y, 26.0, mE))
+      hi = hi + 1
+    }
+    c = c + 1
+  }
+
+  -- Output column (last col): dials with prime labels.
   let j = 0
   while {j < k} do {
     let y = neuronY(j, k, centerY)
-    cmds = concat(cmds, drawDial(outputs[j], outputX(), y, 26.0, ps[j], mE))
+    cmds = concat(cmds, drawDial(outputs[j], columnX(nCols - 1, nCols),
+                                  y, 26.0, ps[j], mE))
     j = j + 1
   }
 

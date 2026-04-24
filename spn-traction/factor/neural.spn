@@ -75,6 +75,24 @@ macro makeNeuralNet<T requires NeuralWeight> = {
     a
   }
 
+  -- Same as forward, but returns every intermediate activation column
+  -- (input first, then each layer's output). Lets external code derive
+  -- the network's column structure for visualization without needing to
+  -- name the internal TLayer type.
+  pure Net.forwardAll(TArray) -> TMatrix = (x) {
+    let acts = TMatrix()
+    acts = acts.push(x)
+    let a = x
+    let i = 0
+    let n = this.layers.length()
+    while {i < n} do {
+      a = this.layers[i].forward(a)
+      acts = acts.push(a)
+      i = i + 1
+    }
+    acts
+  }
+
   -- Algebraic training step. For each output j:
   --   err_j = output_j.error(target_j)          -- what to compose to reach target
   -- For each weight W[l][j][i] with input x = acts[l][i]:

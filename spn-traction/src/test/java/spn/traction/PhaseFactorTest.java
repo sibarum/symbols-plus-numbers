@@ -70,11 +70,10 @@ class PhaseFactorTest extends TractionTestBase {
             """));
     }
 
-    @Test void activationProjectsToUnitSphere() {
-        // The activation keeps direction and forces |q|=1 (phase-valued
-        // task: only the angle carries semantic content). Previously the
-        // activation was a bump that zeroed sub-0.5 magnitudes, which
-        // produced a zero-trap local minimum during training.
+    @Test void activationIsIdentity() {
+        // Un-normalized experiment: activation passes through unchanged so
+        // non-unit quaternions carry scaling information through the
+        // network. liftReal(0.3) has magnitude 0.3 and should stay at 0.3.
         assertEquals(true, run("""
             import factor.network
             import numerics.traction
@@ -82,7 +81,7 @@ class PhaseFactorTest extends TractionTestBase {
             let q = liftReal(0.3)
             let a = q.activate()
             let m = magnitudeFloat(a)
-            m > 0.999 && m < 1.001
+            m > 0.299 && m < 0.301
             """));
     }
 

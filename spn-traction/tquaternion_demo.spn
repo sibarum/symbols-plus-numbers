@@ -199,7 +199,10 @@ stateful type Scene(q: TractionQuaternion)
 
 Scene(TractionQuaternion()) {
   let render = do() {
-    this.q = this.q * step()
+    -- Rebuild from cartesian projection each frame. Without this, the
+    -- scale denominator compounds (1, 101^N) and trips the 30-bit budget
+    -- after 5 frames, rounding the numerator to 0 and collapsing the cube.
+    this.q = renormalize(this.q * step())
     guiRender(
       guiCanvas(800, 600, sceneCmds(this.q)).bg(0.08, 0.08, 0.11)
     )

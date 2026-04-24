@@ -637,6 +637,18 @@ public class TraceSourceTab extends ScrollableTab {
         if (action != GLFW_PRESS && action != GLFW_REPEAT) return false;
         boolean ctrl = (mods & GLFW_MOD_CONTROL) != 0;
 
+        // Global shortcuts available everywhere in trace mode
+        if (ctrl && action == GLFW_PRESS) {
+            if (key == GLFW_KEY_O) { window.openFile(); return true; }
+            if (key == GLFW_KEY_G) { window.openLogTab(); return true; }
+            if (key == GLFW_KEY_M) {
+                ModuleContext ctx = window.findAnyModuleContext();
+                if (ctx != null) window.pushLegacyMode(new ModuleMode(window, ctx));
+                else window.flash("No module loaded — cannot find module.spn", true);
+                return true;
+            }
+        }
+
         // Escape: back one level
         if (key == GLFW_KEY_ESCAPE) {
             if (detailCallIndex >= 0) {
@@ -721,6 +733,13 @@ public class TraceSourceTab extends ScrollableTab {
 
     @Override
     public boolean onMouseButton(int button, int action, int mods, double mx, double my) {
+        // Always forward RELEASE to the detail text area so its drag state clears,
+        // regardless of where the mouse was released.
+        if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE
+                && detailCallIndex >= 0) {
+            detailArea.onMouseButton(button, action, mods, mx, my);
+            return true;
+        }
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
             // FILE_SELECT: only handle file list clicks
             if (panelState == PanelState.FILE_SELECT) {

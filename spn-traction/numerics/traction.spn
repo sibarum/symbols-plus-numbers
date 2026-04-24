@@ -1,5 +1,5 @@
 
-import Math (abs, sign, max, bitWidth, shr, shl, toFloat)
+import Math (abs, sign, max, bitWidth, shr, shl, toFloat, round, cos, sin, sqrt)
 import Ordering
 
 
@@ -20,24 +20,24 @@ type Traction(num: int, denom: int)
 -- rotating smoothly indefinitely instead of overflowing after a few
 -- thousand frames.
 pure Traction(int, int) -> Traction = (num, denom) {
-  match (num, denom)
+--  match (num, denom)
   -- 0/0 = 1 in traction theory: the "operational zero" carries a
   -- multiplicative-identity residual, so downstream operations never
   -- fully annihilate. Canonicalize (0, 0) to (1, 1) at the constructor.
-  | (0, 0) -> this(1, 1)
+--  | (0, 0) -> this(1, 1)
+--  | _ -> {
+  let maxB = max(bitWidth(abs(num)), bitWidth(abs(denom)))
+  let k = max(0, maxB - 30)
+  match
+  | k == 0 -> this(num, denom)
   | _ -> {
-      let maxB = max(bitWidth(abs(num)), bitWidth(abs(denom)))
-      let k = max(0, maxB - 30)
-      match
-      | k == 0 -> this(num, denom)
-      | _ -> {
-          -- Round-to-nearest on magnitude; re-apply sign.
-          let half = shl(1, k - 1)
-          let nAbs = shr(abs(num) + half, k)
-          let dAbs = shr(abs(denom) + half, k)
-          this(sign(num) * nAbs, sign(denom) * dAbs)
-        }
+      -- Round-to-nearest on magnitude; re-apply sign.
+      let half = shl(1, k - 1)
+      let nAbs = shr(abs(num) + half, k)
+      let dAbs = shr(abs(denom) + half, k)
+      this(sign(num) * nAbs, sign(denom) * dAbs)
     }
+--    }
 }
 
 
@@ -170,10 +170,24 @@ pure +(TractionComplex, TractionComplex) -> TractionComplex = ((s1, t1), (s2, t2
   | _ -> {
       let (n1, d1) = t1
       let (n2, d2) = t2
-      TractionComplex(
-        Traction(1, b*d),
-        Traction(a*d*n1 + c*b*n2, a*d*d1 + c*b*d2)
-      )
+      -- Fast path when both operands share a denominator. The general
+      -- formula below would build Traction(1, b*d), which for b=d=10^8
+      -- (the standard post-renormalize product denominator) exceeds the
+      -- 30-bit budget and rounds the numerator to zero — collapsing the
+      -- scale entirely. When b == d we don't need to multiply:
+      --   (a/b)(d1+n1i) + (c/b)(d2+n2i) = (1/b)·((a·d1+c·d2) + (a·n1+c·n2)i)
+      -- This is the dominant case in any compose chain: everything exits
+      -- renormalize at scale=(1, 10000), so every TC product has
+      -- scale=(1, 10^8), so every sum here has b == d.
+      match
+      | b == d -> TractionComplex(
+            Traction(1, b),
+            Traction(a*n1 + c*n2, a*d1 + c*d2)
+          )
+      | _ -> TractionComplex(
+            Traction(1, b*d),
+            Traction(a*d*n1 + c*b*n2, a*d*d1 + c*b*d2)
+          )
     }
 }
 
@@ -262,5 +276,64 @@ pure TractionQuaternion.inv() -> TractionQuaternion = () {
     TractionComplex(conj.real.scale * n_sq.inv(), conj.real.tangent),
     TractionComplex(conj.imag.scale * n_sq.inv(), conj.imag.tangent)
   )
+}
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- Cartesian projection and fixed-denominator reconstruction
+-- ═══════════════════════════════════════════════════════════════════════
+-- Repeated Hamilton products grow scale denominators; the 30-bit bit-budget
+-- eventually rounds the numerator to zero and the quaternion collapses to
+-- the origin. Rebuilding from the cartesian projection each step clamps
+-- the denominator at a fixed ceiling and keeps composition stable
+-- indefinitely — trading exact-rational purity for bounded magnitude.
+
+pure tractionDenom() -> int = () { 10000 }
+
+pure cartesianOf(TractionQuaternion) -> (float, float, float, float) = (q) {
+  let r = q.real.cartF()
+  let i = q.imag.cartF()
+  (r.0, r.1, i.0, i.1)
+}
+
+-- Encode a float complex (re + im·i) as a TractionComplex at a fixed
+-- denominator. Scale = 1/denom, tangent = (im·denom, re·denom), so cartF
+-- reads back (re, im).
+pure tcFromCart(float, float) -> TractionComplex = (re, im) {
+  let denom = tractionDenom()
+  let xn = round(re * toFloat(denom))
+  let yn = round(im * toFloat(denom))
+  -- Plain (0, 0) would build scale=(1, denom) with tangent=(0, 0), the
+  -- "operational zero" that leaks scale=1 into downstream Cayley-Dickson
+  -- products. Prefer the clean explicit-zero form.
+  match
+  | xn == 0 && yn == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
+  | _ -> TractionComplex(Traction(1, denom), Traction(yn, xn))
+}
+
+pure quatFromCart4(float, float, float, float) -> TractionQuaternion
+    = (w, x, y, z) {
+  TractionQuaternion(tcFromCart(w, x), tcFromCart(y, z))
+}
+
+pure renormalize(TractionQuaternion) -> TractionQuaternion = (q) {
+  let (w, x, y, z) = cartesianOf(q)
+  quatFromCart4(w, x, y, z)
+}
+
+-- Axis-angle constructor. Builds the unit rotation quaternion
+--   q = cos(θ/2) + sin(θ/2)·(x·i + y·j + z·k)
+-- for an angle θ in radians about axis (x, y, z). The axis is normalized
+-- internally, so passing (1, 1, 0) gives the same rotation as
+-- (1/√2, 1/√2, 0). A near-zero axis collapses to the identity.
+pure axisAngle(float, float, float, float) -> TractionQuaternion
+    = (angle, ax, ay, az) {
+  let mag = sqrt(ax*ax + ay*ay + az*az)
+  match
+  | mag < 0.000000001 -> TractionQuaternion()
+  | _ -> {
+      let half = angle * 0.5
+      let s = sin(half) / mag
+      quatFromCart4(cos(half), ax * s, ay * s, az * s)
+    }
 }
 

@@ -139,42 +139,63 @@ public class EditorTab extends ScrollableTab {
 
         // Find mode intercepts most input
         if (findActive) {
-            if (key == GLFW_KEY_ESCAPE) { closeFind(); return true; }
-            if (ctrl && key == GLFW_KEY_H && action == GLFW_PRESS) {
-                // Toggle into replace mode (or focus replace field)
-                editingReplace = true;
-                return true;
-            }
-            if (key == GLFW_KEY_TAB && action == GLFW_PRESS) {
-                editingReplace = !editingReplace;
-                return true;
-            }
-            if (key == GLFW_KEY_BACKSPACE) {
-                StringBuilder q = editingReplace ? replaceQuery : findQuery;
-                if (q.length() > 0) {
-                    q.deleteCharAt(q.length() - 1);
-                    if (!editingReplace) textArea.setSearchTerm(q.toString());
+            // Shortcuts that close find and then run their normal action
+            boolean passthrough = action == GLFW_PRESS && (
+                    (ctrl && (key == GLFW_KEY_O || key == GLFW_KEY_M
+                            || key == GLFW_KEY_I || key == GLFW_KEY_G))
+                    || key == GLFW_KEY_F5);
+            if (passthrough) {
+                closeFind();
+                // fall through to the normal shortcut handlers below
+            } else {
+                if (key == GLFW_KEY_ESCAPE) { closeFind(); return true; }
+                if (ctrl && key == GLFW_KEY_H && action == GLFW_PRESS) {
+                    // Toggle into replace mode (or focus replace field)
+                    editingReplace = true;
+                    return true;
                 }
-                return true;
-            }
-            if (key == GLFW_KEY_ENTER) {
-                if (editingReplace && !replaceQuery.isEmpty()) {
-                    if (shift) {
-                        // Shift+Enter in replace mode: replace all
-                        int n = textArea.replaceAllMatches(replaceQuery.toString());
-                        window.flash("Replaced " + n + " occurrence(s)", false);
-                    } else {
-                        textArea.replaceCurrentMatch(replaceQuery.toString());
+                if (ctrl && key == GLFW_KEY_V && action == GLFW_PRESS) {
+                    String clip = glfwGetClipboardString(window.getHandle());
+                    if (clip != null && !clip.isEmpty()) {
+                        // Strip newlines — find query is single-line
+                        clip = clip.replace("\r", "").replace("\n", " ");
+                        StringBuilder q = editingReplace ? replaceQuery : findQuery;
+                        q.append(clip);
+                        if (!editingReplace) textArea.setSearchTerm(findQuery.toString());
                     }
-                } else {
-                    // Navigate matches
-                    if (shift) textArea.jumpToPrevMatch();
-                    else textArea.jumpToNextMatch();
+                    return true;
                 }
+                if (key == GLFW_KEY_TAB && action == GLFW_PRESS) {
+                    editingReplace = !editingReplace;
+                    return true;
+                }
+                if (key == GLFW_KEY_BACKSPACE) {
+                    StringBuilder q = editingReplace ? replaceQuery : findQuery;
+                    if (q.length() > 0) {
+                        q.deleteCharAt(q.length() - 1);
+                        if (!editingReplace) textArea.setSearchTerm(q.toString());
+                    }
+                    return true;
+                }
+                if (key == GLFW_KEY_ENTER) {
+                    if (editingReplace && !replaceQuery.isEmpty()) {
+                        if (shift) {
+                            // Shift+Enter in replace mode: replace all
+                            int n = textArea.replaceAllMatches(replaceQuery.toString());
+                            window.flash("Replaced " + n + " occurrence(s)", false);
+                        } else {
+                            textArea.replaceCurrentMatch(replaceQuery.toString());
+                        }
+                    } else {
+                        // Navigate matches
+                        if (shift) textArea.jumpToPrevMatch();
+                        else textArea.jumpToNextMatch();
+                    }
+                    return true;
+                }
+                // Swallow all other keys while in find mode (except pure modifier presses)
                 return true;
             }
-            // Swallow all other keys while in find mode (except pure modifier presses)
-            return true;
         }
 
         // Ctrl+T: type-info HUD (shows dispatch for current line)
@@ -281,7 +302,18 @@ public class EditorTab extends ScrollableTab {
     }
 
     @Override
+    public void onDeactivated() {
+        if (findActive) closeFind();
+    }
+
+    @Override
     public boolean onMouseButton(int button, int action, int mods, double mx, double my) {
+        if (findActive
+                && button == GLFW_MOUSE_BUTTON_LEFT
+                && action == GLFW_PRESS
+                && clickIsInsideText(mx, my)) {
+            closeFind();
+        }
         if (button == GLFW_MOUSE_BUTTON_LEFT
                 && action == GLFW_PRESS
                 && (mods & GLFW_MOD_CONTROL) != 0
@@ -561,13 +593,7 @@ public class EditorTab extends ScrollableTab {
         editingReplace = replaceMode;
         findQuery.setLength(0);
         replaceQuery.setLength(0);
-        // Seed the find query with the current selection or word under cursor
-        String seed = textArea.getSelectedText();
-        if (seed == null || seed.isEmpty()) seed = textArea.wordAtCursor();
-        if (seed != null && !seed.isEmpty() && !seed.contains("\n")) {
-            findQuery.append(seed);
-            textArea.setSearchTerm(seed);
-        }
+        textArea.setSearchTerm(null);
     }
 
     private void closeFind() {

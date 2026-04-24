@@ -916,9 +916,10 @@ public class TextArea {
     }
 
     public void onScroll(double xoff, double yoff) {
-        int delta = ListScroll.delta(yoff);
-        if (delta == 0) return;
-        scrollRow = clampScrollRow(scrollRow - delta);
+        int dy = ListScroll.delta(yoff);
+        if (dy != 0) scrollRow = clampScrollRow(scrollRow - dy);
+        int dx = ListScroll.delta(xoff);
+        if (dx != 0) scrollCol = clampScrollCol(scrollCol - dx);
     }
 
     // ------------------------------------------------------------------

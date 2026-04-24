@@ -56,8 +56,10 @@ public class TabView {
 
     /** Add a tab and make it active. */
     public void addTab(Tab tab) {
+        Tab outgoing = getActiveTab();
         tabs.add(tab);
         activeIndex = tabs.size() - 1;
+        if (outgoing != null && outgoing != tab) outgoing.onDeactivated();
         tab.onActivated();
         fireActivation();
     }
@@ -65,7 +67,9 @@ public class TabView {
     /** Switch to the tab at the given index. */
     public void setActiveIndex(int index) {
         if (index >= 0 && index < tabs.size() && index != activeIndex) {
+            Tab outgoing = getActiveTab();
             activeIndex = index;
+            if (outgoing != null) outgoing.onDeactivated();
             tabs.get(activeIndex).onActivated();
             fireActivation();
         }

@@ -190,6 +190,18 @@ public class EditorWindow {
         return null;
     }
 
+    /** Fall back across all tabs when the active tab (e.g. trace view) has none of its own. */
+    public ModuleContext findAnyModuleContext() {
+        ModuleContext ctx = getModuleContext();
+        if (ctx != null) return ctx;
+        for (Tab t : tabView.getTabs()) {
+            if (t instanceof EditorTab et && et.getModuleContext() != null) {
+                return et.getModuleContext();
+            }
+        }
+        return null;
+    }
+
     public LogBuffer getLogBuffer() { return logBuffer; }
 
     public TabView getTabView() { return tabView; }
@@ -904,8 +916,12 @@ public class EditorWindow {
             if (event != null) frame.dispatch(event);
         });
 
-        glfwSetScrollCallback(handle, (win, xoff, yoff) ->
-                frame.dispatch(new InputEvent.MouseScroll(xoff, yoff)));
+        glfwSetScrollCallback(handle, (win, xoff, yoff) -> {
+            boolean shift = glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS
+                    || glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+            if (shift && xoff == 0) { xoff = yoff; yoff = 0; }
+            frame.dispatch(new InputEvent.MouseScroll(xoff, yoff));
+        });
 
         glfwSetMouseButtonCallback(handle, (win, button, action, mods) -> {
             double[] mx = new double[1], my = new double[1];

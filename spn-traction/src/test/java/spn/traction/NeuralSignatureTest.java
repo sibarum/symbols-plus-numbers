@@ -64,7 +64,11 @@ class NeuralSignatureTest extends TractionTestBase {
     }
 
     @Test void interpMovesFractionallyTowardTarget() {
-        // interp(a, b, 0) ≈ a, interp(a, b, 1) ≈ b, interp(a, b, 0.5) at midpoint.
+        // Geodesic interp: midpoint between (1,0,0,0) and (0,1,0,0) — two
+        // unit quaternions on different axes — slerps to (cos(π/4),
+        // sin(π/4), 0, 0) ≈ (0.707, 0.707, 0, 0). Cartesian LERP would give
+        // (0.5, 0.5) on the chord; the Lie-group geodesic stays on the
+        // unit sphere.
         assertEquals(true, run("""
             import factor.neural_traction
 
@@ -73,25 +77,25 @@ class NeuralSignatureTest extends TractionTestBase {
 
             let mid = a.interp(b, 0.5)
             let (mw, mx, my, mz) = cartesianOf(mid)
-            let dw = mw - 0.5
-            let dx = mx - 0.5
+            let dw = mw - 0.707
+            let dx = mx - 0.707
             let absdw = match | dw < 0.0 -> -dw | _ -> dw
             let absdx = match | dx < 0.0 -> -dx | _ -> dx
             absdw < 0.01 && absdx < 0.01
             """));
     }
 
-    @Test void activateProjectsToUnitSphere() {
-        // The activation normalizes to |q|=1 regardless of input magnitude
-        // (phase-valued task). The old bump-with-dead-zone design zeroed
-        // sub-0.5 magnitudes and created a training zero-trap.
+    @Test void activateIsIdentity() {
+        // Un-normalized experiment: activation passes through unchanged so
+        // magnitude flows as its own degree of freedom. Input magnitude 0.3
+        // should come out as 0.3 (no projection to the unit sphere).
         assertEquals(true, run("""
             import factor.neural_traction
 
             let q = quatFromCart4(0.3, 0.0, 0.0, 0.0)
             let a = q.activate()
             let m = magnitudeFloat(a)
-            m > 0.999 && m < 1.001
+            m > 0.299 && m < 0.301
             """));
     }
 
