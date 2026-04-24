@@ -163,11 +163,12 @@ class TypedCollectionTest extends TractionTestBase {
             // actual descriptor.
             Object result = run("""
                 import factor.network
+                import numerics.traction
 
-                type LocalCV = Array<TComplex>
+                type LocalQV = Array<TractionQuaternion>
 
-                let a = ComplexVec()
-                let b = LocalCV()
+                let a = QuatVec()
+                let b = LocalQV()
                 a.length() + b.length()
                 """);
             assertEquals(0L, result);
@@ -175,13 +176,13 @@ class TypedCollectionTest extends TractionTestBase {
 
         @Test void variadicFactoryInMultiImportContext() {
             // Demo has many typed-collection aliases from factor.network:
-            // IntVec, ComplexVec, ComplexMat, PLayerArray. Each is a
+            // IntVec, QuatVec, QuatMat, PLayerArray. Each is a
             // separate Array<T> macro expansion. Try to tease out whether
             // dispatch of IntVec(...).length() gets confused by the
             // sibling expansions.
             assertEquals(3L, run("""
                 import factor.network
-                import numerics.tcomplex
+                import numerics.traction
                 import numerics.rational
 
                 pure primes() -> IntVec = () { IntVec(2, 3, 5) }
@@ -190,14 +191,14 @@ class TypedCollectionTest extends TractionTestBase {
                 -- any collision in macro memoization or method dispatch
                 -- trips up the variadic path.
                 let ps = primes()
-                let cv = ComplexVec()
-                let cm = ComplexMat()
+                let qv = QuatVec()
+                let qm = QuatMat()
                 ps.length()
                 """));
         }
 
         @Test void variadicConstructPassedToMethodTakingTypedArg() {
-            // network.spn has `pure encodeInput(int, IntVec) -> ComplexVec`.
+            // network.spn has `pure encodeInput(int, IntVec) -> QuatVec`.
             // Demo passes `primes()` result into `encodeInput(n, ps)`. This
             // exercises the full path: variadic ctor → typed function param.
             assertEquals(3L, run("""

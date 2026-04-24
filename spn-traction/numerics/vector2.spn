@@ -1,0 +1,6 @@
+import numerics.rational
+
+
+
+type Vector2(Rational, Rational)
+

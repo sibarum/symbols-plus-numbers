@@ -11,6 +11,7 @@ import spn.canvasgui.layout.Spacer;
 import spn.canvasgui.layout.VBox;
 import spn.canvasgui.theme.Theme;
 import spn.canvasgui.widget.Button;
+import spn.canvasgui.widget.Canvas;
 import spn.canvasgui.widget.Dial;
 import spn.canvasgui.widget.Slider;
 import spn.canvasgui.widget.Tabs;
@@ -105,6 +106,7 @@ public final class Reconciler {
                 if (sc.child() != null) scroll.setChild(build(sc.child()));
                 yield scroll;
             }
+            case GuiCmd.Canvas c -> new Canvas(c.w(), c.h(), c.cmds());
         };
     }
 
@@ -231,6 +233,13 @@ public final class Reconciler {
                             : null;
                     scroll.setChild(newChild);
                     yield scroll;
+                }
+                yield build(cmd);
+            }
+            case GuiCmd.Canvas c -> {
+                if (existing instanceof Canvas canvas) {
+                    canvas.setSize(c.w(), c.h()).setCmds(c.cmds());
+                    yield canvas;
                 }
                 yield build(cmd);
             }

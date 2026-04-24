@@ -8,6 +8,7 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
@@ -15,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL13.*;
@@ -90,6 +92,44 @@ public class SdfFontRenderer implements Renderer {
         ByteBuffer buf = MemoryUtil.memAlloc(fontBytes.length);
         buf.put(fontBytes).flip();
         initFromBuffer(buf, fontSize, displayName);
+    }
+
+    // Cache of classpath TTF bytes so per-run fonts don't re-read the
+    // resource each time. Bytes are immutable once loaded; init() copies
+    // into its own native direct buffer, so sharing the byte[] is safe.
+    private static final Map<String, byte[]> RESOURCE_BYTES = new ConcurrentHashMap<>();
+
+    /**
+     * Factory: load a bundled TTF from the classpath and create a fresh
+     * renderer initialized against the current GL context.
+     *
+     * <p>Intended for the "one font renderer per run" ownership model — each
+     * canvas or canvasgui execution builds its own renderer so all GL state
+     * (atlas texture, VAO, glyph cache) is scoped to that run's context and
+     * released on close. Do <b>not</b> share the returned renderer across
+     * windows or runs.
+     *
+     * @param classpathResource TTF resource path (e.g. "fonts/mono/ubuntu.ttf")
+     * @param fontSize          pixel height at which to rasterize the SDF
+     */
+    public static SdfFontRenderer loadBundled(String classpathResource, float fontSize) {
+        byte[] bytes = RESOURCE_BYTES.computeIfAbsent(classpathResource,
+                SdfFontRenderer::readClasspathBytes);
+        SdfFontRenderer r = new SdfFontRenderer();
+        r.init(bytes, fontSize, classpathResource);
+        return r;
+    }
+
+    private static byte[] readClasspathBytes(String resource) {
+        try (InputStream in = SdfFontRenderer.class.getClassLoader()
+                .getResourceAsStream(resource)) {
+            if (in == null) {
+                throw new RuntimeException("Bundled font not found on classpath: " + resource);
+            }
+            return in.readAllBytes();
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to read bundled font: " + resource, e);
+        }
     }
 
     private void initFromBuffer(ByteBuffer buffer, float fontSize, String displayName) {

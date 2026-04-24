@@ -1,39 +1,39 @@
 -- ═══════════════════════════════════════════════════════════════════════
--- Phase-Valued Network — prime factorization substrate
+-- Phase-Valued Network — prime factorization substrate (Quaternion)
 -- ═══════════════════════════════════════════════════════════════════════
--- Every weight and activation is a TComplex, so each layer computes
---     z_j = Σ w_ij · x_i       (complex-product sum; composes rotations)
---     a_j = activate(z_j)      (−cos·π bump on |z|; phase preserved)
+-- Every weight and activation is a TractionQuaternion, so each layer
+-- computes
+--     z_j = Σ w_ij · x_i       (Hamilton-product sum; composes 4D rotors)
+--     a_j = activate(z_j)      (−cos·π bump on |z|; direction preserved)
 --
--- Task: prime factorization. Each output neuron corresponds to a prime p
--- in the output bank; the phase of that neuron encodes the exponent c_p
--- of p in N's factorization, quantized to maxExp equally-spaced phases
--- around the unit circle.
+-- Decoded "phase" of an output q = (real, imag) is the phase of its
+-- `real: TractionComplex` half — atan2(cart.im, cart.re). The `imag`
+-- half carries two extra degrees of freedom per neuron that mix
+-- through quaternion multiplication but are not decoded directly.
 --
--- This file only implements the forward pass + encode/decode. Training
--- (Kuramoto-style phase coupling) lives in a separate file once the
--- substrate is verified to work.
+-- TractionQuaternion has no GCD canonicalization, so integer coefficients
+-- compound multiplicatively through +/*. We renormalize every intermediate
+-- quaternion by rebuilding it from its cartesian projection at a fixed
+-- denominator. Trades exact arithmetic for bounded numerics.
 -- ═══════════════════════════════════════════════════════════════════════
 
 import numerics.rational
-import numerics.tcomplex
+import numerics.traction
 import Math (cos, sin, atan2, sqrt, round, toFloat)
 import Collections
 
--- Typed aliases for the complex-valued layer arithmetic.
+-- Typed aliases for the quaternion-valued layer arithmetic.
 type IntVec = Array<int>
-type ComplexVec = Array<TComplex>
-type ComplexMat = Array<ComplexVec>
+type QuatVec = Array<TractionQuaternion>
+type QuatMat = Array<QuatVec>
 
 -- π as zero-arg pure fns (SPN has no built-in π).
 pure pi() -> float = () { 3.141592653589793 }
 pure twoPi() -> float = () { 6.283185307179586 }
 
--- ── Float ↔ Rational bridge ─────────────────────────────────────────────
--- TComplex is built on Rational, but -cos is transcendental. Quantize to
--- a fixed denominator so round-trips are predictable. 10000 is roomy
--- enough to survive several stages of arithmetic before canonicalization
--- erodes precision.
+-- ── Float ↔ Rational / Traction bridges ─────────────────────────────────
+-- 10000 gives us ~4 decimal digits, roomy enough to survive repeated
+-- renormalization without visible drift on the dials.
 pure ratDenom() -> int = () { 10000 }
 
 pure floatToRational(float) -> Rational = (x) {
@@ -46,19 +46,65 @@ pure ratToFloat(Rational) -> float = ((n, d)) {
   | _ -> toFloat(n) / toFloat(d)
 }
 
--- Reconstruct a TComplex from a cartesian (re, im) — mirrors the idiom
--- used inside tcomplex's own product/sum: tangent = im/re and scale
--- absorbs whatever factor the Rational constructor stole via gcd.
-pure fromCartesian(Rational, Rational) -> TComplex = (re, im) {
-  match (re, im)
-  | ((0, _), (0, _)) -> TComplex(Rational.zero, Rational.zero)
-  | ((_, _), (0, _)) -> TComplex(re, Rational.zero)
-  | ((0, _), (_, _)) -> TComplex(im, Rational.omega)
-  | _ -> {
-      let tan = im / re
-      let scale = re / Rational(tan.1, 1)
-      TComplex(scale, tan)
-    }
+pure floatToTraction(float) -> Traction = (x) {
+  Traction(round(x * toFloat(ratDenom())), ratDenom())
+}
+
+pure tractionToFloat(Traction) -> float = ((n, d)) {
+  match d
+  | 0 -> 0.0
+  | _ -> toFloat(n) / toFloat(d)
+}
+
+-- ── Quaternion construction ─────────────────────────────────────────────
+-- Build a TractionComplex from cartesian (re, im) floats. Uses the
+-- identity cart = (a·d/b, a·n/b) with a=1, b=D, d=round(re·D),
+-- n=round(im·D). Works for re=0 and im=0 cases too — Traction(0,0) is
+-- the permissive zero and cart() zeros out correctly.
+pure tcFromCart(float, float) -> TractionComplex = (re, im) {
+  let denom = ratDenom()
+  let xn = round(re * toFloat(denom))
+  let yn = round(im * toFloat(denom))
+  TractionComplex(Traction(1, denom), Traction(yn, xn))
+}
+
+-- Build a full quaternion from 4 cartesian floats (w + xi + yj + zk).
+pure quatFromCart4(float, float, float, float) -> TractionQuaternion
+    = (w, x, y, z) {
+  TractionQuaternion(tcFromCart(w, x), tcFromCart(y, z))
+}
+
+-- "Phase embedding": put (re, im) into the real half, zero the imag half.
+-- This is the unit-complex analogue in quaternion space.
+pure quatFromPhase(float, float) -> TractionQuaternion = (re, im) {
+  quatFromCart4(re, im, 0.0, 0.0)
+}
+
+-- Lift a scalar onto the real axis of the quaternion.
+pure liftReal(float) -> TractionQuaternion = (x) {
+  quatFromPhase(x, 0.0)
+}
+
+-- Additive identity.
+pure zeroQ() -> TractionQuaternion = () {
+  quatFromCart4(0.0, 0.0, 0.0, 0.0)
+}
+
+-- Extract the four cartesian components of a quaternion as floats.
+pure cartesianOf(TractionQuaternion) -> (float, float, float, float) = (q) {
+  let rCart = q.real.cart()
+  let iCart = q.imag.cart()
+  (ratToFloat(rCart.0), ratToFloat(rCart.1),
+   ratToFloat(iCart.0), ratToFloat(iCart.1))
+}
+
+-- Rebuild a quaternion from its cartesian projection. Without this,
+-- every + compounds Traction denominators geometrically and overflows
+-- within a layer. Calling this after each arithmetic step keeps scale
+-- and tangent bounded at O(D) integers.
+pure renormalize(TractionQuaternion) -> TractionQuaternion = (q) {
+  let (w, x, y, z) = cartesianOf(q)
+  quatFromCart4(w, x, y, z)
 }
 
 -- ── Input encoding ──────────────────────────────────────────────────────
@@ -66,7 +112,7 @@ pure fromCartesian(Rational, Rational) -> TComplex = (re, im) {
 --   max(0, -cos(N·π/p))
 -- Peaks at 1 when N is an odd multiple of p, because -cos(k·π) = +1 for
 -- odd k and -1 for even k (negative lobe clamped). One nonzero spike per
--- 2p-integer period — the network can combine these across primes to
+-- 2p-integer period — the network combines these across primes to
 -- reconstruct exponents.
 pure divFeature(int, int) -> float = (n, p) {
   let raw = -cos(toFloat(n) * pi() / toFloat(p))
@@ -75,14 +121,8 @@ pure divFeature(int, int) -> float = (n, p) {
   | _         -> raw
 }
 
--- Lift a scalar to a TComplex on the real axis (tangent = 0 → θ = 0).
-pure liftReal(float) -> TComplex = (x) {
-  TComplex(floatToRational(x), Rational.zero)
-}
-
--- Encode integer N into a TComplex feature vector using a prime bank.
-pure encodeInput(int, IntVec) -> ComplexVec = (n, primes) {
-  let out = ComplexVec()
+pure encodeInput(int, IntVec) -> QuatVec = (n, primes) {
+  let out = QuatVec()
   let i = 0
   let k = primes.length()
   while {i < k} do {
@@ -93,11 +133,9 @@ pure encodeInput(int, IntVec) -> ComplexVec = (n, primes) {
 }
 
 -- ── Network types ───────────────────────────────────────────────────────
--- Weights shape: [outDim × inDim] of TComplex (outer index = output neuron).
--- Biases shape: [outDim].
-type PLayer(weights: ComplexMat, biases: ComplexVec)
+type PLayer(weights: QuatMat, biases: QuatVec)
 
-pure PLayer(ComplexMat, ComplexVec) -> PLayer = (w, b) {
+pure PLayer(QuatMat, QuatVec) -> PLayer = (w, b) {
   this(w, b)
 }
 
@@ -109,24 +147,20 @@ pure PNetwork(PLayerArray) -> PNetwork = (layers) {
   this(layers)
 }
 
--- Additive identity for TComplex.
-pure zeroC() -> TComplex = () {
-  TComplex(Rational.zero, Rational.zero)
-}
-
--- ── Complex linear algebra ──────────────────────────────────────────────
-pure matVecMulC(ComplexMat, ComplexVec)
-    -> ComplexVec = (mat, x) {
-  let out = ComplexVec()
+-- ── Quaternion linear algebra ───────────────────────────────────────────
+-- Hamilton-product sum. We renormalize each product and each partial sum
+-- so the underlying Tractions never balloon past long range.
+pure matVecMulQ(QuatMat, QuatVec) -> QuatVec = (mat, x) {
+  let out = QuatVec()
   let i = 0
   let outDim = mat.length()
   while {i < outDim} do {
     let row = mat[i]
     let inDim = row.length()
-    let acc = zeroC()
+    let acc = zeroQ()
     let j = 0
     while {j < inDim} do {
-      acc = acc + (row[j] * x[j])
+      acc = renormalize(acc + renormalize(row[j] * x[j]))
       j = j + 1
     }
     out = out.push(acc)
@@ -135,31 +169,27 @@ pure matVecMulC(ComplexMat, ComplexVec)
   out
 }
 
-pure addVecC(ComplexVec, ComplexVec) -> ComplexVec = (a, b) {
-  let out = ComplexVec()
+pure addVecQ(QuatVec, QuatVec) -> QuatVec = (a, b) {
+  let out = QuatVec()
   let i = 0
   let n = a.length()
   while {i < n} do {
-    out = out.push(a[i] + b[i])
+    out = out.push(renormalize(a[i] + b[i]))
     i = i + 1
   }
   out
 }
 
 -- ── Magnitude / activation ──────────────────────────────────────────────
--- |z| computed via the cartesian projection — a couple of Rational→float
--- conversions, but exactness isn't needed for the activation threshold.
-pure magnitudeFloat(TComplex) -> float = (z) {
-  let (re, im) = z.toCartesian()
-  let rf = ratToFloat(re)
-  let imf = ratToFloat(im)
-  sqrt(rf*rf + imf*imf)
+-- |q| = sqrt(|real|² + |imag|²), evaluated through the Traction norm_sq
+-- then a single sqrt in float land.
+pure magnitudeFloat(TractionQuaternion) -> float = (q) {
+  sqrt(tractionToFloat(q.norm_sq()))
 }
 
--- The −cos·π bump clamped to [0, 1]. Zero for x ∈ [0, 0.5], rises to 1
--- at x = 1, then descends to 0 at 1.5, then stays at 0 until the next
--- resonance at 2.5. Acts as a band-pass that favors unit-magnitude
--- activations — the regime where phases carry most of the information.
+-- −cos·π bump clamped to [0, 1]. Zero for x ∈ [0, 0.5], rises to 1 at
+-- x = 1, descends to 0 at 1.5. Acts as a band-pass around unit
+-- magnitude — the regime where direction carries the information.
 pure bump01(float) -> float = (x) {
   let absX = match | x < 0.0 -> -x | _ -> x
   let raw = -cos(absX * pi())
@@ -169,58 +199,79 @@ pure bump01(float) -> float = (x) {
   | _         -> raw
 }
 
--- Rescale a TComplex to a new magnitude, preserving phase. The current
--- magnitude is |z| = |scale|·√(1+tan²); we pull scale to (newMag / √(1+tan²))
--- keeping its sign so the quadrant doesn't flip.
-pure rescale(TComplex, float) -> TComplex = (z, newMag) {
-  let (s, t) = z
-  let tf = ratToFloat(t)
-  let k = sqrt(1.0 + tf*tf)
-  let sSign = match | ratToFloat(s) < 0.0 -> -1.0 | _ -> 1.0
-  TComplex(floatToRational(sSign * newMag / k), t)
+-- Rescale a quaternion to a new magnitude, preserving direction. Extract
+-- cart, scale all four components uniformly, rebuild.
+pure rescale(TractionQuaternion, float) -> TractionQuaternion = (q, newMag) {
+  let curMag = magnitudeFloat(q)
+  match
+  | curMag < 0.000000000001 -> q
+  | _ -> {
+      let factor = newMag / curMag
+      let (w, x, y, z) = cartesianOf(q)
+      quatFromCart4(w * factor, x * factor, y * factor, z * factor)
+    }
 }
 
-pure activate(TComplex) -> TComplex = (z) {
-  rescale(z, bump01(magnitudeFloat(z)))
+pure activate(TractionQuaternion) -> TractionQuaternion = (q) {
+  rescale(q, bump01(magnitudeFloat(q)))
 }
 
-pure mapActivate(ComplexVec) -> ComplexVec = (zs) {
-  let out = ComplexVec()
+pure mapActivate(QuatVec) -> QuatVec = (qs) {
+  let out = QuatVec()
   let i = 0
-  let n = zs.length()
+  let n = qs.length()
   while {i < n} do {
-    out = out.push(activate(zs[i]))
+    out = out.push(activate(qs[i]))
     i = i + 1
   }
   out
 }
 
 -- ── Forward pass ────────────────────────────────────────────────────────
-pure forwardLayerC(PLayer, ComplexVec) -> ComplexVec
-    = (layer, x) {
-  mapActivate(addVecC(matVecMulC(layer.weights, x), layer.biases))
+pure forwardLayerQ(PLayer, QuatVec) -> QuatVec = (layer, x) {
+  mapActivate(addVecQ(matVecMulQ(layer.weights, x), layer.biases))
 }
 
-pure forwardC(PNetwork, ComplexVec) -> ComplexVec = (net, x) {
+pure forwardQ(PNetwork, QuatVec) -> QuatVec = (net, x) {
   let a = x
   let i = 0
   let n = net.layers.length()
   while {i < n} do {
-    a = forwardLayerC(net.layers[i], a)
+    a = forwardLayerQ(net.layers[i], a)
     i = i + 1
   }
   a
 }
 
 -- ── Output decoding ─────────────────────────────────────────────────────
--- Recover the phase angle of a TComplex output in [0, 2π). Uses atan2
--- on the cartesian projection — cheap and correct across all quadrants.
-pure argOf(TComplex) -> float = (z) {
-  let (re, im) = z.toCartesian()
-  let raw = atan2(ratToFloat(im), ratToFloat(re))
+-- Decoded phase = atan2 of the real TractionComplex half's cart,
+-- shifted to [0, 2π). The imag half's two components stay hidden —
+-- they participate in the Hamilton product during the forward pass but
+-- don't influence the decoded exponent class.
+pure argOf(TractionQuaternion) -> float = (q) {
+  let cart = q.real.cart()
+  let raw = atan2(ratToFloat(cart.1), ratToFloat(cart.0))
   match
   | raw < 0.0 -> raw + twoPi()
   | _         -> raw
+}
+
+-- Secondary phase — angle of the imag TractionComplex half. Used only
+-- by the demo to make the hidden 2 dimensions visible on the display.
+pure argOfImag(TractionQuaternion) -> float = (q) {
+  let cart = q.imag.cart()
+  let raw = atan2(ratToFloat(cart.1), ratToFloat(cart.0))
+  match
+  | raw < 0.0 -> raw + twoPi()
+  | _         -> raw
+}
+
+-- Magnitude of just the imag half (for rendering the secondary needle).
+pure imagMagnitudeFloat(TractionQuaternion) -> float = (q) {
+  let cart = q.imag.cart()
+  let ri = ratToFloat(cart.0)
+  let ii = ratToFloat(cart.1)
+  sqrt(ri*ri + ii*ii)
 }
 
 -- Quantize an angle to an exponent class in {0, 1, ..., maxExp-1}. Each
@@ -234,11 +285,12 @@ pure decodeExponent(float, int) -> int = (angle, maxExp) {
   | _     -> m
 }
 
--- Encode an exponent class as a target TComplex on the unit circle. This
--- is where Kuramoto training will pull the output phases toward.
-pure exponentTarget(int, int) -> TComplex = (c, maxExp) {
+-- Target quaternion for exponent class c: unit-magnitude, phase at
+-- c·(2π/maxExp) on the real-half plane. Imag half is zero so the
+-- target lives on the planar-complex subspace.
+pure exponentTarget(int, int) -> TractionQuaternion = (c, maxExp) {
   let angle = twoPi() * toFloat(c) / toFloat(maxExp)
-  fromCartesian(floatToRational(cos(angle)), floatToRational(sin(angle)))
+  quatFromPhase(cos(angle), sin(angle))
 }
 
 -- ── Weight initialization ───────────────────────────────────────────────
@@ -257,29 +309,38 @@ pure rand01(int, int, int) -> float = (s, i, salt) {
   toFloat(lcgHash(s, i, salt)) / 2147483648.0
 }
 
--- Random unit-magnitude weight at a uniform angle in [-π, π).
-pure randWeightC(int, int, int, int) -> TComplex = (s, layer, i, j) {
-  let angle = (rand01(s, layer * 1000 + i * 100 + j, 7) - 0.5) * twoPi()
-  fromCartesian(floatToRational(cos(angle)), floatToRational(sin(angle)))
+-- Random unit quaternion. Four coords drawn from [-1, 1] then normalized
+-- to |q|=1. Not uniform on S³ (that would need Marsaglia's trick), but
+-- plenty diverse for initialization and spreads across all 4 axes.
+pure randWeightQ(int, int, int, int) -> TractionQuaternion
+    = (s, layer, i, j) {
+  let base = layer * 1000 + i * 100 + j
+  let w = (rand01(s, base, 7)  - 0.5) * 2.0
+  let x = (rand01(s, base, 11) - 0.5) * 2.0
+  let y = (rand01(s, base, 13) - 0.5) * 2.0
+  let z = (rand01(s, base, 17) - 0.5) * 2.0
+  let mag = sqrt(w*w + x*x + y*y + z*z)
+  let m = match | mag < 0.000000001 -> 1.0 | _ -> mag
+  quatFromCart4(w / m, x / m, y / m, z / m)
 }
 
 pure initPLayer(int, int, int, int) -> PLayer = (layerIdx, inDim, outDim, s) {
-  let w = ComplexMat()
+  let w = QuatMat()
   let i = 0
   while {i < outDim} do {
-    let row = ComplexVec()
+    let row = QuatVec()
     let j = 0
     while {j < inDim} do {
-      row = row.push(randWeightC(s, layerIdx, i, j))
+      row = row.push(randWeightQ(s, layerIdx, i, j))
       j = j + 1
     }
     w = w.push(row)
     i = i + 1
   }
-  let b = ComplexVec()
+  let b = QuatVec()
   let k = 0
   while {k < outDim} do {
-    b = b.push(zeroC())
+    b = b.push(zeroQ())
     k = k + 1
   }
   PLayer(w, b)

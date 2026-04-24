@@ -17,19 +17,18 @@ import static org.lwjgl.opengl.GL11.*;
  * the user's render function, reconciles the returned tree, and paints.
  *
  * <p>Builds a per-window {@link FontRegistry} with the registered builtins
- * ({@code :mono / :serif / :sans}) plus the host's fallback (Consolas).
+ * ({@code :mono / :serif / :sans}). All renderers are created fresh against
+ * the window's GL context and fully disposed when the loop exits, so no
+ * font state is shared across runs.
  * Must be invoked on the thread that owns the shared GL context.
  */
 public final class GuiHost {
 
     /**
      * @param state      post-SPN configuration (must have {@code isRunRequested() == true})
-     * @param hostFont   the editor's monospace renderer, already initialized on the shared
-     *                   context; used as the {@code :mono} / default fallback when a bundled
-     *                   classpath TTF isn't available
      * @param shareWith  GLFW window handle whose GL context to share (NULL for none)
      */
-    public static void run(GuiSpnState state, SdfFontRenderer hostFont, long shareWith) {
+    public static void run(GuiSpnState state, long shareWith) {
         if (!state.isRunRequested()) return;
 
         Theme theme = new Theme();
@@ -60,10 +59,13 @@ public final class GuiHost {
                 "fonts/sans/notosans-bold.ttf",
                 "fonts/sans/notosans-italic.ttf", 64f);
 
-        // If bundled :mono couldn't load, fall back to the editor's Consolas
-        // so text still renders.
+        // If bundled :mono couldn't load, fall back to a fresh renderer
+        // built from the default bundled resource path. Owned by `fonts`
+        // and disposed along with everything else below.
         if (!monoOk) {
-            fonts.registerRegular("mono", hostFont);
+            SdfFontRenderer fallback = SdfFontRenderer.loadBundled(
+                    "fonts/mono/ubuntusansmono-regular.ttf", 64f);
+            fonts.registerRegular("mono", fallback);
             fonts.setDefault("mono");
         }
 
@@ -112,10 +114,6 @@ public final class GuiHost {
                 }
             }
         } finally {
-            // If :mono ended up backed by the borrowed hostFont (bundled load
-            // failed), remove the entry before disposing so we don't tear
-            // down a renderer owned by EditorWindow.
-            if (fonts.get("mono") == hostFont) fonts.removeWithoutDispose("mono");
             fonts.dispose();
             window.close();
         }

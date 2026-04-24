@@ -1,18 +1,20 @@
 
 -- ═══════════════════════════════════════════════════════════════════════
--- Phase-Valued Factorization Demo — forward pass only (untrained)
+-- Quaternion Phase-Valued Factorization Demo
 -- ═══════════════════════════════════════════════════════════════════════
 -- Cycles through N = 2..30 and renders:
 --   - the current N and its true factorization
 --   - the input feature bank (one dot per prime; brightness = divFeature)
---   - the output TComplex bank (one dial per prime; needle = phase,
---     brightness = |z|)
---   - weights between the two columns, colored by the weight's phase
+--   - the output quaternion bank (one dial per prime; main needle =
+--     real-half phase, inner needle = imag-half phase, brightness = |q|)
+--   - weights between the two columns, colored by the weight's real-half
+--     phase
 --   - the decoded exponent vector below the output column
 --
--- Weights are random (seeded LCG) so predictions shouldn't match truth
--- yet — the point of this frame is verifying the substrate runs end to
--- end. Kuramoto training lives in a later module.
+-- Each output neuron is a full TractionQuaternion. Only the real-half
+-- phase is decoded into an exponent class; the imag half is shown as a
+-- thin interior needle so the viewer can see the extra 2 quaternion
+-- dimensions evolve during training.
 -- ═══════════════════════════════════════════════════════════════════════
 
 import Canvas
@@ -22,10 +24,9 @@ import String (formatNum)
 import spn.canvas.draw
 import factor.network
 import factor.train
+import numerics.traction
 
 -- ── Configuration ───────────────────────────────────────────────────────
--- `IntVec` is `Array<int>` exported from factor.network; using it here
--- keeps the prime bank type-compatible with `encodeInput`.
 pure seed() -> int = () { 42 }
 pure primes() -> IntVec = () { IntVec(2, 3, 5) }
 pure maxExp() -> int = () { 5 }
@@ -42,8 +43,6 @@ pure trueExp(int, int) -> int = (n, p) {
 }
 
 -- ── Colour helpers ──────────────────────────────────────────────────────
--- Hue → RGB for a 0..1 hue value using a 6-sector HSV cone at S=1, V=1.
--- Compact and good enough for labelling phase.
 pure hueRgb(float) -> (float, float, float) = (h) {
   let h6 = h * 6.0
   let sector = round(h6 - 0.5) % 6
@@ -58,7 +57,6 @@ pure hueRgb(float) -> (float, float, float) = (h) {
   | _ -> (1.0, 0.0, q)
 }
 
--- Phase angle in [0, 2π) → hue in [0, 1) → rgb.
 pure phaseColor(float) -> (float, float, float) = (angle) {
   hueRgb(angle / twoPi())
 }
@@ -74,8 +72,8 @@ pure neuronY(int, int, float) -> float = (idx, total, centerY) {
 }
 
 -- ── Drawing: input dot ──────────────────────────────────────────────────
--- Input is purely real (tan = 0), so just a monochrome disk with
--- brightness = activation.
+-- Input is purely real (imag half = 0 in quaternion space), so just a
+-- monochrome disk with brightness = activation.
 pure drawInput(float, float, float, float, int) -> Array
     = (fval, x, y, r, prime) {
   let b = 0.25 + 0.65 * fval
@@ -89,15 +87,16 @@ pure drawInput(float, float, float, float, int) -> Array
 }
 
 -- ── Drawing: output dial ────────────────────────────────────────────────
--- Phase needle + magnitude brightness + ring of exponent tick marks.
-pure drawDial(TComplex, float, float, float, int, int) -> Array
-    = (z, cx, cy, r, prime, maxE) {
-  let mag = magnitudeFloat(z)
-  let angle = argOf(z)
+-- Main needle = real-half phase (the decoded quantity).
+-- Inner thin needle = imag-half phase (hidden dimension).
+-- Body tint = phase color, fade = |q|.
+pure drawDial(TractionQuaternion, float, float, float, int, int) -> Array
+    = (q, cx, cy, r, prime, maxE) {
+  let mag = magnitudeFloat(q)
+  let angle = argOf(q)
   let (cr, cg, cb) = phaseColor(angle)
   let fade = 0.25 + 0.65 * match | mag > 1.0 -> 1.0 | _ -> mag
 
-  -- Ring body with phase-colored tint
   let body = [
     CmdFill(0.2, 0.22, 0.28), CmdCircle(cx, cy, r + 4.0),
     CmdFill(cr * fade, cg * fade, cb * fade), CmdCircle(cx, cy, r)
@@ -116,25 +115,38 @@ pure drawDial(TComplex, float, float, float, int, int) -> Array
     k = k + 1
   }
 
-  -- Phase needle
-  let nx = cx + r * 0.85 * cos(angle)
-  let ny = cy - r * 0.85 * sin(angle)
   let needle = [
     CmdStroke(0.2, 0.22, 0.28), CmdStrokeWeight(1.0)
   ]
-  let needle2 = concat(needle, ticks)
-  let needle3 = concat(needle2, [
+  let withTicks = concat(needle, ticks)
+
+  -- Main needle: real-half phase, length 0.85·r.
+  let nx = cx + r * 0.85 * cos(angle)
+  let ny = cy - r * 0.85 * sin(angle)
+  let mainNeedle = concat(withTicks, [
     CmdStroke(0.98, 0.98, 0.98), CmdStrokeWeight(2.5),
     CmdLine(cx, cy, nx, ny)
   ])
 
-  -- Label to the right
+  -- Secondary needle: imag-half phase, length scaled by imag magnitude.
+  -- Thinner and dimmer so the primary reading stays the focus.
+  let imagAngle = argOfImag(q)
+  let imagMag = imagMagnitudeFloat(q)
+  let iMag = match | imagMag > 1.0 -> 1.0 | _ -> imagMag
+  let ilen = r * 0.55 * iMag
+  let ix = cx + ilen * cos(imagAngle)
+  let iy = cy - ilen * sin(imagAngle)
+  let withImag = concat(mainNeedle, [
+    CmdStroke(0.75, 0.85, 0.95), CmdStrokeWeight(1.2),
+    CmdLine(cx, cy, ix, iy)
+  ])
+
   let label = [
     CmdFill(0.7, 0.75, 0.85),
     CmdText(cx + r + 16.0, cy + 6.0, "p=" ++ formatNum(prime), 0.26)
   ]
 
-  concat(concat(body, needle3), label)
+  concat(withImag, label)
 }
 
 -- ── Drawing: weights as colored lines ───────────────────────────────────
@@ -164,11 +176,7 @@ pure drawWeights(PLayer, int, int, float, float, float) -> Array
 }
 
 -- ── Prediction string helpers ───────────────────────────────────────────
--- Build "[c2, c3, c5]" from a TComplex output vector. Uses `ComplexVec`
--- from factor.network rather than inlining `Array<TComplex>` — the macro
--- memoization is file-scoped, so an inline re-invocation produces a
--- different descriptor from network's ComplexVec and breaks dispatch.
-pure decodedString(ComplexVec, int) -> string = (outputs, maxE) {
+pure decodedString(QuatVec, int) -> string = (outputs, maxE) {
   let s = "["
   let j = 0
   let m = outputs.length()
@@ -193,9 +201,6 @@ pure truthString(int, IntVec) -> string = (n, ps) {
   s ++ "]"
 }
 
--- Pretty-print 12 as "2 * 3^1" given a prime bank. Built inline (no
--- intermediate string array) because accumulating into a string keeps
--- all types concrete.
 pure factorizationString(int, IntVec) -> string = (n, ps) {
   let s = ""
   let any = false
@@ -224,16 +229,12 @@ pure factorizationString(int, IntVec) -> string = (n, ps) {
 
 -- ── Frame builder ───────────────────────────────────────────────────────
 pure exampleForElapsed(float, int) -> int = (elapsed, rangeN) {
-  -- One example per 0.8 s; cycle through 2..(2 + rangeN - 1).
   let idx = round(elapsed / 0.8) % rangeN
   match
   | idx < 0 -> 2
   | _       -> 2 + idx
 }
 
--- How many training epochs the network should have completed by `elapsed`.
--- Epochs ramp up over time so the user watches the dials converge from
--- random; capped at `maxEpochs` so per-frame cost plateaus.
 pure epochsForElapsed(float, int) -> int = (elapsed, maxEpochs) {
   let raw = round(elapsed / 0.5)
   match
@@ -242,10 +243,9 @@ pure epochsForElapsed(float, int) -> int = (elapsed, maxEpochs) {
   | _               -> raw
 }
 
--- Training hyperparameters: range, max epochs, finite-difference step, lr.
--- Trained over [2, 10) (eight integers covering 2^k, 3^k, 5^k, 2·3, etc.);
--- the display sweeps a broader [2, 31) so the viewer can also see how
--- the learned phases generalize to unseen N.
+-- Training hyperparameters. Same shape as the TComplex version, but
+-- gradients cost twice as much (4 axes × central-diff), so we keep the
+-- epoch ceiling modest.
 pure trainStartN() -> int = () { 2 }
 pure trainEndN()   -> int = () { 10 }
 pure maxEpochs()   -> int = () { 12 }
@@ -257,19 +257,15 @@ action drawFrame(float) -> int = (elapsed) {
   let k = ps.length()
   let mE = maxExp()
 
-  -- Train progressively: each frame runs epoch(elapsed) gradient sweeps
-  -- from a fixed seed, so the display is deterministic and the dials
-  -- animate smoothly toward the correct phases as training proceeds.
   let initialNet = PNetwork(PLayerArray(initPLayer(0, k, k, seed())))
   let epochs = epochsForElapsed(elapsed, maxEpochs())
   let net = train(initialNet, ps, mE, trainStartN(), trainEndN(),
                   epochs, gradEps(), learnRate())
 
-  -- Cycle N through [2, 31).
   let n = exampleForElapsed(elapsed, 30)
 
   let features = encodeInput(n, ps)
-  let outputs = forwardC(net, features)
+  let outputs = forwardQ(net, features)
   let loss = totalLoss(net, ps, mE, trainStartN(), trainEndN())
 
   let centerY = 380.0
@@ -279,7 +275,7 @@ action drawFrame(float) -> int = (elapsed) {
   cmds = concat(cmds, [
     CmdFill(0.92, 0.92, 0.96),
     CmdText(260.0, 40.0,
-      "Phase Factorizer — finite-differences SGD", 0.32),
+      "Quaternion Phase Factorizer — finite-differences SGD", 0.32),
     CmdFill(0.55, 0.6, 0.68),
     CmdText(260.0, 66.0,
       "epoch " ++ formatNum(epochs) ++ " / " ++ formatNum(maxEpochs())
@@ -314,10 +310,11 @@ action drawFrame(float) -> int = (elapsed) {
   cmds = concat(cmds, drawWeights(net.layers[0], k, k, centerY,
                                    inputX(), outputX()))
 
-  -- Input dots
+  -- Input dots (fval recomputed from n / prime rather than unpacked from
+  -- the quaternion — simpler and avoids re-extracting cart components).
   let i = 0
   while {i < k} do {
-    let fval = ratToFloat(features[i].0)
+    let fval = divFeature(n, ps[i])
     let y = neuronY(i, k, centerY)
     cmds = concat(cmds, drawInput(fval, inputX(), y, 22.0, ps[i]))
     i = i + 1
@@ -335,7 +332,7 @@ action drawFrame(float) -> int = (elapsed) {
   cmds = concat(cmds, [
     CmdFill(0.55, 0.6, 0.68),
     CmdText(80.0, 680.0,
-      "dial hue = output phase   brightness = |z|   ticks = exponent classes  0.." ++ formatNum(mE - 1),
+      "main needle = real-half phase (decoded)   inner = imag-half phase   ticks = exponent classes 0.." ++ formatNum(mE - 1),
       0.20)
   ])
 

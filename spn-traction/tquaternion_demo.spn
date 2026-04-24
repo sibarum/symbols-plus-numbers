@@ -1,0 +1,221 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- TractionQuaternion 3D — rotated wireframe cube (canvasgui edition)
+-- ═══════════════════════════════════════════════════════════════════════
+-- Rotates a unit cube with an exact-rational unit quaternion, projects
+-- orthographically to 2D, and uses Vec3 dot product against the viewer
+-- direction for back-face culling. Every coordinate in the rotation
+-- pipeline is a ratio of small integers — floats only appear at the
+-- final pixel step.
+--
+-- The quaternion q = (1/3, 2/3, 2/3, 0) is a Pythagorean unit quadruple
+-- (1² + 2² + 2² + 0² = 9 ⇒ unit after /3). It represents a ~141°
+-- rotation about the (1,1,0)/√2 diagonal axis — nicely off-axis, so
+-- the cube tilts in all three directions instead of looking flat.
+--
+-- Rendered into a canvasgui window via the `guiCanvas` embed widget;
+-- the scene is static, so the render closure just returns the same
+-- command list every frame.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import Array (concat)
+import CanvasGui
+import Math (toFloat)
+import spn.canvas.draw
+import numerics.traction
+import numerics.vec3
+import numerics.rational
+
+-- Rational → float (matches tcomplex_demo.spn's helper; the `promote
+-- Rational -> float` in rational.spn would be an alternative, but the
+-- parser currently chokes on `let name: type = expr` annotations).
+pure ratToFloat(Rational) -> float = (r) {
+  match r.1
+  | 0 -> 0
+  | _ -> toFloat(r.0) / toFloat(r.1)
+}
+
+-- ── packing Vec3 ↔ TractionQuaternion ──────────────────────────────
+--
+-- A pure-imaginary quaternion V = 0 + x·i + y·j + z·k, under the
+-- Cayley-Dickson pair encoding (A, B) = A + B·j, splits as
+--   real = 0 + x·i
+--   imag = y + z·i
+-- TractionComplex(scale, tangent) represents scale·(tangent.denom +
+-- tangent.num·i), so scale=Traction(1,1) and tangent=Traction(n,d)
+-- gives the complex number d + n·i.
+
+pure toQuat(int, int, int) -> TractionQuaternion = (x, y, z) {
+  TractionQuaternion(
+    TractionComplex(Traction(1, 1), Traction(x, 0)),   -- 0 + x·i
+    TractionComplex(Traction(1, 1), Traction(z, y))    -- y + z·i
+  )
+}
+
+-- Extract (x, y, z) from a quaternion that's pure-imaginary after
+-- q·V·q.conj(). real.cart() is (0, x); imag.cart() is (y, z).
+pure fromQuat(TractionQuaternion) -> Vec3 = (q) {
+  let r = q.real.cart()
+  let i = q.imag.cart()
+  Vec3(r.1, i.0, i.1)
+}
+
+-- Rotate integer (x, y, z) by q using the standard v' = q·V·q*.
+pure rotate(TractionQuaternion, int, int, int) -> Vec3 = (q, x, y, z) {
+  fromQuat(q * toQuat(x, y, z) * q.conj())
+}
+
+-- ── projection: Rational Vec3 → pixel coords ───────────────────────
+
+pure project(Vec3, float, float, float) -> (float, float) = (v, cx, cy, s) {
+  let vx = ratToFloat(v.x)
+  let vy = ratToFloat(v.y)
+  (cx + s * vx, cy - s * vy)
+}
+
+-- ── back-face culling via Vec3 dot product ─────────────────────────
+--
+-- For 4 CCW-wound face vertices, (b-a) ×_cross (c-a) is the outward
+-- normal. The viewer looks along -z, so a face is visible iff the
+-- rotated normal's z-component is positive — i.e. normal *_dot ẑ > 0.
+
+pure isVisible(Vec3, Vec3, Vec3) -> bool = (a, b, c) {
+  let normal = (b - a) *_cross (c - a)
+  (normal *_dot Vec3.ez) > Rational.zero
+}
+
+-- Draw the 4 edges of a face, with a bright stroke if visible and a
+-- dim stroke if back-facing (kept in the render so you can see the
+-- full wireframe, with culling signalling depth).
+
+pure faceCmds(Vec3, Vec3, Vec3, Vec3, float, float, float) -> Array
+  = (a, b, c, d, cx, cy, s)
+{
+  let (ax, ay) = project(a, cx, cy, s)
+  let (bx, by) = project(b, cx, cy, s)
+  let (px, py) = project(c, cx, cy, s)
+  let (dx, dy) = project(d, cx, cy, s)
+
+  let style = match isVisible(a, b, c)
+    | true -> [CmdStroke(0.95, 0.78, 0.25), CmdStrokeWeight(2.4)]
+    | _    -> [CmdStroke(0.30, 0.30, 0.36), CmdStrokeWeight(1.0)]
+
+  concat(style, [
+    CmdLine(ax, ay, bx, by),
+    CmdLine(bx, by, px, py),
+    CmdLine(px, py, dx, dy),
+    CmdLine(dx, dy, ax, ay)
+  ])
+}
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- Animation: per-frame rotation step and scene builder
+-- ═══════════════════════════════════════════════════════════════════════
+--
+-- `step()` is the rotation applied once per frame. It's a unit quaternion
+-- built from the Pythagorean pair (99, 20, 101):  99² + 20² = 101², so
+-- (99/101, 20/101, 0, 0) has magnitude 1. That's a rotation about the x
+-- axis by 2·atan(20/99) ≈ 22.8°. At 30fps the cube completes about one
+-- revolution every ~0.5s — noticeably spinny but not dizzying.
+--
+-- Defined as a named function (not a closed-over let) so the render
+-- closure can call it; do() closures can't capture outer locals, only
+-- `this`.
+
+pure step() -> TractionQuaternion = () {
+  TractionQuaternion(
+    TractionComplex(Traction(1, 101), Traction(20, 99)),   -- 99/101 + (20/101)·i
+    TractionComplex(Traction(0, 1), Traction(0, 1))        -- 0
+  )
+}
+
+pure sceneCmds(TractionQuaternion) -> Array = (q) {
+  let cx = 400.0
+  let cy = 300.0
+  let scale = 140.0
+
+  let v0 = rotate(q, -1, -1, -1)
+  let v1 = rotate(q,  1, -1, -1)
+  let v2 = rotate(q,  1,  1, -1)
+  let v3 = rotate(q, -1,  1, -1)
+  let v4 = rotate(q, -1, -1,  1)
+  let v5 = rotate(q,  1, -1,  1)
+  let v6 = rotate(q,  1,  1,  1)
+  let v7 = rotate(q, -1,  1,  1)
+
+  -- Title overlay (drawn as CmdText inside the embed)
+  let cmds = [
+    CmdFill(0.92, 0.92, 0.96),
+    CmdText(170.0, 34.0,
+      "TractionQuaternion 3D: exact-rational cube rotation", 0.28),
+    CmdFill(0.65, 0.65, 0.72),
+    CmdText(170.0, 58.0,
+      "step q = (99, 20, 0, 0)/101  ~22.8 deg per frame about x", 0.22)
+  ]
+
+  -- Six faces, CCW-wound when viewed from outside.
+  cmds = concat(cmds, faceCmds(v4, v5, v6, v7, cx, cy, scale))  -- +z front
+  cmds = concat(cmds, faceCmds(v0, v3, v2, v1, cx, cy, scale))  -- -z back
+  cmds = concat(cmds, faceCmds(v1, v2, v6, v5, cx, cy, scale))  -- +x right
+  cmds = concat(cmds, faceCmds(v0, v4, v7, v3, cx, cy, scale))  -- -x left
+  cmds = concat(cmds, faceCmds(v3, v7, v6, v2, cx, cy, scale))  -- +y top
+  cmds = concat(cmds, faceCmds(v0, v1, v5, v4, cx, cy, scale))  -- -y bottom
+
+  -- Mark the 8 projected vertices as small dots.
+  let (p0x, p0y) = project(v0, cx, cy, scale)
+  let (p1x, p1y) = project(v1, cx, cy, scale)
+  let (p2x, p2y) = project(v2, cx, cy, scale)
+  let (p3x, p3y) = project(v3, cx, cy, scale)
+  let (p4x, p4y) = project(v4, cx, cy, scale)
+  let (p5x, p5y) = project(v5, cx, cy, scale)
+  let (p6x, p6y) = project(v6, cx, cy, scale)
+  let (p7x, p7y) = project(v7, cx, cy, scale)
+
+  cmds = concat(cmds, [
+    CmdFill(0.85, 0.85, 0.92),
+    CmdCircle(p0x, p0y, 3.0), CmdCircle(p1x, p1y, 3.0),
+    CmdCircle(p2x, p2y, 3.0), CmdCircle(p3x, p3y, 3.0),
+    CmdCircle(p4x, p4y, 3.0), CmdCircle(p5x, p5y, 3.0),
+    CmdCircle(p6x, p6y, 3.0), CmdCircle(p7x, p7y, 3.0)
+  ])
+
+  -- Legend
+  cmds = concat(cmds, [
+    CmdStroke(0.95, 0.78, 0.25), CmdStrokeWeight(2.4),
+    CmdLine(40.0, 560.0, 70.0, 560.0),
+    CmdFill(0.75, 0.75, 0.8),
+    CmdText(80.0, 565.0, "front-facing (Vec3 *_dot ez > 0)", 0.22),
+
+    CmdStroke(0.30, 0.30, 0.36), CmdStrokeWeight(1.0),
+    CmdLine(40.0, 582.0, 70.0, 582.0),
+    CmdFill(0.75, 0.75, 0.8),
+    CmdText(80.0, 587.0, "back-facing (culled; shown dim for context)", 0.22)
+  ])
+
+  cmds
+}
+
+-- ═══════════════════════════════════════════════════════════════════════
+-- Window + frame loop
+-- ═══════════════════════════════════════════════════════════════════════
+-- `this.q` carries the rotation state. Each frame the render closure
+-- composes it with step() — a pure 22.8° rotation about x — then
+-- rebuilds the scene from the new quaternion.
+--
+-- The Traction(int, int) constructor bit-shift-normalizes to a 30-bit
+-- budget after every op, so composing forever never overflows: the
+-- quaternion drifts very slightly from perfect unit magnitude over many
+-- frames, same trade as Numerics.Rational<bits>.
+
+stateful type Scene(q: TractionQuaternion)
+
+Scene(TractionQuaternion()) {
+  let render = do() {
+    this.q = this.q * step()
+    guiRender(
+      guiCanvas(800, 600, sceneCmds(this.q)).bg(0.08, 0.08, 0.11)
+    )
+  }
+
+  guiWindow("TractionQuaternion 3D", 820, 640)
+  guiRun(30.0, render)
+}

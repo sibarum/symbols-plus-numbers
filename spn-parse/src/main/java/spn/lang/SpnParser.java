@@ -147,6 +147,14 @@ public class SpnParser {
     // method-call sites when a plain method lookup misses.
     private final Map<String, String> qualifiedKeyAliases = new LinkedHashMap<>();
 
+    // Macro-type aliases: when `type X = Array<T>` renames Array's emitted
+    // TypedArray$N to X, we record X → TypedArray$N here. Used when building
+    // the memo key for a nested macro call so that `Array<X>` and
+    // `Array<TypedArray$N>` collapse to the same memo entry — otherwise two
+    // aliases of the same internal type produce distinct expansions that
+    // can't interoperate.
+    private final Map<String, String> typeAliasMap = new LinkedHashMap<>();
+
     // Associated constants: "TypeName.name" → zero-arg CallTarget returning the value
     record ConstantEntry(CallTarget callTarget, FieldType type) {}
     private final Map<String, ConstantEntry> constantRegistry = new LinkedHashMap<>();
@@ -669,9 +677,15 @@ public class SpnParser {
         // yields the same internal emitted type. On hit, we short-circuit the
         // body-parsing step and advertise the cached type as the emit of this
         // invocation so callers like renameMacroEmittedType can alias it.
+        // Verify the cached internal name still exists in the registries —
+        // an outer macro whose body referenced this inner macro will have
+        // reverted the inner's registrations when it finished, leaving a
+        // stale memo entry. Fall through to full re-expansion in that case.
         String memoKey = buildMacroMemoKey(macro.name(), args);
         String cachedInternal = macroMemo.get(memoKey);
-        if (cachedInternal != null) {
+        if (cachedInternal != null
+                && (structRegistry.containsKey(cachedInternal)
+                        || typeRegistry.containsKey(cachedInternal))) {
             macroEmittedBundle.clear();
             macroEmittedBundle.put(cachedInternal,
                     new EmittedEntry(EmittedKind.TYPE, cachedInternal));
@@ -849,13 +863,21 @@ public class SpnParser {
     }
 
     /** Build a file-scoped memo key: macro name + joined text of all arg tokens.
-     *  Aliases don't collapse — `Array<Rat>` and `Array<Rational>` are distinct
-     *  entries even if `Rat` is an alias for `Rational`. */
+     *  Macro-emitted type aliases are resolved to their internal name — so
+     *  `Array<QVec>` and `Array<TypedArray$N>` hit the same memo entry when
+     *  QVec aliases TypedArray$N, and two parallel `type A = Array<X>` /
+     *  `type B = Array<X>` declarations produce interoperable collection
+     *  types. Plain type-alias chains (non-macro `type Rat = Rational`) are
+     *  not in typeAliasMap and are kept verbatim. */
     private String buildMacroMemoKey(String macroName, List<List<SpnParseToken>> args) {
         StringBuilder sb = new StringBuilder(macroName);
         for (List<SpnParseToken> arg : args) {
             sb.append('|');
-            for (SpnParseToken t : arg) sb.append(t.text()).append(' ');
+            for (SpnParseToken t : arg) {
+                String text = t.text();
+                String resolved = typeAliasMap.getOrDefault(text, text);
+                sb.append(resolved).append(' ');
+            }
         }
         return sb.toString();
     }
@@ -893,14 +915,25 @@ public class SpnParser {
         revertRegistry(functionOverloads, snapFunctionOverloads);
     }
 
-    /** Remove new entries from a registry unless they match an emitted name. */
+    /** Remove new entries from a registry unless they match an emitted name.
+     *  Uniquified macro-internal names (contain {@code $}) are also kept —
+     *  they're unreachable by normal lexing so there's no pollution, and
+     *  the emitted type's fields / methods may transitively reference them. */
     private <V> void revertRegistry(Map<String, V> registry, Map<String, V> snapshot) {
         var newKeys = new ArrayList<>(registry.keySet());
         for (String key : newKeys) {
-            if (!snapshot.containsKey(key) && !isEmittedKey(key)) {
+            if (!snapshot.containsKey(key) && !isEmittedKey(key)
+                    && !isUniquifiedKey(key)) {
                 registry.remove(key);
             }
         }
+    }
+
+    /** Keys containing {@code $} are macro-internal uniquified names the user
+     *  can't reference directly. Keep them across revert so emitted types
+     *  that transitively reference them still work. */
+    private static boolean isUniquifiedKey(String key) {
+        return key.indexOf('$') >= 0;
     }
 
     /** Check if a registry key matches any emitted name (direct or prefixed like "TypeName.method"). */
@@ -939,6 +972,9 @@ public class SpnParser {
      * function descriptors prefixed with the internal name.
      */
     private void aliasEmittedType(String targetName, String internalName, SpnParseToken nameTok) {
+        // Record the alias so nested macro-memo lookups can canonicalize
+        // `Array<targetName>` to `Array<internalName>` and hit the same memo.
+        typeAliasMap.put(targetName, internalName);
         // Register the struct descriptor under the user's chosen name as an ALIAS.
         // Keep the internal name too — compiled CallTargets reference the original
         // descriptor, so lookups by the internal name must still work.
@@ -1169,8 +1205,12 @@ public class SpnParser {
             }
             return false;
         }
-        // Otherwise it's a method-style key: look up TypeName.@key
-        return methodRegistry.containsKey(typeName + "." + key);
+        // Otherwise it's a method-style key. Accept either explicit qualified
+        // form (`TypeName.@key`) or the bare-name form (`TypeName.key`), so a
+        // regular `pure T.foo() -> ...` declaration satisfies signature `@foo`.
+        if (methodRegistry.containsKey(typeName + "." + key)) return true;
+        String bare = key.startsWith("@") ? key.substring(1) : key;
+        return methodRegistry.containsKey(typeName + "." + bare);
     }
 
     /** If the key body is all operator chars (with optional _qualifier), return it. */
@@ -1678,6 +1718,14 @@ public class SpnParser {
                 importedOperatorDeclarations.putIfAbsent(entry.getKey(), entry.getValue());
             }
         }
+        // Named signatures travel with the module — required for `requires Foo`
+        // on macro params to resolve at the expansion site.
+        Map<String, Set<String>> signatures = module.getExtra("signatures");
+        if (signatures != null) {
+            for (var entry : signatures.entrySet()) {
+                signatureRegistry.putIfAbsent(entry.getKey(), entry.getValue());
+            }
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -1896,10 +1944,18 @@ public class SpnParser {
             if (rhsTok != null && rhsNext != null
                     && macroRegistry.containsKey(rhsTok.text())
                     && rhsNext.text().equals("<")) {
+                // Snapshot the emit bundle so nested `type X = macro<...>`
+                // inside an outer macro body don't pollute the outer's
+                // emit tally. The bundle is used only for this rename;
+                // we restore it afterward.
+                LinkedHashMap<String, EmittedEntry> savedBundle =
+                        new LinkedHashMap<>(macroEmittedBundle);
                 // Expand the macro — it will emit a type under its internal name.
                 expandMacroInvocation();
                 // Find the emitted type and re-register it under the user's chosen name.
                 renameMacroEmittedType(name, nameTok);
+                macroEmittedBundle.clear();
+                macroEmittedBundle.putAll(savedBundle);
                 return;
             }
 
@@ -4738,7 +4794,11 @@ public class SpnParser {
 
         SpnExpressionNode instanceRead = SpnReadLocalVariableNodeGen.create(
                 currentStatefulBlock.thisSlot);
-        return at(new spn.node.stateful.SpnStatefulFieldReadNode(instanceRead, fieldName), thisTok);
+        SpnExpressionNode readNode = at(
+                new spn.node.stateful.SpnStatefulFieldReadNode(instanceRead, fieldName), thisTok);
+        FieldType fieldType = currentStatefulBlock.shape.get(fieldName);
+        if (fieldType != null) trackType(readNode, fieldType);
+        return readNode;
     }
 
     // ── Stateful block: T(args) { body } ───────────────────────────────────

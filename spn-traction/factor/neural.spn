@@ -1,0 +1,174 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- NeuralWeight signature + makeNeuralNet macro
+-- ═══════════════════════════════════════════════════════════════════════
+-- Any type T that satisfies NeuralWeight can be used as the weight and
+-- activation type in a stacked network. makeNeuralNet<T> emits Net with
+-- forward and trainStep — the training rule is algebraic (no finite
+-- differences): the per-neuron correction is an element of T produced
+-- by `error`, blended into the weight with `interp`.
+--
+-- Method roles:
+--   compose (w, x)   -> apply weight to input
+--   invert (w)       -> reverse compose for backward pass
+--   aggregate (a, b) -> combine contributions inside a neuron
+--   activate (z)     -> per-neuron nonlinearity
+--   error (a, t)     -> the T that takes actual to target (a . err = t)
+--   interp (a, b, f) -> take a step of size f from a toward b
+-- ═══════════════════════════════════════════════════════════════════════
+
+import Collections
+
+signature NeuralWeight (
+  @compose, @invert, @aggregate, @activate, @error, @interp
+)
+
+macro makeNeuralNet<T requires NeuralWeight> = {
+
+  type TArray = Array<T>
+  type TMatrix = Array<TArray>
+
+  type TLayer(weights: TMatrix, biases: TArray)
+  type TLayerArray = Array<TLayer>
+
+  type Net(layers: TLayerArray)
+
+  pure TLayer(TMatrix, TArray) -> TLayer = (w, b) { this(w, b) }
+  pure Net(TLayerArray) -> Net = (l) { this(l) }
+  pure Net() -> Net = () { Net(TLayerArray()) }
+
+  -- Append a layer with the given weights and biases. Users build Nets
+  -- by chaining pushLayer calls, since TLayer itself isn't emitted.
+  pure Net.pushLayer(TMatrix, TArray) -> Net = (weights, biases) {
+    Net(this.layers.push(TLayer(weights, biases)))
+  }
+
+  -- Forward through one layer: z_j = bias[j] + Σ compose(W[j][i], x[i]),
+  -- a_j = activate(z_j). Bias seeds the aggregate so the signature
+  -- doesn't need a `zero` primitive.
+  pure TLayer.forward(TArray) -> TArray = (input) {
+    let out = TArray()
+    let j = 0
+    let outDim = this.weights.length()
+    while {j < outDim} do {
+      let row = this.weights[j]
+      let inDim = row.length()
+      let acc = this.biases[j]
+      let i = 0
+      while {i < inDim} do {
+        acc = acc.aggregate(row[i].compose(input[i]))
+        i = i + 1
+      }
+      out = out.push(acc.activate())
+      j = j + 1
+    }
+    out
+  }
+
+  pure Net.forward(TArray) -> TArray = (x) {
+    let a = x
+    let i = 0
+    let n = this.layers.length()
+    while {i < n} do {
+      a = this.layers[i].forward(a)
+      i = i + 1
+    }
+    a
+  }
+
+  -- Algebraic training step. For each output j:
+  --   err_j = output_j.error(target_j)          -- what to compose to reach target
+  -- For each weight W[l][j][i] with input x = acts[l][i]:
+  --   new_W_target = W.compose(x).compose(err_j).compose(x.invert())
+  --   W <- W.interp(new_W_target, lr)
+  -- Bias shifts multiplicatively: b <- b.interp(b.compose(err_j), lr).
+  -- Error propagates backward: err_prev_i = aggregate_j(W[j][i].invert().compose(err_j)).
+  -- Activation derivative is approximated as identity — fine for small lr.
+  pure Net.trainStep(TArray, TArray, float) -> Net = (input, target, lr) {
+    -- Forward, saving the input to each layer at acts[l].
+    let acts = TMatrix()
+    acts = acts.push(input)
+    let a = input
+    let li = 0
+    let nLayers = this.layers.length()
+    while {li < nLayers} do {
+      a = this.layers[li].forward(a)
+      acts = acts.push(a)
+      li = li + 1
+    }
+
+    -- Output-layer error.
+    let output = acts[nLayers]
+    let err = TArray()
+    let k = 0
+    let oD0 = output.length()
+    while {k < oD0} do {
+      err = err.push(output[k].error(target[k]))
+      k = k + 1
+    }
+
+    -- Backward sweep: build reversed list of updated layers.
+    let newLayersRev = TLayerArray()
+    let idx = nLayers - 1
+    while {idx >= 0} do {
+      let layer = this.layers[idx]
+      let layerInput = acts[idx]
+      let oDim = layer.weights.length()
+      let iDim = layerInput.length()
+
+      -- Weight update.
+      let newWeights = TMatrix()
+      let j = 0
+      while {j < oDim} do {
+        let row = layer.weights[j]
+        let newRow = TArray()
+        let i = 0
+        while {i < iDim} do {
+          let w = row[i]
+          let x = layerInput[i]
+          let contribution = w.compose(x)
+          let newContribution = contribution.compose(err[j])
+          let newWTarget = newContribution.compose(x.invert())
+          newRow = newRow.push(w.interp(newWTarget, lr))
+          i = i + 1
+        }
+        newWeights = newWeights.push(newRow)
+        j = j + 1
+      }
+
+      -- Bias update.
+      let newBiases = TArray()
+      let bj = 0
+      while {bj < oDim} do {
+        let b = layer.biases[bj]
+        newBiases = newBiases.push(b.interp(b.compose(err[bj]), lr))
+        bj = bj + 1
+      }
+
+      -- Propagate error to the previous layer.
+      match
+      | idx > 0 -> {
+          let prevErr = TArray()
+          let ii = 0
+          while {ii < iDim} do {
+            let e = layer.weights[0][ii].invert().compose(err[0])
+            let jj = 1
+            while {jj < oDim} do {
+              e = e.aggregate(layer.weights[jj][ii].invert().compose(err[jj]))
+              jj = jj + 1
+            }
+            prevErr = prevErr.push(e)
+            ii = ii + 1
+          }
+          err = prevErr
+        }
+      | _ -> { 0 }
+
+      newLayersRev = newLayersRev.push(TLayer(newWeights, newBiases))
+      idx = idx - 1
+    }
+
+    Net(newLayersRev.reverse())
+  }
+
+  emit Net
+}

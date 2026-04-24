@@ -6,7 +6,6 @@
 
 import numerics.rational
 import Ordering
-import String (show)
 
 type Vec3(x: Rational, y: Rational, z: Rational)
 

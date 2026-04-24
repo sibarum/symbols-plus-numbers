@@ -447,8 +447,9 @@ public class EditorWindow {
         // Provide host resources so an inline `guiRun` call can open the
         // GUI window (sharing this editor's GL context) without returning
         // to Java-land first — otherwise the enclosing stateful block
-        // body would finish before the loop starts.
-        guiState.setHostResources(font, handle,
+        // body would finish before the loop starts. GuiHost loads its
+        // own per-run fonts, so we don't hand over the editor's.
+        guiState.setHostResources(handle,
                 () -> canvasActive = true,
                 () -> { canvasActive = false; makeCurrent(); });
         try {
@@ -497,7 +498,7 @@ public class EditorWindow {
             if (canvasState.isCanvasRequested()) {
                 spn.canvas.CanvasWindow cw = new spn.canvas.CanvasWindow();
                 canvasActive = true;
-                cw.open(canvasState.getWidth(), canvasState.getHeight(), handle, font);
+                cw.open(canvasState.getWidth(), canvasState.getHeight(), handle);
                 try {
                     if (canvasState.getAnimateCallback() != null) {
                         cw.showAnimated(canvasState.getAnimateFps(),
@@ -544,7 +545,7 @@ public class EditorWindow {
         spn.canvas.CanvasState.set(canvasState);
         spn.canvasgui.spn.GuiSpnState guiState = new spn.canvasgui.spn.GuiSpnState();
         spn.canvasgui.spn.GuiSpnState.set(guiState);
-        guiState.setHostResources(font, handle,
+        guiState.setHostResources(handle,
                 () -> canvasActive = true,
                 () -> { canvasActive = false; makeCurrent(); });
         spn.trace.TraceRecorder recorder = spn.trace.TraceRecorder.begin();
@@ -571,7 +572,7 @@ public class EditorWindow {
             if (canvasState.isCanvasRequested()) {
                 spn.canvas.CanvasWindow cw = new spn.canvas.CanvasWindow();
                 canvasActive = true;
-                cw.open(canvasState.getWidth(), canvasState.getHeight(), handle, font);
+                cw.open(canvasState.getWidth(), canvasState.getHeight(), handle);
                 try {
                     if (canvasState.getAnimateCallback() != null) {
                         cw.showAnimated(canvasState.getAnimateFps(),

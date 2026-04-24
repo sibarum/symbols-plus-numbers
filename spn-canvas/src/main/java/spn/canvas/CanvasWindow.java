@@ -25,15 +25,19 @@ public final class CanvasWindow {
     /**
      * Creates and shows the canvas window.
      *
+     * <p>The window owns its own {@link SdfFontRenderer}, loaded from the
+     * bundled mono family in the new GL context and disposed in {@link
+     * #close()}. This keeps all per-run font state (atlas, VAO, glyph cache)
+     * scoped to this window's lifetime — no sharing with the IDE or with
+     * prior runs.
+     *
      * @param width       canvas width in pixels
      * @param height      canvas height in pixels
      * @param shareWith   GLFW window handle to share GL context with, or NULL
-     * @param font        shared font renderer for text commands (may be null)
      */
-    public void open(int width, int height, long shareWith, SdfFontRenderer font) {
+    public void open(int width, int height, long shareWith) {
         this.width = width;
         this.height = height;
-        this.font = font;
 
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
@@ -54,6 +58,10 @@ public final class CanvasWindow {
 
         renderer = new CanvasRenderer();
         renderer.init();
+
+        // Fresh font per window — GL resources (atlas, VAO, program) live
+        // in this context and die with it in close().
+        font = SdfFontRenderer.loadBundled("fonts/mono/ubuntusansmono-regular.ttf", 64f);
 
         glfwShowWindow(handle);
     }
@@ -132,6 +140,7 @@ public final class CanvasWindow {
     }
 
     public void close() {
+        if (font != null) { font.dispose(); font = null; }
         if (renderer != null) renderer.dispose();
         if (handle != NULL) glfwDestroyWindow(handle);
         handle = NULL;

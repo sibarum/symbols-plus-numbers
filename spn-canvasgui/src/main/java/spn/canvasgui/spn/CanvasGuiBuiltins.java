@@ -56,6 +56,7 @@ public final class CanvasGuiBuiltins {
         builder.function("guiDial",   buildDialCallTarget(guiCmdType));
         builder.function("guiTabs",   buildTabsCallTarget(guiCmdType));
         builder.function("guiScrollable", buildScrollableCallTarget(guiCmdType));
+        builder.function("guiCanvas", buildCanvasCallTarget(guiCmdType));
 
         // Return-type descriptors — the parser uses these to track that
         // `guiButton(...)` evaluates to a GuiCmd, which enables `.on(...)`
@@ -100,6 +101,11 @@ public final class CanvasGuiBuiltins {
                 .returns(guiCmdType).build());
         descriptors.put("guiScrollable", SpnFunctionDescriptor.pure("guiScrollable")
                 .param("child", guiCmdType)
+                .returns(guiCmdType).build());
+        descriptors.put("guiCanvas", SpnFunctionDescriptor.pure("guiCanvas")
+                .param("w", FieldType.LONG)
+                .param("h", FieldType.LONG)
+                .param("cmds", FieldType.ofArray(FieldType.UNTYPED))
                 .returns(guiCmdType).build());
         builder.extra("descriptors", descriptors);
 
@@ -534,6 +540,24 @@ public final class CanvasGuiBuiltins {
                 SpnReadLocalVariableNodeGen.create(sChild));
         return new SpnFunctionRootNode(null, fdb.build(), desc,
                 new int[]{sChild}, body).getCallTarget();
+    }
+
+    private static CallTarget buildCanvasCallTarget(FieldType guiCmdType) {
+        var fdb = FrameDescriptor.newBuilder();
+        int sW = fdb.addSlot(FrameSlotKind.Object, "w", null);
+        int sH = fdb.addSlot(FrameSlotKind.Object, "h", null);
+        int sCmds = fdb.addSlot(FrameSlotKind.Object, "cmds", null);
+        var desc = SpnFunctionDescriptor.pure("guiCanvas")
+                .param("w", FieldType.LONG)
+                .param("h", FieldType.LONG)
+                .param("cmds", FieldType.ofArray(FieldType.UNTYPED))
+                .returns(guiCmdType).build();
+        SpnExpressionNode body = SpnCmdCanvasNodeGen.create(
+                SpnReadLocalVariableNodeGen.create(sW),
+                SpnReadLocalVariableNodeGen.create(sH),
+                SpnReadLocalVariableNodeGen.create(sCmds));
+        return new SpnFunctionRootNode(null, fdb.build(), desc,
+                new int[]{sW, sH, sCmds}, body).getCallTarget();
     }
 
     private static CallTarget buildMaskCallTarget(FieldType guiCmdType) {

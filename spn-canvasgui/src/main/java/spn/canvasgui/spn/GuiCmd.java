@@ -146,6 +146,21 @@ public sealed interface GuiCmd {
         }
     }
 
+    /**
+     * Fixed-size surface that renders raw spn-canvas Cmd* values (CmdLine,
+     * CmdCircle, ...) inside a canvasgui layout. The cmds list holds the
+     * SPN struct values as-is; the Canvas widget translates them to
+     * {@link spn.canvas.DrawCommand} at paint time.
+     */
+    record Canvas(int w, int h, List<Object> cmds,
+                  Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
+        public Canvas(int w, int h, List<Object> cmds) { this(w, h, cmds, Map.of()); }
+        @Override
+        public GuiCmd withHandler(SpnSymbol event, CallTarget handler) {
+            return new Canvas(w, h, cmds, merge(handlers, event, handler));
+        }
+    }
+
     record Mask(GuiCmd child, float widthRem, float heightRem,
                 Map<SpnSymbol, CallTarget> handlers) implements GuiCmd {
         public Mask(GuiCmd child, float w, float h) { this(child, w, h, Map.of()); }

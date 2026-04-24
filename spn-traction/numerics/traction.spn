@@ -1,10 +1,34 @@
+import numerics.vector2
+import Math (abs, sign, max, bitWidth, shr, shl)
+
 -------------------------------------------------
 type Traction(num: int, denom: int)
 
+-- Bit-budget normalization: after any construction, if either component
+-- exceeds 30 significant bits, right-shift both by the minimum amount
+-- needed so the largest fits in 30 bits. Signs on num and denom are
+-- preserved independently — Traction does NOT sign-migrate like Rational,
+-- since operations like `*_ndot` legitimately produce (24, -7) etc. where
+-- the sign of denom carries quadrant information.
+--
+-- The 30-bit budget keeps products of two Tractions at ≤ 60 bits, well
+-- under the 63-bit signed-long headroom, so the arithmetic chain never
+-- overflows. Long animation loops (quaternion composition per frame)
+-- trade exact-rational purity for bounded magnitude — the cube stays
+-- rotating smoothly indefinitely instead of overflowing after a few
+-- thousand frames.
 pure Traction(int, int) -> Traction = (num, denom) {
-  match (num, denom)
-  | (a,b) | a == b -> this(1,1)
-  | _ -> this(num, denom)
+  let maxB = max(bitWidth(abs(num)), bitWidth(abs(denom)))
+  let k = max(0, maxB - 30)
+  match
+  | k == 0 -> this(num, denom)
+  | _ -> {
+      -- Round-to-nearest on magnitude; re-apply sign.
+      let half = shl(1, k - 1)
+      let nAbs = shr(abs(num) + half, k)
+      let dAbs = shr(abs(denom) + half, k)
+      this(sign(num) * nAbs, sign(denom) * dAbs)
+    }
 }
 
 pure +(Traction, Traction) -> Traction = ((n1,d1), (n2,d2)) {
@@ -15,10 +39,28 @@ pure *(Traction, Traction) -> Traction = ((n1,d1), (n2,d2)) {
   Traction(n1*n2, d1*d2)
 }
 
+pure *_dot(Traction, Traction) -> int = ((n1,d1), (n2,d2)) {
+  d1*d2 + n1*n2
+}
+
+pure *_wedge(Traction, Traction) -> int = ((n1,d1), (n2,d2)) {
+  d1*n2 - n1*d2
+}
+
+-- Dot product with second operand conjugated: t1 *_dot t2.conj()
+-- Equivalently: real part of complex product (d1+n1·i)(d2+n2·i)
+pure *_ndot(Traction, Traction) -> int = ((n1,d1), (n2,d2)) {
+  d1*d2 - n1*n2
+}
+
+-- Wedge product with second operand conjugated: t1 *_wedge t2.conj()  
+-- Equivalently: imaginary part of complex product (d1+n1·i)(d2+n2·i)
+pure *_nwedge(Traction, Traction) -> int = ((n1,d1), (n2,d2)) {
+  d1*n2 + n1*d2
+}
+
 pure Traction.neg() -> Traction = () {
-  match this
-  | Traction(0,_) -> Traction(0, -this.denom)
-  | _ -> Traction(-this.num, this.denom)
+  Traction(-this.num, -this.denom)
 }
 
 pure -(Traction, Traction) -> Traction = (t1, t2) {
@@ -33,24 +75,123 @@ pure /(Traction, Traction) -> Traction = (t1, t2) {
   t1 * t2.inv()
 }
 
+pure Traction.conj() -> Traction = () {
+  Traction(-this.num, this.denom)
+}
+
 ---------------------------------------------------------
 type TractionComplex(scale: Traction, tangent: Traction)
 
 pure TractionComplex() -> TractionComplex = () {
-  this(Traction(1,1), Traction(1,0))
+  this(Traction(1,1), Traction(0,1))
 }
 
 pure TractionComplex(Traction, Traction) -> TractionComplex = (t1, t2) {
   this(t1, t2)
 }
 
+const TractionComplex.i = TractionComplex(Traction(1,1), Traction(1,0))
+
 pure TractionComplex(int, int, int) -> TractionComplex = (a, b, c) {
   this(Traction(1, c), Traction(b, a))
 }
 
-pure *_dot(TractionComplex, TractionComplex) -> TractionComplex = ((s1,t1), (s2,t2)) {
-  
+pure TractionComplex.neg() -> TractionComplex = () {
+  TractionComplex(Traction(-this.scale.num, this.scale.denom), this.tangent)
 }
 
---
+pure /(TractionComplex, TractionComplex) -> TractionComplex = ((s1,t1), (s2,t2)) {
+  TractionComplex(s1 * s2, Traction(t1 *_wedge t2, t1 *_dot t2))
+}
+
+pure *(TractionComplex, TractionComplex) -> TractionComplex = ((s1,t1), (s2,t2)) {
+  TractionComplex(s1 * s2, Traction(t1 *_nwedge t2, t1 *_ndot t2))
+}
+
+pure +(TractionComplex, TractionComplex) -> TractionComplex = ((s1, t1), (s2, t2)) {
+  let (a, b) = s1
+  let (c, d) = s2
+  let (n1, d1) = t1
+  let (n2, d2) = t2
+  TractionComplex(
+    Traction(1, b*d),
+    Traction(a*d*n1 + c*b*n2, a*d*d1 + c*b*d2)
+  )
+}
+
+pure -(TractionComplex, TractionComplex) -> TractionComplex = (tc1, tc2) {
+  tc1 + tc2.neg()
+}
+
+pure TractionComplex.cart() -> Vector2 = () {
+  let (a, b) = this.scale
+  let (n, d) = this.tangent
+  Vector2(Rational(a*d, b), Rational(a*n, b))
+}
+
+pure *_dot(TractionComplex, TractionComplex) -> Traction = ((s1,t1), (s2,t2)) {
+  Traction(s1.num * s2.num * (t1 *_dot t2), s1.denom * s2.denom)
+}
+
+pure *_wedge(TractionComplex, TractionComplex) -> Traction = ((s1,t1), (s2,t2)) {
+  Traction(s1.num * s2.num * (t1 *_wedge t2), s1.denom * s2.denom)
+}
+
+pure TractionComplex.conj() -> TractionComplex = () {
+  TractionComplex(this.scale, this.tangent.conj())
+}
+
+pure TractionComplex.norm_sq() -> Traction = () {
+  let (n, d) = this.tangent
+  let (a, b) = this.scale
+  -- Vector is (a/b)·⟨d, n⟩, magnitude squared is (a/b)²·(d² + n²)
+  Traction(a*a * (d*d + n*n), b*b)
+}
+
+----------------------------------------
+type TractionQuaternion(real: TractionComplex, imag: TractionComplex)
+
+-- Default: multiplicative identity (1 + 0i + 0j + 0k)
+pure TractionQuaternion() -> TractionQuaternion = () {
+  this(
+    TractionComplex(Traction(1,1), Traction(0,1)),  -- real part = 1
+    TractionComplex(Traction(0,1), Traction(0,1))   -- imag part = 0
+  )
+}
+pure TractionQuaternion.conj() -> TractionQuaternion = () {
+  TractionQuaternion(this.real.conj(), this.imag.neg())
+}
+
+pure TractionQuaternion(TractionComplex, TractionComplex) -> TractionQuaternion 
+  = (r, i) { this(r, i) }
+
+pure *(TractionQuaternion, TractionQuaternion) -> TractionQuaternion = ((a,b), (c,d)) {
+  TractionQuaternion(a * c - d.conj() * b, d * a + b * c.conj())
+}
+
+pure +(TractionQuaternion, TractionQuaternion) -> TractionQuaternion = ((a,b), (c,d)) {
+  TractionQuaternion(a + c, b + d)
+}
+pure TractionQuaternion.neg() -> TractionQuaternion = () {
+  TractionQuaternion(this.real.neg(), this.imag.neg())
+}
+
+pure -(TractionQuaternion, TractionQuaternion) -> TractionQuaternion = (q1, q2) {
+  q1 + q2.neg()
+}
+
+pure TractionQuaternion.norm_sq() -> Traction = () {
+  this.real.norm_sq() + this.imag.norm_sq()
+}
+
+pure TractionQuaternion.inv() -> TractionQuaternion = () {
+  let n_sq = this.norm_sq()
+  let conj = this.conj()
+  -- Divide each TractionComplex by the scalar n_sq
+  -- (Scalar division of TractionComplex: multiply scale by n_sq.inv())
+  TractionQuaternion(
+    TractionComplex(conj.real.scale * n_sq.inv(), conj.real.tangent),
+    TractionComplex(conj.imag.scale * n_sq.inv(), conj.imag.tangent)
+  )
+}
 

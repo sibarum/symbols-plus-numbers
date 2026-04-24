@@ -1,24 +1,26 @@
 -- ═══════════════════════════════════════════════════════════════════════
 -- Phase-Valued Factorization — finite-differences SGD training
 -- ═══════════════════════════════════════════════════════════════════════
--- Classical gradient descent over the TComplex network's weights. The
--- network is tiny (9 weights for a 3→3 single layer), so we use numerical
--- (central-difference) gradients rather than analytic backprop. This
--- sidesteps writing the chain rule through the Rational substrate — we
--- just perturb each weight, forward-pass, and read off ∂loss/∂param.
+-- Classical gradient descent over the quaternion network's weights. The
+-- network is small (9 weights for a 3→3 single layer × 4 components = 36
+-- scalars), so we use numerical (central-difference) gradients rather
+-- than analytic backprop — this sidesteps writing the chain rule through
+-- the Hamilton product and the renormalization step.
 --
 -- Loss is phase disagreement against the target exponent encoding:
 --   L = (1/N) · Σ (1 − cos(θ_pred − θ_target))
--- which is smooth, zero on perfect alignment, and bounded in [0, 2].
+-- θ is the phase of the real TractionComplex half (argOf). The imag
+-- half of each output quaternion is not in the loss; it floats free
+-- during training and provides representational capacity.
 --
--- Weights are perturbed in cartesian (re, im) space rather than polar
--- because Rational↔float round-trips through floatToRational are smoother
--- for additive updates than multiplicative rotation steps.
+-- Weights are perturbed in cartesian (w, x, y, z) space — each weight
+-- contributes four partial derivatives, so each step does 8 forward
+-- passes per weight (2× the TComplex version).
 -- ═══════════════════════════════════════════════════════════════════════
 
 import factor.network
 import numerics.rational
-import numerics.tcomplex
+import numerics.traction
 import Math (cos, toFloat)
 import Array (length)
 
@@ -34,11 +36,12 @@ pure trueExp(int, int) -> int = (n, p) {
 }
 
 -- ── Target construction ─────────────────────────────────────────────────
--- For integer N and prime bank ps, produce a ComplexVec of target phases
--- matching the true factorization, with each exponent mapped to its
--- class on the unit circle. Exponents larger than maxExp wrap mod maxExp.
-pure targetsFor(int, IntVec, int) -> ComplexVec = (n, ps, maxExp) {
-  let out = ComplexVec()
+-- For integer N and prime bank ps, produce a QuatVec of target quaternions
+-- matching the true factorization, each exponent mapped to its class on
+-- the unit circle in the real-half plane. Exponents larger than maxExp
+-- wrap mod maxExp.
+pure targetsFor(int, IntVec, int) -> QuatVec = (n, ps, maxExp) {
+  let out = QuatVec()
   let i = 0
   let k = ps.length()
   while {i < k} do {
@@ -53,9 +56,12 @@ pure targetsFor(int, IntVec, int) -> ComplexVec = (n, ps, maxExp) {
 }
 
 -- ── Loss ────────────────────────────────────────────────────────────────
--- Mean phase disagreement across output neurons. Zero iff every output
--- phase matches its target; maxes out at 2.0 when all are π out of phase.
-pure phaseLoss(ComplexVec, ComplexVec) -> float = (preds, tgts) {
+-- Mean phase disagreement across output neurons. Zero iff every output's
+-- real-half phase matches its target; maxes at 2.0 when all are π out
+-- of phase. The imag-half of each prediction is intentionally ignored
+-- — loss pressure only reaches it through the Hamilton product, giving
+-- the training dynamics extra slack to explore 4D rotations.
+pure phaseLoss(QuatVec, QuatVec) -> float = (preds, tgts) {
   let total = 0.0
   let i = 0
   let k = preds.length()
@@ -68,15 +74,13 @@ pure phaseLoss(ComplexVec, ComplexVec) -> float = (preds, tgts) {
   total / toFloat(k)
 }
 
--- Loss on a single (N, targets) pair.
 pure exampleLoss(PNetwork, IntVec, int, int) -> float = (net, ps, n, maxExp) {
   let features = encodeInput(n, ps)
-  let outputs = forwardC(net, features)
+  let outputs = forwardQ(net, features)
   let targets = targetsFor(n, ps, maxExp)
   phaseLoss(outputs, targets)
 }
 
--- Total loss averaged across N ∈ [startN, endN).
 pure totalLoss(PNetwork, IntVec, int, int, int) -> float
     = (net, ps, maxExp, startN, endN) {
   let total = 0.0
@@ -89,11 +93,9 @@ pure totalLoss(PNetwork, IntVec, int, int, int) -> float
 }
 
 -- ── Immutable weight replacement ────────────────────────────────────────
--- Rebuild a typed collection with one element replaced at `idx`. The
--- network types are immutable, so every gradient step allocates a new
--- weight matrix. Cheap at this scale (9 weights, one layer).
-pure setComplexVec(ComplexVec, int, TComplex) -> ComplexVec = (vec, idx, val) {
-  let out = ComplexVec()
+pure setQuatVec(QuatVec, int, TractionQuaternion) -> QuatVec
+    = (vec, idx, val) {
+  let out = QuatVec()
   let i = 0
   let n = vec.length()
   while {i < n} do {
@@ -105,8 +107,8 @@ pure setComplexVec(ComplexVec, int, TComplex) -> ComplexVec = (vec, idx, val) {
   out
 }
 
-pure setComplexMat(ComplexMat, int, ComplexVec) -> ComplexMat = (mat, idx, row) {
-  let out = ComplexMat()
+pure setQuatMat(QuatMat, int, QuatVec) -> QuatMat = (mat, idx, row) {
+  let out = QuatMat()
   let i = 0
   let n = mat.length()
   while {i < n} do {
@@ -118,61 +120,75 @@ pure setComplexMat(ComplexMat, int, ComplexVec) -> ComplexMat = (mat, idx, row) 
   out
 }
 
-pure replaceWeight(PNetwork, int, int, TComplex) -> PNetwork
+pure replaceWeight(PNetwork, int, int, TractionQuaternion) -> PNetwork
     = (net, outIdx, inIdx, newW) {
   -- Single-layer assumption: update layers[0].weights[outIdx][inIdx].
   let layer = net.layers[0]
   let row = layer.weights[outIdx]
-  let newRow = setComplexVec(row, inIdx, newW)
-  let newWeights = setComplexMat(layer.weights, outIdx, newRow)
+  let newRow = setQuatVec(row, inIdx, newW)
+  let newWeights = setQuatMat(layer.weights, outIdx, newRow)
   let newLayer = PLayer(newWeights, layer.biases)
   PNetwork(PLayerArray(newLayer))
 }
 
 -- ── Numerical gradient ──────────────────────────────────────────────────
--- Central differences in cartesian space. Returns (∂L/∂re, ∂L/∂im) for
--- the weight at (outIdx, inIdx). Two forward passes per component, four
--- total per weight — cheap enough for a 9-weight network.
-pure cartesianOf(TComplex) -> (float, float) = (z) {
-  let (re, im) = z.toCartesian()
-  (ratToFloat(re), ratToFloat(im))
-}
-
-pure weightFromCartesian(float, float) -> TComplex = (re, im) {
-  fromCartesian(floatToRational(re), floatToRational(im))
-}
-
+-- Central differences in 4D cartesian space. Returns (∂L/∂w, ∂L/∂x,
+-- ∂L/∂y, ∂L/∂z) for the weight at (outIdx, inIdx). Two forward passes
+-- per component, eight total per weight.
 pure weightGrad(PNetwork, int, int, IntVec, int, int, int, float)
-    -> (float, float)
+    -> (float, float, float, float)
     = (net, outIdx, inIdx, ps, maxExp, startN, endN, eps) {
-  let w = net.layers[0].weights[outIdx][inIdx]
-  let (reF, imF) = cartesianOf(w)
+  let w0 = net.layers[0].weights[outIdx][inIdx]
+  let (wF, xF, yF, zF) = cartesianOf(w0)
 
-  let netRePos = replaceWeight(net, outIdx, inIdx,
-                               weightFromCartesian(reF + eps, imF))
-  let netReNeg = replaceWeight(net, outIdx, inIdx,
-                               weightFromCartesian(reF - eps, imF))
-  let lossRePos = totalLoss(netRePos, ps, maxExp, startN, endN)
-  let lossReNeg = totalLoss(netReNeg, ps, maxExp, startN, endN)
-  let gRe = (lossRePos - lossReNeg) / (2.0 * eps)
+  let l1p = totalLoss(
+    replaceWeight(net, outIdx, inIdx,
+                  quatFromCart4(wF + eps, xF, yF, zF)),
+    ps, maxExp, startN, endN)
+  let l1n = totalLoss(
+    replaceWeight(net, outIdx, inIdx,
+                  quatFromCart4(wF - eps, xF, yF, zF)),
+    ps, maxExp, startN, endN)
+  let gW = (l1p - l1n) / (2.0 * eps)
 
-  let netImPos = replaceWeight(net, outIdx, inIdx,
-                               weightFromCartesian(reF, imF + eps))
-  let netImNeg = replaceWeight(net, outIdx, inIdx,
-                               weightFromCartesian(reF, imF - eps))
-  let lossImPos = totalLoss(netImPos, ps, maxExp, startN, endN)
-  let lossImNeg = totalLoss(netImNeg, ps, maxExp, startN, endN)
-  let gIm = (lossImPos - lossImNeg) / (2.0 * eps)
+  let l2p = totalLoss(
+    replaceWeight(net, outIdx, inIdx,
+                  quatFromCart4(wF, xF + eps, yF, zF)),
+    ps, maxExp, startN, endN)
+  let l2n = totalLoss(
+    replaceWeight(net, outIdx, inIdx,
+                  quatFromCart4(wF, xF - eps, yF, zF)),
+    ps, maxExp, startN, endN)
+  let gX = (l2p - l2n) / (2.0 * eps)
 
-  (gRe, gIm)
+  let l3p = totalLoss(
+    replaceWeight(net, outIdx, inIdx,
+                  quatFromCart4(wF, xF, yF + eps, zF)),
+    ps, maxExp, startN, endN)
+  let l3n = totalLoss(
+    replaceWeight(net, outIdx, inIdx,
+                  quatFromCart4(wF, xF, yF - eps, zF)),
+    ps, maxExp, startN, endN)
+  let gY = (l3p - l3n) / (2.0 * eps)
+
+  let l4p = totalLoss(
+    replaceWeight(net, outIdx, inIdx,
+                  quatFromCart4(wF, xF, yF, zF + eps)),
+    ps, maxExp, startN, endN)
+  let l4n = totalLoss(
+    replaceWeight(net, outIdx, inIdx,
+                  quatFromCart4(wF, xF, yF, zF - eps)),
+    ps, maxExp, startN, endN)
+  let gZ = (l4p - l4n) / (2.0 * eps)
+
+  (gW, gX, gY, gZ)
 }
 
 -- ── SGD step ────────────────────────────────────────────────────────────
--- Sweep every weight once per epoch: compute its gradient, apply the
--- update, fold the new network through to the next weight. Because each
--- gradient is computed on the CURRENT network (not a frozen snapshot),
--- this is coordinate descent rather than true simultaneous SGD — fine
--- for a tiny network and simpler to implement.
+-- Sweep every weight once per epoch. Each gradient is computed on the
+-- CURRENT network (not a frozen snapshot), so this is coordinate descent
+-- rather than true simultaneous SGD — fine for a tiny network and
+-- simpler to implement.
 pure gradientStep(PNetwork, IntVec, int, int, int, float, float) -> PNetwork
     = (net, ps, maxExp, startN, endN, eps, lr) {
   let cur = net
@@ -182,10 +198,12 @@ pure gradientStep(PNetwork, IntVec, int, int, int, float, float) -> PNetwork
     let inDim = cur.layers[0].weights[i].length()
     let j = 0
     while {j < inDim} do {
-      let (gRe, gIm) = weightGrad(cur, i, j, ps, maxExp, startN, endN, eps)
-      let w = cur.layers[0].weights[i][j]
-      let (reF, imF) = cartesianOf(w)
-      let newW = weightFromCartesian(reF - lr * gRe, imF - lr * gIm)
+      let (gW, gX, gY, gZ) =
+        weightGrad(cur, i, j, ps, maxExp, startN, endN, eps)
+      let w0 = cur.layers[0].weights[i][j]
+      let (wF, xF, yF, zF) = cartesianOf(w0)
+      let newW = quatFromCart4(
+        wF - lr * gW, xF - lr * gX, yF - lr * gY, zF - lr * gZ)
       cur = replaceWeight(cur, i, j, newW)
       j = j + 1
     }
@@ -195,7 +213,6 @@ pure gradientStep(PNetwork, IntVec, int, int, int, float, float) -> PNetwork
 }
 
 -- ── Training loop ───────────────────────────────────────────────────────
--- Run `epochs` full gradient passes. Returns the trained network.
 pure train(PNetwork, IntVec, int, int, int, int, float, float) -> PNetwork
     = (net, ps, maxExp, startN, endN, epochs, eps, lr) {
   let cur = net

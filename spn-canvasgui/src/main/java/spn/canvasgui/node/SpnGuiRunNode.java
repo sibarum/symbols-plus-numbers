@@ -25,16 +25,12 @@ public abstract class SpnGuiRunNode extends SpnExpressionNode {
         GuiSpnState state = GuiSpnState.get();
         if (state == null) throw new SpnException("guiRun() called outside gui context", this);
         state.requestRun(fps, renderFn);
-        if (state.font() == null) {
-            throw new SpnException("guiRun() has no host resources — "
-                    + "EditorWindow must populate font/shareWith before invocation", this);
-        }
         // Run the loop INLINE so the enclosing stateful block remains alive
         // while do() closures fire. When the window closes, control returns
         // here, the block body finishes, and the instance is destroyed.
         if (state.onRunEnter() != null) state.onRunEnter().run();
         try {
-            GuiHost.run(state, state.font(), state.shareWith());
+            GuiHost.run(state, state.shareWith());
         } finally {
             if (state.onRunExit() != null) state.onRunExit().run();
         }

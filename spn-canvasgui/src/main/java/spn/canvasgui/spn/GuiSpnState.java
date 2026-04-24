@@ -1,7 +1,6 @@
 package spn.canvasgui.spn;
 
 import com.oracle.truffle.api.CallTarget;
-import spn.fonts.SdfFontRenderer;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -34,23 +33,22 @@ public final class GuiSpnState {
     /** Latest GUI tree submitted via gui_render, picked up after each frame call. */
     private GuiCmd pendingTree;
 
-    // Host-side resources: the shared font renderer + GL context handle that
-    // guiRun uses to open its window. EditorWindow populates these before
-    // running SPN so that guiRun (which runs INLINE and blocks until the
-    // window closes) has everything it needs.
-    private SdfFontRenderer font;
+    // Host-side resources: the shared GL context handle that guiRun uses
+    // to open its window, plus enter/exit callbacks for the IDE to swap
+    // out its own input routing while the GUI loop is running.
+    // EditorWindow populates these before running SPN so that guiRun
+    // (which runs INLINE and blocks until the window closes) has
+    // everything it needs. Fonts are loaded per-run by GuiHost itself.
     private long shareWith;
     private Runnable onRunEnter;
     private Runnable onRunExit;
 
-    public SdfFontRenderer font() { return font; }
     public long shareWith() { return shareWith; }
     public Runnable onRunEnter() { return onRunEnter; }
     public Runnable onRunExit() { return onRunExit; }
 
-    public void setHostResources(SdfFontRenderer font, long shareWith,
+    public void setHostResources(long shareWith,
                                  Runnable onRunEnter, Runnable onRunExit) {
-        this.font = font;
         this.shareWith = shareWith;
         this.onRunEnter = onRunEnter;
         this.onRunExit = onRunExit;

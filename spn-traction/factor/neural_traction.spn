@@ -1,0 +1,139 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- NeuralWeight binding for TractionQuaternion
+-- ═══════════════════════════════════════════════════════════════════════
+-- Forwards each signature method to the underlying Hamilton-product
+-- arithmetic. No new math happens here — this file's job is to name each
+-- NN-level concept (compose, invert, aggregate, ...) on top of the
+-- quaternion operators (*, .inv(), +).
+--
+-- The quaternion substrate has no GCD canonicalization, so integer
+-- coefficients compound multiplicatively through +/*. We renormalize
+-- every arithmetic result by rebuilding from its cartesian projection
+-- at a fixed denominator — trades exact arithmetic for bounded numerics.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import numerics.rational
+import numerics.traction
+import Math (cos, sin, sqrt, round, toFloat)
+
+pure ratDenom() -> int = () { 10000 }
+
+pure ratToFloat(Rational) -> float = ((n, d)) {
+  match d
+  | 0 -> 0.0
+  | _ -> toFloat(n) / toFloat(d)
+}
+
+pure tractionToFloat(Traction) -> float = ((n, d)) {
+  match d
+  | 0 -> 0.0
+  | _ -> toFloat(n) / toFloat(d)
+}
+
+pure tcFromCart(float, float) -> TractionComplex = (re, im) {
+  let denom = ratDenom()
+  let xn = round(re * toFloat(denom))
+  let yn = round(im * toFloat(denom))
+  -- A plain (0, 0) cart builds scale=(1, denom) with tangent=(0, 0),
+  -- which is the permissive-zero form — but multiplying a "zero"
+  -- quaternion whose imag half is in this shape against anything non-zero
+  -- interacts badly with the Cayley-Dickson formula (scale.num=1 leaks
+  -- into the dot-product path). Construct the cleaner explicit-zero form
+  -- instead so q * q' works the same regardless of how q was built.
+  match
+  | xn == 0 && yn == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
+  | _ -> TractionComplex(Traction(1, denom), Traction(yn, xn))
+}
+
+pure quatFromCart4(float, float, float, float) -> TractionQuaternion
+    = (w, x, y, z) {
+  TractionQuaternion(tcFromCart(w, x), tcFromCart(y, z))
+}
+
+pure cartesianOf(TractionQuaternion) -> (float, float, float, float) = (q) {
+  let r = q.real.cart()
+  let i = q.imag.cart()
+  (ratToFloat(r.0), ratToFloat(r.1), ratToFloat(i.0), ratToFloat(i.1))
+}
+
+-- Rebuild a quaternion from its cartesian projection so Traction
+-- denominators never balloon past long range across repeated ops.
+pure renormalize(TractionQuaternion) -> TractionQuaternion = (q) {
+  let (w, x, y, z) = cartesianOf(q)
+  quatFromCart4(w, x, y, z)
+}
+
+pure magnitudeFloat(TractionQuaternion) -> float = (q) {
+  sqrt(tractionToFloat(q.norm_sq()))
+}
+
+pure bump01(float) -> float = (x) {
+  let absX = match | x < 0.0 -> -x | _ -> x
+  let raw = -cos(absX * 3.141592653589793)
+  match
+  | raw < 0.0 -> 0.0
+  | raw > 1.0 -> 1.0
+  | _         -> raw
+}
+
+-- ── NeuralWeight methods ────────────────────────────────────────────────
+
+pure TractionQuaternion.compose(TractionQuaternion) -> TractionQuaternion
+    = (other) {
+  renormalize(this * other)
+}
+
+-- Compute the inverse in cartesian space rather than calling
+-- TractionQuaternion.inv(), whose exact formula multiplies Traction
+-- denominators into the 10^20 range on a bounded input — Truffle's
+-- overflow-to-double rewrite then poisons downstream Traction(int, int)
+-- calls. For q = (w, x, y, z), q⁻¹ = (w, -x, -y, -z) / |q|².
+pure TractionQuaternion.invert() -> TractionQuaternion = () {
+  let (w, x, y, z) = cartesianOf(this)
+  let n2 = w*w + x*x + y*y + z*z
+  match
+  | n2 < 0.000000000001 -> this
+  | _ -> {
+      let s = 1.0 / n2
+      quatFromCart4(w * s, -x * s, -y * s, -z * s)
+    }
+}
+
+pure TractionQuaternion.aggregate(TractionQuaternion) -> TractionQuaternion
+    = (other) {
+  renormalize(this + other)
+}
+
+-- Bump activation: rescale to magnitude bump01(|q|), preserving direction.
+pure TractionQuaternion.activate() -> TractionQuaternion = () {
+  let mag = magnitudeFloat(this)
+  let bumped = bump01(mag)
+  match
+  | mag < 0.000000000001 -> this
+  | _ -> {
+      let factor = bumped / mag
+      let (w, x, y, z) = cartesianOf(this)
+      quatFromCart4(w * factor, x * factor, y * factor, z * factor)
+    }
+}
+
+-- The correction element: what composes with `this` to yield `target`.
+-- target = this.compose(err)  ⟹  err = this.invert().compose(target).
+pure TractionQuaternion.error(TractionQuaternion) -> TractionQuaternion
+    = (target) {
+  this.invert().compose(target)
+}
+
+-- Linear interpolation in cartesian space. Simpler than slerp, works
+-- fine for small lr-scaled steps. Renormalize baked in via quatFromCart4.
+pure TractionQuaternion.interp(TractionQuaternion, float) -> TractionQuaternion
+    = (target, t) {
+  let (w1, x1, y1, z1) = cartesianOf(this)
+  let (w2, x2, y2, z2) = cartesianOf(target)
+  quatFromCart4(
+    w1 + t * (w2 - w1),
+    x1 + t * (x2 - x1),
+    y1 + t * (y2 - y1),
+    z1 + t * (z2 - z1)
+  )
+}
