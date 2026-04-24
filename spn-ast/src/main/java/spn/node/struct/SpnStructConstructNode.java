@@ -69,15 +69,24 @@ public final class SpnStructConstructNode extends SpnExpressionNode {
     @ExplodeLoop
     private void validateFields(Object[] values) {
         for (int i = 0; i < fieldTypes.length; i++) {
-            if (!fieldTypes[i].accepts(values[i])) {
-                throw new SpnException(
-                        "Field '" + descriptor.getFields()[i].name()
-                                + "' of " + descriptor.getName()
-                                + " expects " + fieldTypes[i].describe()
-                                + ", got " + spn.language.SpnTypeName.of(values[i])
-                                + " (" + values[i] + ")",
-                        this);
+            if (fieldTypes[i].accepts(values[i])) continue;
+
+            // Implicit numeric widening: Long → Double when the field expects Double.
+            // Matches the same widening done for function arguments in
+            // SpnFunctionRootNode.validateArgs, so `Vector2(a*d / b, a*n / b)`
+            // with long arithmetic transparently fills a (float, float) struct.
+            if (fieldTypes[i] == FieldType.DOUBLE && values[i] instanceof Long l) {
+                values[i] = (double) l;
+                continue;
             }
+
+            throw new SpnException(
+                    "Field '" + descriptor.getFields()[i].name()
+                            + "' of " + descriptor.getName()
+                            + " expects " + fieldTypes[i].describe()
+                            + ", got " + spn.language.SpnTypeName.of(values[i])
+                            + " (" + values[i] + ")",
+                    this);
         }
     }
 }

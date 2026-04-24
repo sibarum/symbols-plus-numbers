@@ -1,6 +1,6 @@
 
 -- ═══════════════════════════════════════════════════════════════════════
--- Quaternion Phase-Valued Factorization Demo
+-- Quaternion Phase-Valued Factorization Demo — algebraic training
 -- ═══════════════════════════════════════════════════════════════════════
 -- Cycles through N = 2..30 and renders:
 --   - the current N and its true factorization
@@ -11,10 +11,11 @@
 --     phase
 --   - the decoded exponent vector below the output column
 --
--- Each output neuron is a full TractionQuaternion. Only the real-half
--- phase is decoded into an exponent class; the imag half is shown as a
--- thin interior needle so the viewer can see the extra 2 quaternion
--- dimensions evolve during training.
+-- Training is algebraic: the per-neuron correction is the T-valued error
+-- between predicted and target quaternions, interp-blended into each
+-- weight. The macro `makeNeuralNet<TractionQuaternion>` provides forward
+-- and trainStep; this file supplies the task (prime factorization),
+-- the rendering, and the training schedule.
 -- ═══════════════════════════════════════════════════════════════════════
 
 import Canvas
@@ -31,7 +32,7 @@ pure seed() -> int = () { 42 }
 pure primes() -> IntVec = () { IntVec(2, 3, 5) }
 pure maxExp() -> int = () { 5 }
 
--- ── True factorization (for display / comparison) ───────────────────────
+-- ── True factorization (for display) ────────────────────────────────────
 pure trueExp(int, int) -> int = (n, p) {
   let count = 0
   let r = n
@@ -72,8 +73,6 @@ pure neuronY(int, int, float) -> float = (idx, total, centerY) {
 }
 
 -- ── Drawing: input dot ──────────────────────────────────────────────────
--- Input is purely real (imag half = 0 in quaternion space), so just a
--- monochrome disk with brightness = activation.
 pure drawInput(float, float, float, float, int) -> Array
     = (fval, x, y, r, prime) {
   let b = 0.25 + 0.65 * fval
@@ -87,9 +86,7 @@ pure drawInput(float, float, float, float, int) -> Array
 }
 
 -- ── Drawing: output dial ────────────────────────────────────────────────
--- Main needle = real-half phase (the decoded quantity).
--- Inner thin needle = imag-half phase (hidden dimension).
--- Body tint = phase color, fade = |q|.
+-- Main needle = real-half phase (decoded). Inner needle = imag-half phase.
 pure drawDial(TractionQuaternion, float, float, float, int, int) -> Array
     = (q, cx, cy, r, prime, maxE) {
   let mag = magnitudeFloat(q)
@@ -102,7 +99,6 @@ pure drawDial(TractionQuaternion, float, float, float, int, int) -> Array
     CmdFill(cr * fade, cg * fade, cb * fade), CmdCircle(cx, cy, r)
   ]
 
-  -- Exponent tick marks around the ring (one per class)
   let ticks = []
   let k = 0
   while {k < maxE} do {
@@ -120,7 +116,6 @@ pure drawDial(TractionQuaternion, float, float, float, int, int) -> Array
   ]
   let withTicks = concat(needle, ticks)
 
-  -- Main needle: real-half phase, length 0.85·r.
   let nx = cx + r * 0.85 * cos(angle)
   let ny = cy - r * 0.85 * sin(angle)
   let mainNeedle = concat(withTicks, [
@@ -128,8 +123,6 @@ pure drawDial(TractionQuaternion, float, float, float, int, int) -> Array
     CmdLine(cx, cy, nx, ny)
   ])
 
-  -- Secondary needle: imag-half phase, length scaled by imag magnitude.
-  -- Thinner and dimmer so the primary reading stays the focus.
   let imagAngle = argOfImag(q)
   let imagMag = imagMagnitudeFloat(q)
   let iMag = match | imagMag > 1.0 -> 1.0 | _ -> imagMag
@@ -150,12 +143,14 @@ pure drawDial(TractionQuaternion, float, float, float, int, int) -> Array
 }
 
 -- ── Drawing: weights as colored lines ───────────────────────────────────
-pure drawWeights(PLayer, int, int, float, float, float) -> Array
-    = (layer, inDim, outDim, centerY, xIn, xOut) {
+-- Takes the weight matrix directly — Layer is an internal macro type,
+-- so the renderer doesn't need to name it.
+pure drawWeights(QMat, int, int, float, float, float) -> Array
+    = (weights, inDim, outDim, centerY, xIn, xOut) {
   let cmds = []
   let j = 0
   while {j < outDim} do {
-    let row = layer.weights[j]
+    let row = weights[j]
     let y2 = neuronY(j, outDim, centerY)
     let i = 0
     while {i < inDim} do {
@@ -176,7 +171,7 @@ pure drawWeights(PLayer, int, int, float, float, float) -> Array
 }
 
 -- ── Prediction string helpers ───────────────────────────────────────────
-pure decodedString(QuatVec, int) -> string = (outputs, maxE) {
+pure decodedString(QVec, int) -> string = (outputs, maxE) {
   let s = "["
   let j = 0
   let m = outputs.length()
@@ -243,47 +238,56 @@ pure epochsForElapsed(float, int) -> int = (elapsed, maxEpochs) {
   | _               -> raw
 }
 
--- Training hyperparameters. Same shape as the TComplex version, but
--- gradients cost twice as much (4 axes × central-diff), so we keep the
--- epoch ceiling modest.
+-- Algebraic training: each step is O(inDim * outDim * constant) instead
+-- of the finite-difference O(4 * inDim * outDim * (2 * outDim * inDim)).
+-- These hyperparameters mirror `PhaseFactorTest.trainingReducesLoss`,
+-- which drives loss from ≈1.158 down to ≈0.324 over 10 epochs on the
+-- N ∈ [2, 6) range with seed 42. The demo keeps a higher maxEpochs
+-- ceiling so the viewer can watch training continue past the verified
+-- point.
 pure trainStartN() -> int = () { 2 }
-pure trainEndN()   -> int = () { 10 }
-pure maxEpochs()   -> int = () { 12 }
-pure gradEps()     -> float = () { 0.05 }
+pure trainEndN()   -> int = () { 6 }
+pure maxEpochs()   -> int = () { 30 }
 pure learnRate()   -> float = () { 0.2 }
+
+-- Build the initial single-layer net from a deterministic seed.
+pure buildInitialNet(int) -> QNet = (k) {
+  QNet().pushLayer(initQWeights(k, k, 0, seed()), initQBiases(k))
+}
 
 action drawFrame(float) -> int = (elapsed) {
   let ps = primes()
   let k = ps.length()
   let mE = maxExp()
 
-  let initialNet = PNetwork(PLayerArray(initPLayer(0, k, k, seed())))
+  let initialNet = buildInitialNet(k)
   let epochs = epochsForElapsed(elapsed, maxEpochs())
   let net = train(initialNet, ps, mE, trainStartN(), trainEndN(),
-                  epochs, gradEps(), learnRate())
+                  epochs, learnRate())
 
   let n = exampleForElapsed(elapsed, 30)
 
   let features = encodeInput(n, ps)
-  let outputs = forwardQ(net, features)
+  let outputs = net.forward(features)
+  let initialLoss = totalLoss(initialNet, ps, mE,
+                              trainStartN(), trainEndN())
   let loss = totalLoss(net, ps, mE, trainStartN(), trainEndN())
 
   let centerY = 380.0
   let cmds = [CmdClear(0.07, 0.08, 0.10)]
 
-  -- Title + live training status
   cmds = concat(cmds, [
     CmdFill(0.92, 0.92, 0.96),
     CmdText(260.0, 40.0,
-      "Quaternion Phase Factorizer — finite-differences SGD", 0.32),
+      "Quaternion Phase Factorizer — algebraic SGD", 0.32),
     CmdFill(0.55, 0.6, 0.68),
     CmdText(260.0, 66.0,
       "epoch " ++ formatNum(epochs) ++ " / " ++ formatNum(maxEpochs())
-        ++ "   training loss = " ++ formatNum(loss),
+        ++ "   loss: " ++ formatNum(initialLoss)
+        ++ "  →  " ++ formatNum(loss),
       0.22)
   ])
 
-  -- Big N + factorization banner
   cmds = concat(cmds, [
     CmdFill(0.88, 0.92, 0.98),
     CmdText(80.0, 130.0,
@@ -291,7 +295,6 @@ action drawFrame(float) -> int = (elapsed) {
             0.48)
   ])
 
-  -- Truth vs. prediction vectors
   cmds = concat(cmds, [
     CmdFill(0.65, 0.75, 0.58),
     CmdText(80.0, 170.0, "truth     " ++ truthString(n, ps), 0.28),
@@ -299,19 +302,15 @@ action drawFrame(float) -> int = (elapsed) {
     CmdText(80.0, 200.0, "predicted " ++ decodedString(outputs, mE), 0.28)
   ])
 
-  -- Column headers
   cmds = concat(cmds, [
     CmdFill(0.6, 0.64, 0.72),
     CmdText(inputX() - 45.0, 260.0, "inputs", 0.24),
     CmdText(outputX() - 30.0, 260.0, "outputs", 0.24)
   ])
 
-  -- Weight edges first (under the nodes)
-  cmds = concat(cmds, drawWeights(net.layers[0], k, k, centerY,
+  cmds = concat(cmds, drawWeights(net.layers[0].weights, k, k, centerY,
                                    inputX(), outputX()))
 
-  -- Input dots (fval recomputed from n / prime rather than unpacked from
-  -- the quaternion — simpler and avoids re-extracting cart components).
   let i = 0
   while {i < k} do {
     let fval = divFeature(n, ps[i])
@@ -320,7 +319,6 @@ action drawFrame(float) -> int = (elapsed) {
     i = i + 1
   }
 
-  -- Output dials
   let j = 0
   while {j < k} do {
     let y = neuronY(j, k, centerY)
@@ -328,7 +326,6 @@ action drawFrame(float) -> int = (elapsed) {
     j = j + 1
   }
 
-  -- Legend for phase ring
   cmds = concat(cmds, [
     CmdFill(0.55, 0.6, 0.68),
     CmdText(80.0, 680.0,

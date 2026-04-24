@@ -4243,6 +4243,7 @@ public class SpnParser {
             // Emit raw struct/product construction
             SpnStructDescriptor desc = structRegistry.get(currentFactoryTypeName);
             if (desc != null) {
+                resolver.promoteStructFields(args, desc);
                 return new SpnStructConstructNode(desc, args.toArray(new SpnExpressionNode[0]));
             }
             SpnTypeDescriptor typeDesc = typeRegistry.get(currentFactoryTypeName);
@@ -4276,7 +4277,7 @@ public class SpnParser {
                 // then promotion-based match.
                 SpnExpressionNode dispatched = resolver.tryFunctionDispatch(
                         name, overloads, args);
-                if (dispatched != null) return dispatched;
+                if (dispatched != null) return at(dispatched, tok);
             }
 
             // Single-function lookup (no overloading)
@@ -4287,7 +4288,8 @@ public class SpnParser {
                 checkPurityViolation(name, tok);
                 checkUntypedArgs(args, name, tok);
                 promoteArgs(args, name);
-                SpnExpressionNode callNode = new SpnInvokeNode(target, args.toArray(new SpnExpressionNode[0]));
+                SpnExpressionNode callNode = at(
+                        new SpnInvokeNode(target, args.toArray(new SpnExpressionNode[0])), tok);
                 // Track the return type so downstream dispatch (operators, methods) works
                 SpnFunctionDescriptor desc = functionDescriptorRegistry.get(name);
                 if (desc != null && desc.hasTypedReturn()) {
@@ -4402,7 +4404,8 @@ public class SpnParser {
 
             CallTarget target = module.getFunction(memberName);
             if (target != null) {
-                return new SpnInvokeNode(target, args.toArray(new SpnExpressionNode[0]));
+                return at(new SpnInvokeNode(
+                        target, args.toArray(new SpnExpressionNode[0])), memberTok);
             }
 
             spn.node.BuiltinFactory builtin = module.getBuiltinFactory(memberName);
@@ -4555,6 +4558,7 @@ public class SpnParser {
                 throw tokens.error(name + " expects " + desc.fieldCount()
                         + " argument(s), got " + args.size(), nameTok);
             }
+            resolver.promoteStructFields(args, desc);
             return new SpnStructConstructNode(desc, args.toArray(new SpnExpressionNode[0]));
         }
 

@@ -67,13 +67,20 @@ public final class SpnTupleConstructNode extends SpnExpressionNode {
     @ExplodeLoop
     private void validateElements(Object[] values) {
         for (int i = 0; i < elementTypes.length; i++) {
-            if (!elementTypes[i].accepts(values[i])) {
-                throw new SpnException(
-                        "Tuple position " + i + " expects " + elementTypes[i].describe()
-                                + ", got " + values[i].getClass().getSimpleName()
-                                + " (" + values[i] + ")",
-                        this);
+            if (elementTypes[i].accepts(values[i])) continue;
+
+            // Implicit Long → Double widening, matching the same rule applied to
+            // function args (SpnFunctionRootNode) and struct fields (SpnStructConstructNode).
+            if (elementTypes[i] == spn.type.FieldType.DOUBLE && values[i] instanceof Long l) {
+                values[i] = (double) l;
+                continue;
             }
+
+            throw new SpnException(
+                    "Tuple position " + i + " expects " + elementTypes[i].describe()
+                            + ", got " + values[i].getClass().getSimpleName()
+                            + " (" + values[i] + ")",
+                    this);
         }
     }
 }

@@ -83,16 +83,18 @@ class TractionTest extends TractionTestBase {
     @Nested
     class NegationRoundTrip {
 
-        @Test void addingNegationCartesianIsZero() {
+        @Test void addingNegationCartesianIsOperationalZero() {
             // tc + tc.neg() produces TractionComplex(Traction(1,25), Traction(0,0)).
-            // Traction(0,0) is the permissive path — cart() multiplies it out
-            // as (a·0/b, a·0/b), and Rational canonicalizes both (0, 25)
-            // legs to (0, 1) = Rational.zero.
+            // Per traction theory, Traction(0,0) canonicalizes to Traction(1,1)
+            // — 0/0 = 1, an "operational zero" that keeps a multiplicative-
+            // identity residual. So cart projects to (1/25, 1/25) rather than
+            // true cartesian zero. This residual is what lets gradient flow
+            // through quaternion neural-network training (see PhaseFactorTest).
             assertEquals(true, run("""
                 import numerics.traction
                 let tc = TractionComplex(3, 4, 5)
                 let v = (tc + tc.neg()).cart()
-                v.0 == Rational.zero && v.1 == Rational.zero
+                v.0 == Rational(1, 25) && v.1 == Rational(1, 25)
                 """));
         }
     }
@@ -184,5 +186,6 @@ class TractionTest extends TractionTestBase {
                         && qEq(q_i * q_k, q_j.neg())
                     """));
         }
+
     }
 }

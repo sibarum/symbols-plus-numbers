@@ -64,12 +64,19 @@ public final class SpnArrayLiteralNode extends SpnExpressionNode {
     @ExplodeLoop
     private void validateElements(Object[] elements) {
         for (int i = 0; i < elements.length; i++) {
-            if (!elementType.accepts(elements[i])) {
-                throw new SpnException(
-                        "Array element at index " + i + " expects " + elementType.describe()
-                                + ", got " + spn.language.SpnTypeName.of(elements[i]),
-                        this);
+            if (elementType.accepts(elements[i])) continue;
+
+            // Implicit Long → Double widening, matching the same rule applied to
+            // function args (SpnFunctionRootNode) and struct fields (SpnStructConstructNode).
+            if (elementType == spn.type.FieldType.DOUBLE && elements[i] instanceof Long l) {
+                elements[i] = (double) l;
+                continue;
             }
+
+            throw new SpnException(
+                    "Array element at index " + i + " expects " + elementType.describe()
+                            + ", got " + spn.language.SpnTypeName.of(elements[i]),
+                    this);
         }
     }
 }

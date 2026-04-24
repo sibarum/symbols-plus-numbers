@@ -167,7 +167,7 @@ class TypedCollectionTest extends TractionTestBase {
 
                 type LocalQV = Array<TractionQuaternion>
 
-                let a = QuatVec()
+                let a = QVec()
                 let b = LocalQV()
                 a.length() + b.length()
                 """);
@@ -176,7 +176,7 @@ class TypedCollectionTest extends TractionTestBase {
 
         @Test void variadicFactoryInMultiImportContext() {
             // Demo has many typed-collection aliases from factor.network:
-            // IntVec, QuatVec, QuatMat, PLayerArray. Each is a
+            // IntVec, QVec, QMat, PLayerArray. Each is a
             // separate Array<T> macro expansion. Try to tease out whether
             // dispatch of IntVec(...).length() gets confused by the
             // sibling expansions.
@@ -191,14 +191,14 @@ class TypedCollectionTest extends TractionTestBase {
                 -- any collision in macro memoization or method dispatch
                 -- trips up the variadic path.
                 let ps = primes()
-                let qv = QuatVec()
-                let qm = QuatMat()
+                let qv = QVec()
+                let qm = QMat()
                 ps.length()
                 """));
         }
 
         @Test void variadicConstructPassedToMethodTakingTypedArg() {
-            // network.spn has `pure encodeInput(int, IntVec) -> QuatVec`.
+            // network.spn has `pure encodeInput(int, IntVec) -> QVec`.
             // Demo passes `primes()` result into `encodeInput(n, ps)`. This
             // exercises the full path: variadic ctor → typed function param.
             assertEquals(3L, run("""

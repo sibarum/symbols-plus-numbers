@@ -6,6 +6,7 @@ import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.NodeInfo;
+import spn.language.SpnException;
 import spn.node.SpnExpressionNode;
 
 /**
@@ -48,6 +49,17 @@ public final class SpnInvokeNode extends SpnExpressionNode {
         for (int i = 0; i < argNodes.length; i++) {
             args[i] = argNodes[i].executeGeneric(frame);
         }
-        return callNode.call(args);
+        try {
+            return callNode.call(args);
+        } catch (SpnException e) {
+            // Arg/return validation throws without a location so the call site
+            // can attach its own — that's the position the user needs to find
+            // the bug. Callee declaration is already in the message text.
+            if (!e.hasLocation() && hasSourcePosition()) {
+                throw new SpnException(e.getMessage(),
+                        getSourceFile(), getSourceLine(), getSourceCol());
+            }
+            throw e;
+        }
     }
 }

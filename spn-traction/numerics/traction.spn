@@ -18,16 +18,23 @@ type Traction(num: int, denom: int)
 -- rotating smoothly indefinitely instead of overflowing after a few
 -- thousand frames.
 pure Traction(int, int) -> Traction = (num, denom) {
-  let maxB = max(bitWidth(abs(num)), bitWidth(abs(denom)))
-  let k = max(0, maxB - 30)
-  match
-  | k == 0 -> this(num, denom)
+  match (num, denom)
+  -- 0/0 = 1 in traction theory: the "operational zero" carries a
+  -- multiplicative-identity residual, so downstream operations never
+  -- fully annihilate. Canonicalize (0, 0) to (1, 1) at the constructor.
+  | (0, 0) -> this(1, 1)
   | _ -> {
-      -- Round-to-nearest on magnitude; re-apply sign.
-      let half = shl(1, k - 1)
-      let nAbs = shr(abs(num) + half, k)
-      let dAbs = shr(abs(denom) + half, k)
-      this(sign(num) * nAbs, sign(denom) * dAbs)
+      let maxB = max(bitWidth(abs(num)), bitWidth(abs(denom)))
+      let k = max(0, maxB - 30)
+      match
+      | k == 0 -> this(num, denom)
+      | _ -> {
+          -- Round-to-nearest on magnitude; re-apply sign.
+          let half = shl(1, k - 1)
+          let nAbs = shr(abs(num) + half, k)
+          let dAbs = shr(abs(denom) + half, k)
+          this(sign(num) * nAbs, sign(denom) * dAbs)
+        }
     }
 }
 
@@ -108,15 +115,28 @@ pure *(TractionComplex, TractionComplex) -> TractionComplex = ((s1,t1), (s2,t2))
   TractionComplex(s1 * s2, Traction(t1 *_nwedge t2, t1 *_ndot t2))
 }
 
+-- Short-circuit zero-scale operands: if either addend's scale.num is 0 the
+-- addend is algebraically zero and the sum is just the other addend. Without
+-- this, the general formula produces scale=(1, b*d) with tangent=(0,0) when
+-- both addends are zero — now canonicalized to Traction(1,1) by the Traction
+-- constructor, but that's "operational 1", not the clean zero we want for a
+-- zero quaternion component. Later products amplify the drift until scale
+-- collapses under the 30-bit budget. Short-circuiting preserves zero-ness.
 pure +(TractionComplex, TractionComplex) -> TractionComplex = ((s1, t1), (s2, t2)) {
   let (a, b) = s1
   let (c, d) = s2
-  let (n1, d1) = t1
-  let (n2, d2) = t2
-  TractionComplex(
-    Traction(1, b*d),
-    Traction(a*d*n1 + c*b*n2, a*d*d1 + c*b*d2)
-  )
+  match
+  | a == 0 && c == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
+  | a == 0 -> TractionComplex(s2, t2)
+  | c == 0 -> TractionComplex(s1, t1)
+  | _ -> {
+      let (n1, d1) = t1
+      let (n2, d2) = t2
+      TractionComplex(
+        Traction(1, b*d),
+        Traction(a*d*n1 + c*b*n2, a*d*d1 + c*b*d2)
+      )
+    }
 }
 
 pure -(TractionComplex, TractionComplex) -> TractionComplex = (tc1, tc2) {

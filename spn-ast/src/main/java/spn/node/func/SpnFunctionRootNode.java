@@ -166,14 +166,21 @@ public final class SpnFunctionRootNode extends RootNode {
 
             String actual = SpnTypeName.of(args[i]);
             String msg = "Argument '" + descriptor.getParams()[i].name()
-                    + "' of function '" + descriptor.getName()
-                    + "' expects " + paramTypes[i].describe()
+                    + "' of function '" + descriptor.getName() + "'"
+                    + declarationSuffix()
+                    + " expects " + paramTypes[i].describe()
                     + ", got " + actual;
-            if (sourceLine >= 0) {
-                throw new SpnException(msg, sourceFile, sourceLine, sourceCol);
-            }
-            throw new SpnException(msg, this);
+            // Throw without a location — SpnInvokeNode catches and fills in the
+            // call-site position, which is what the user needs to find the bug.
+            // The callee declaration is already in the message text.
+            throw new SpnException(msg);
         }
+    }
+
+    private String declarationSuffix() {
+        if (sourceLine < 0) return "";
+        String file = sourceFile != null ? sourceFile : "?";
+        return " (declared at " + file + ":" + sourceLine + ":" + sourceCol + ")";
     }
 
     @ExplodeLoop
@@ -191,13 +198,11 @@ public final class SpnFunctionRootNode extends RootNode {
             return (double) l;
         }
 
-        String msg = "Function '" + descriptor.getName()
-                + "' return type is " + returnType.describe()
+        String msg = "Function '" + descriptor.getName() + "'"
+                + declarationSuffix()
+                + " return type is " + returnType.describe()
                 + ", but body produced " + SpnTypeName.of(result);
-        if (sourceLine >= 0) {
-            throw new SpnException(msg, sourceFile, sourceLine, sourceCol);
-        }
-        throw new SpnException(msg, this);
+        throw new SpnException(msg);
     }
 
     @Override

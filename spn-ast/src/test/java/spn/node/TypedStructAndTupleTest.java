@@ -53,12 +53,27 @@ class TypedStructAndTupleTest {
 
         @Test
         void rejectsWrongType() {
+            // String won't auto-widen to Double — only Long → Double does, mirroring
+            // the implicit numeric widening applied to function arguments.
             var node = new SpnStructConstructNode(POINT,
-                    new SpnLongLiteralNode(1),       // Long, not Double!
+                    new SpnStringLiteralNode("nope"),
                     new SpnDoubleLiteralNode(2.0));
             var ex = assertThrows(SpnException.class, () -> execute(node));
             assertTrue(ex.getMessage().contains("x"));
             assertTrue(ex.getMessage().contains("Double"));
+        }
+
+        @Test
+        void longWidensToDouble() {
+            // Implicit Long → Double widening: a Long literal fills a Double field
+            // without an explicit toFloat cast. Matches the function-arg widening
+            // in SpnFunctionRootNode so `Vector2(long_expr, long_expr)` Just Works.
+            var node = new SpnStructConstructNode(POINT,
+                    new SpnLongLiteralNode(1),
+                    new SpnDoubleLiteralNode(2.0));
+            var result = (SpnStructValue) execute(node);
+            assertEquals(1.0, result.get(0));
+            assertEquals(2.0, result.get(1));
         }
 
         @Test

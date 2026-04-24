@@ -467,6 +467,34 @@ public final class TypeResolver {
     }
 
     /**
+     * Apply implicit promotions to struct-construction arguments, matching
+     * each arg against the corresponding field's declared type. Mirrors
+     * {@link #promoteArgs} so that {@code Vector2(longExpr, longExpr)} with
+     * a {@code type Vector2(Rational, Rational)} declaration transparently
+     * applies the {@code promote int -> Rational} rule at the call site.
+     */
+    public void promoteStructFields(List<SpnExpressionNode> args,
+                                     spn.type.SpnStructDescriptor descriptor) {
+        FieldDescriptor[] fields = descriptor.getFields();
+        for (int i = 0; i < args.size() && i < fields.length; i++) {
+            FieldType argType = inferType(args.get(i));
+            FieldType fieldType = fields[i].type();
+            if (argType == null || fieldType == null) continue;
+            if (fieldType instanceof FieldType.Untyped) continue;
+            if (typesMatch(fieldType, argType)) continue;
+
+            List<PromotionStep> steps = buildPromotionChain(argType);
+            for (PromotionStep step : steps) {
+                if (step.typeDesc.equals(fieldType.describe())) {
+                    args.set(i, applyPromotionChain(args.get(i), step));
+                    trackType(args.get(i), fieldType);
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
      * Promote method arguments, skipping the implicit 'this' parameter.
      * Method descriptors have 'this' as params[0]; args don't include 'this'.
      */
