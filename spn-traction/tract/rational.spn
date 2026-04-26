@@ -1,0 +1,72 @@
+import Ordering
+
+
+type TractRational(num: int, denom: int)
+
+-- TODO: bitshifting down to 30 bits
+pure TractRational(int, int) -> TractRational = (num, denom) {
+  this(num, denom)
+}
+
+pure +(TractRational, TractRational) -> TractRational = ((n1,d1), (n2,d2)) {
+  TractRational(n1*d2 + n2*d1, d1*d2)
+}
+
+pure TractRational.neg() -> TractRational = () {
+  TractRational(-this.num, -this.denom)
+}
+
+pure -(TractRational, TractRational) -> TractRational = (t1, t2) {
+  t1 + t2.neg()
+}
+
+pure *(TractRational, TractRational) -> TractRational = ((n1,d1), (n2,d2)) {
+  TractRational(n1*n2, d1*d2)
+}
+  
+pure TractRational.inv() -> TractRational = () {
+  TractRational(this.denom, this.num)
+}
+
+pure /(TractRational, TractRational) -> TractRational = (t1, t2) {
+  t1 * t2.inv()
+}
+  
+pure *_dot(TractRational, TractRational) -> int = ((n1,d1), (n2,d2)) {
+  d1*d2 + n1*n2
+}
+
+pure *_wedge(TractRational, TractRational) -> int = ((n1,d1), (n2,d2)) {
+  d1*n2 - n1*d2
+}
+
+-- Dot product with second operand conjugated: t1 *_dot t2.conj()
+-- Equivalently: real part of complex product (d1+n1·i)(d2+n2·i)
+pure *_ndot(TractRational, TractRational) -> int = ((n1,d1), (n2,d2)) {
+  d1*d2 - n1*n2
+}
+
+-- Wedge product with second operand conjugated: t1 *_wedge t2.conj()  
+-- Equivalently: imaginary part of complex product (d1+n1·i)(d2+n2·i)
+pure *_nwedge(TractRational, TractRational) -> int = ((n1,d1), (n2,d2)) {
+  d1*n2 + n1*d2
+}
+
+pure *_geom(TractRational, TractRational) -> int = (tr1, tr2) {
+  tr1 *_dot tr2 + tr1 *_wedge tr2
+}
+
+pure *_ngeom(TractRational, TractRational) -> int = (tr1, tr2) {
+  tr1 *_ndot tr2 - tr1 *_nwedge tr2
+}
+
+pure TractRational.toFloat() -> float = () {
+  this.num / this.denom
+}
+
+  
+pure compareTractRational(TractRational, TractRational) -> int = (t1, t2) {
+  (t1 - t2).0
+}
+
+deriveOrderingFromInt<TractRational, compareTractRational>

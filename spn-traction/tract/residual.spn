@@ -1,0 +1,48 @@
+import tract.rational
+
+type TractResidual(coef: TractRational, exp: TractRational)
+
+pure TractResidual(TractRational, TractRational) -> TractResidual = (coef, exp) {
+  this(coef, exp)
+}
+
+pure TractResidual(int, int, int, int) -> TractResidual = (n1, d1, n2, d2) {
+  TractResidual(TractRational(n1, d1), TractRational(n2, d2))
+}
+
+pure *(TractResidual, TractResidual) -> TractResidual = ((c1, e1), (c2, e2)) {
+  TractResidual(c1*c2, e1+e2)
+}
+
+pure *_dot(TractResidual, TractResidual) -> TractRational = ((c1, e1), (c2, e2)) {
+  TractRational(c1 *_dot c2, e1 *_wedge e2)
+}
+
+pure *_wedge(TractResidual, TractResidual) -> TractRational = ((c1, e1), (c2, e2)) {
+  TractRational(c1 *_dot e2, c2 *_wedge e1)
+}
+
+pure *_ndot(TractResidual, TractResidual) -> TractRational = ((c1, e1), (c2, e2)) {
+  TractRational(c1 *_ndot c2, e1 *_nwedge e2)
+}
+
+pure *_nwedge(TractResidual, TractResidual) -> TractRational = ((c1, e1), (c2, e2)) {
+  TractRational(c1 *_ndot e2, c2 *_nwedge e1)
+}
+
+pure *_geom(TractResidual, TractResidual) -> TractRational = (tr1, tr2) {
+  tr1 *_dot tr2 + tr1 *_wedge tr2
+}
+
+pure *_ngeom(TractResidual, TractResidual) -> TractRational = (tr1, tr2) {
+  tr1 *_ndot tr2 - tr1 *_nwedge tr2
+}
+
+pure +(TractResidual, TractResidual) -> TractResidual = (tr1, tr2) {
+
+}
+
+let x = TractResidual(2, 11, 5, 13)
+let y = TractResidual(3, 7, 7, 21)
+
+x *_wedge y

@@ -71,6 +71,8 @@ public class TraceSourceTab extends ScrollableTab {
 
     // Detail view: read-only TextArea showing full invocation info
     private final TextArea detailArea;
+    private final Scrollbar detailVScroll;
+    private final Scrollbar detailHScroll;
     private int detailCallIndex = -1;
 
     // Panel layout — set during render, used for click hit-testing and scroll routing
@@ -110,6 +112,15 @@ public class TraceSourceTab extends ScrollableTab {
                 return org.lwjgl.glfw.GLFW.glfwGetClipboardString(window.getHandle());
             }
         });
+
+        spn.stdui.widget.ScrollbarTheme sbTheme = spn.stdui.widget.ScrollbarTheme.dark();
+        detailVScroll = new Scrollbar(window.getFont(), Scrollbar.Orientation.VERTICAL);
+        detailVScroll.setTheme(sbTheme);
+        detailVScroll.setOnChange(v -> detailArea.setScrollRow(v));
+
+        detailHScroll = new Scrollbar(window.getFont(), Scrollbar.Orientation.HORIZONTAL);
+        detailHScroll.setTheme(sbTheme);
+        detailHScroll.setOnChange(v -> detailArea.setScrollCol(v));
 
         // Single file: skip FILE_SELECT, go straight to SUMMARY
         if (files.size() == 1) {
@@ -271,8 +282,8 @@ public class TraceSourceTab extends ScrollableTab {
         // Source area: either source code with overlays, or detail TextArea
         if (detailCallIndex >= 0) {
             // Detail view replaces source area — panel stays on invocation list
-            detailArea.setBounds(x, y, width - ScrollableTab.SCROLLBAR_SIZE, sourceH - hudH);
-            detailArea.render();
+            ScrollableTab.renderWithScrollbars(detailArea, detailVScroll, detailHScroll,
+                    x, y, width, sourceH, 0);
         } else {
             layoutAndRender(x, y, width, sourceH);
             textArea.setExtraScrollPadding(0);
@@ -733,10 +744,12 @@ public class TraceSourceTab extends ScrollableTab {
 
     @Override
     public boolean onMouseButton(int button, int action, int mods, double mx, double my) {
-        // Always forward RELEASE to the detail text area so its drag state clears,
-        // regardless of where the mouse was released.
+        // Always forward RELEASE to the detail area + its scrollbars so their
+        // drag state clears, regardless of where the mouse was released.
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE
                 && detailCallIndex >= 0) {
+            detailVScroll.onMouseButton(button, action, mods, mx, my);
+            detailHScroll.onMouseButton(button, action, mods, mx, my);
             detailArea.onMouseButton(button, action, mods, mx, my);
             return true;
         }
@@ -756,7 +769,9 @@ public class TraceSourceTab extends ScrollableTab {
             // Click in source/detail area
             if (my < panelTop) {
                 if (detailCallIndex >= 0) {
-                    detailArea.onMouseButton(button, action, mods, mx, my);
+                    ScrollableTab.dispatchMousePressToScrolled(detailArea,
+                            detailVScroll, detailHScroll,
+                            button, action, mods, mx, my);
                 } else if (hoveredSpan >= 0 && active().spanCalls.containsKey(hoveredSpan)) {
                     // Click on a traced block in source → pin it and show invocations
                     pinSpanAndScroll(hoveredSpan);
@@ -802,9 +817,10 @@ public class TraceSourceTab extends ScrollableTab {
             return true;
         }
 
-        // Forward to detail area for text selection drag
+        // Forward to detail area + scrollbars for text selection / scroll drag
         if (detailCallIndex >= 0 && my < panelTop) {
-            detailArea.onCursorPos(mx, my);
+            ScrollableTab.dispatchCursorToScrolled(detailArea,
+                    detailVScroll, detailHScroll, mx, my);
         }
         // Track hover on panel rows (visual only — does not change selection)
         if (my > panelTop && panelRowHeight > 0 && my > panelRowStart) {

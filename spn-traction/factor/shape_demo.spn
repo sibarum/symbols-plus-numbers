@@ -1,0 +1,185 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Shape network — minimal predict-zero watcher
+-- ═══════════════════════════════════════════════════════════════════════
+-- Three columns (circle / square / triangle). Each shows: actual class,
+-- predicted class (argmin distance to one of the three target
+-- permutations), the 3 output quaternions as (w, x, y, z) text, and a
+-- small scope of the rotated+translated input points. Time advances
+-- epochs.
+--
+-- Quick and dirty by design — primarily for trace-mode stepping.
+-- Named intermediates (`net`, `inputs`, `preds`, `predicted`, `lossNow`)
+-- so trace shows them at each frame.
+-- ═══════════════════════════════════════════════════════════════════════
+
+import Canvas
+import Math (toFloat, round)
+import Array (append, concat)
+import String (formatNum)
+import spn.canvas.draw
+import factor.network
+import factor.shapes
+import factor.neural_traction
+import numerics.traction
+
+pure demoSeed()      -> int   = () { 1 }
+pure demoNpts()      -> int   = () { 8 }
+pure demoHidden()    -> int   = () { 8 }
+pure demoExamples()  -> int   = () { 12 }
+pure demoMaxEpochs() -> int   = () { 3 }
+pure demoLR()        -> float = () { 0.05 }
+pure secsPerEpoch()  -> float = () { 0.5 }
+
+pure shapeName(int) -> string = (id) {
+  match id
+  | 0 -> "circle"
+  | 1 -> "square"
+  | _ -> "triangle"
+}
+
+pure epochsForElapsed(float) -> int = (elapsed) {
+  let raw = round(elapsed / secsPerEpoch())
+  match
+  | raw < 0                 -> 0
+  | raw > demoMaxEpochs()   -> demoMaxEpochs()
+  | _                       -> raw
+}
+
+-- Predicted class = whichever target permutation minimises shapeLoss.
+pure predictedClass(QVec) -> int = (preds) {
+  let d0 = shapeLoss(preds, shapeTarget(0))
+  let d1 = shapeLoss(preds, shapeTarget(1))
+  let d2 = shapeLoss(preds, shapeTarget(2))
+  match
+  | d0 <= d1 && d0 <= d2 -> 0
+  | d1 <= d2             -> 1
+  | _                    -> 2
+}
+
+-- Format a TQ as "w, x, y, z" (truncated to 2 decimals via formatNum).
+pure formatQuat(TractionQuaternion) -> string = (q) {
+  let (w, x, y, z) = cartesianOf(q)
+  formatNum(w) ++ ", " ++ formatNum(x) ++ ", "
+    ++ formatNum(y) ++ ", " ++ formatNum(z)
+}
+
+-- Tiny scope of input points, projected to xy.
+pure drawScope(QVec, float, float, float) -> Array
+    = (points, cx, cy, r) {
+  let frame = [
+    CmdFill(0.10, 0.12, 0.16), CmdCircle(cx, cy, r),
+    CmdStroke(0.22, 0.24, 0.30), CmdStrokeWeight(1.0),
+    CmdLine(cx - r, cy, cx + r, cy),
+    CmdLine(cx, cy - r, cx, cy + r)
+  ]
+  let dots = []
+  let i = 0
+  let n = points.length()
+  while {i < n} do {
+    let (w, x, y, z) = cartesianOf(points[i])
+    -- inputs are translated by (1,1) post-rotation, so they live in the
+    -- (1,1)-centered region. Center the scope on (1,1) and scale to fit.
+    let scale = r * 0.4
+    let dx = cx + scale * (x - 1.0)
+    let dy = cy - scale * (y - 1.0)
+    dots = append(dots, CmdFill(0.85, 0.90, 0.55))
+    dots = append(dots, CmdCircle(dx, dy, 3.0))
+    i = i + 1
+  }
+  concat(frame, dots)
+}
+
+action drawShapeFrame(float) -> int = (elapsed) {
+  let epochs = epochsForElapsed(elapsed)
+  let net0 = buildShapeNet2Identity(demoNpts(), demoHidden())
+  let net = shapeTrain(net0, demoSeed(), demoNpts(), demoExamples(),
+                       epochs, demoLR())
+  let lossNow = shapeAvgLoss(net, 1000, demoNpts(), 24)
+
+  let cmds = [CmdClear(0.07, 0.08, 0.10)]
+
+  -- Header.
+  cmds = concat(cmds, [
+    CmdFill(0.92, 0.92, 0.96),
+    CmdText(40.0, 40.0, "Shape NN — predict-zero watch", 0.32),
+    CmdFill(0.55, 0.6, 0.68),
+    CmdText(40.0, 70.0,
+      "epoch " ++ formatNum(epochs) ++ " / " ++ formatNum(demoMaxEpochs())
+        ++ "     loss: " ++ formatNum(lossNow),
+      0.24)
+  ])
+
+  -- 3 columns.
+  let col = 0
+  while {col < 3} do {
+    let shapeId = col
+    let inputs = genShapeExample(demoSeed(), shapeId, demoNpts())
+    let preds = net.forward(inputs)
+    let predicted = predictedClass(preds)
+    let target = shapeTarget(shapeId)
+
+    -- Per-output inverse and gradient signal, lifted out of trainStep
+    -- so they're visible. The inv is what gets eaten by the absorbing-
+    -- zero attractor; err = inv · target is the gradient that flows (or
+    -- doesn't) into the weight update. Watching these collapse toward
+    -- (0,0,0,0) is the singularity in motion.
+    let inv0 = preds[0].invert()
+    let inv1 = preds[1].invert()
+    let inv2 = preds[2].invert()
+    let err0 = preds[0].error(target[0])
+    let err1 = preds[1].error(target[1])
+    let err2 = preds[2].error(target[2])
+
+    let cx = 100.0 + toFloat(col) * 290.0
+    let correct = predicted == shapeId
+
+    let predColor = match correct
+      | true -> CmdFill(0.50, 0.85, 0.50)
+      | _    -> CmdFill(0.85, 0.55, 0.50)
+
+    cmds = concat(cmds, [
+      CmdFill(0.88, 0.92, 0.98),
+      CmdText(cx, 130.0, "actual:    " ++ shapeName(shapeId), 0.24),
+      predColor,
+      CmdText(cx, 160.0, "predicted: " ++ shapeName(predicted), 0.24)
+    ])
+
+    cmds = concat(cmds, drawScope(inputs, cx + 80.0, 250.0, 50.0))
+
+    cmds = concat(cmds, [
+      CmdFill(0.7, 0.75, 0.85),
+      CmdText(cx, 340.0, "out[0]: " ++ formatQuat(preds[0]), 0.16),
+      CmdText(cx, 360.0, "out[1]: " ++ formatQuat(preds[1]), 0.16),
+      CmdText(cx, 380.0, "out[2]: " ++ formatQuat(preds[2]), 0.16),
+      CmdFill(0.62, 0.72, 0.55),
+      CmdText(cx, 410.0, "inv[0]: " ++ formatQuat(inv0), 0.16),
+      CmdText(cx, 430.0, "inv[1]: " ++ formatQuat(inv1), 0.16),
+      CmdText(cx, 450.0, "inv[2]: " ++ formatQuat(inv2), 0.16),
+      CmdFill(0.78, 0.72, 0.55),
+      CmdText(cx, 480.0, "err[0]: " ++ formatQuat(err0), 0.16),
+      CmdText(cx, 500.0, "err[1]: " ++ formatQuat(err1), 0.16),
+      CmdText(cx, 520.0, "err[2]: " ++ formatQuat(err2), 0.16)
+    ])
+
+    col = col + 1
+  }
+
+  -- Footer note.
+  cmds = concat(cmds, [
+    CmdFill(0.45, 0.50, 0.58),
+    CmdText(40.0, 560.0,
+      "depth-2 identity init   |   Hurwitz (1,1,1,1) permutation targets   |   floor at loss=12 = predict-zero",
+      0.18),
+    CmdFill(0.45, 0.50, 0.58),
+    CmdText(40.0, 585.0,
+      "out = network output  |  inv = output⁻¹ (singularity site)  |  err = output⁻¹ · target (gradient signal)",
+      0.18)
+  ])
+
+  render(cmds)
+  0
+}
+
+canvas(960, 620)
+animate(15.0, drawShapeFrame)
+show()

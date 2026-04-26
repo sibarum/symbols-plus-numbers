@@ -135,6 +135,29 @@ pure randWeightQ(int, int, int, int) -> TractionQuaternion
   quatFromCart4(w / m, x / m, y / m, z / m)
 }
 
+-- All-identity weight matrix: every entry is the multiplicative identity
+-- 1+0i+0j+0k. Sanity-test init for verifying backprop correctness in
+-- isolation: at init every layer reduces to a sum of its inputs (each
+-- neuron sees Σx_j), so any post-training divergence between neurons or
+-- layers comes from the training rule, not from random noise. The
+-- multi-layer symmetry-collapse this exposes is intentional — see the
+-- "Identity-weight init sanity test" frontier.
+pure initQWeightsIdentity(int, int) -> QMat = (inDim, outDim) {
+  let w = QMat()
+  let i = 0
+  while {i < outDim} do {
+    let row = QVec()
+    let j = 0
+    while {j < inDim} do {
+      row = row.push(quatFromCart4(1.0, 0.0, 0.0, 0.0))
+      j = j + 1
+    }
+    w = w.push(row)
+    i = i + 1
+  }
+  w
+}
+
 -- Build a random-weight matrix and a zero bias vector for one layer.
 -- Users feed these into `QNet.pushLayer(weights, biases)`.
 pure initQWeights(int, int, int, int) -> QMat
@@ -162,4 +185,47 @@ pure initQBiases(int) -> QVec = (outDim) {
     k = k + 1
   }
   b
+}
+
+-- Randomized bias init for gated activation. Each bias gets a different
+-- non-zero offset so the |q|² > 1 threshold lands at varied effective
+-- points across the layer — different neurons trip the gate at different
+-- input magnitudes, which breaks the dead-neuron-on-one-branch symmetry
+-- that zero biases produce.
+pure initQBiasesRandom(int, int, int) -> QVec = (outDim, layerIdx, s) {
+  let b = QVec()
+  let k = 0
+  while {k < outDim} do {
+    b = b.push(randWeightQ(s, layerIdx + 200, k, 0))
+    k = k + 1
+  }
+  b
+}
+
+-- Per-neuron gated-activation k1's: random unit quaternions, one per
+-- output neuron in the layer. Salt distinguishes from the weight init's
+-- random stream.
+pure initActK1(int, int, int) -> QVec = (outDim, layerIdx, s) {
+  let arr = QVec()
+  let i = 0
+  while {i < outDim} do {
+    arr = arr.push(randWeightQ(s, layerIdx + 100, i, 0))
+    i = i + 1
+  }
+  arr
+}
+
+-- Per-neuron gated-activation k2's: conjugates of the corresponding k1.
+-- At init the two branches rotate in opposite directions about the same
+-- axis, which is the symmetry-breaking choice that lets the gate have
+-- maximum effect on day one. Training adjusts each independently.
+pure initActK2FromK1(QVec) -> QVec = (k1s) {
+  let arr = QVec()
+  let i = 0
+  let n = k1s.length()
+  while {i < n} do {
+    arr = arr.push(k1s[i].conj())
+    i = i + 1
+  }
+  arr
 }

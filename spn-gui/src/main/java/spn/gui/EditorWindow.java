@@ -40,6 +40,7 @@ public class EditorWindow {
 
     private final ActionRegistry actionRegistry = new ActionRegistry();
     private final LogBuffer logBuffer = new LogBuffer();
+    private final NavigationHistory navHistory = new NavigationHistory();
     private boolean initialized;
 
     // Set to true while a canvas window is active. Prevents the editor's
@@ -96,8 +97,12 @@ public class EditorWindow {
 
         // Tab system — first tab is an empty editor
         tabView = new TabView(font);
-        // Refresh window chrome (titlebar) whenever the active tab changes.
-        tabView.setActivationListener(t -> updateTitle());
+        // Refresh window chrome (titlebar) whenever the active tab changes,
+        // and record the new position as a navigation-history stable point.
+        tabView.setActivationListener(t -> {
+            updateTitle();
+            recordStablePosition(t);
+        });
         tabView.addTab(new EditorTab(this));
 
         // TabViewMode sits at the bottom of the mode stack — suppress SUBMIT/CANCEL
@@ -117,12 +122,71 @@ public class EditorWindow {
 
     /** Push a legacy Mode onto the spn-stdui mode stack via adapter. */
     public void pushLegacyMode(Mode mode) {
+        // Capture where the user was before disappearing into a full-window mode.
+        if (frame.getModeManager().depth() == 1) recordStablePosition();
         frame.getModeManager().push(new LegacyModeAdapter(mode, this::getSize));
     }
 
     /** Pop the active mode. Never pops the bottom (TabViewMode). */
     public void popMode() {
         frame.getModeManager().pop();
+        // Record the position the user lands on when we're back at the editor.
+        if (frame.getModeManager().depth() == 1) recordStablePosition();
+    }
+
+    // ---- Navigation history ---------------------------------------------
+
+    public NavigationHistory getNavigationHistory() { return navHistory; }
+
+    /** Capture the active tab's current cursor/scroll as a nav-history entry,
+     *  unless we're inside a full-window mode (where positions don't qualify). */
+    public void recordStablePosition() {
+        Tab active = tabView != null ? tabView.getActiveTab() : null;
+        if (active != null) recordStablePosition(active);
+    }
+
+    /** Variant for the activation listener, which already knows the new tab. */
+    public void recordStablePosition(Tab tab) {
+        if (tab == null) return;
+        if (frame.getModeManager().depth() > 1) return;
+        if (tab instanceof EditorTab et) {
+            TextArea ta = et.getTextArea();
+            navHistory.record(et, ta.getCursorRow(), ta.getCursorCol(),
+                    ta.getScrollRow(), ta.getScrollCol(), glfwGetTime());
+        } else {
+            // Non-editor tabs (Log, Trace) don't have a meaningful caret —
+            // record activation as an entry anchored at (0,0) so the user can
+            // navigate back to the tab itself.
+            navHistory.record(tab, 0, 0, 0, 0, glfwGetTime());
+        }
+    }
+
+    /** Jump to the previous stable position. No-op if none reachable. */
+    public void navigateBack() {
+        if (frame.getModeManager().depth() > 1) return;
+        applyNavEntry(navHistory.back(t -> tabView.getTabs().contains(t)));
+    }
+
+    /** Jump to the next stable position. No-op if none reachable. */
+    public void navigateForward() {
+        if (frame.getModeManager().depth() > 1) return;
+        applyNavEntry(navHistory.forward(t -> tabView.getTabs().contains(t)));
+    }
+
+    private void applyNavEntry(NavigationHistory.Entry e) {
+        if (e == null) return;
+        navHistory.setNavigating(true);
+        try {
+            tabView.switchTo(e.tab());
+            if (e.tab() instanceof EditorTab et) {
+                TextArea ta = et.getTextArea();
+                ta.setCursorPosition(e.row(), e.col());
+                ta.setScrollRow(e.scrollRow());
+                ta.setScrollCol(e.scrollCol());
+            }
+        } finally {
+            navHistory.setNavigating(false);
+        }
     }
 
     private float[] getSize() {
@@ -162,6 +226,8 @@ public class EditorWindow {
         actionRegistry.register("Type Info",     "View",   "Ctrl+T",       "Show resolved operator dispatches for the current line. Displays which overloads are called (e.g. +(Rational, Rational)). Dismissed by any keystroke.", () -> {});
         actionRegistry.register("Go to Definition","View", "Ctrl+Click",   "Navigate to the declaration of the identifier under the cursor. Works for local bindings, parameters, types, factories, methods, constants, operators, and named or positional fields. In-module targets open (or switch to) the defining file; cross-module targets jump to the declaration in the imported module's source, falling back to the `import` statement when the source isn't available.", () -> {});
         actionRegistry.register("Help",          "Help",   "Ctrl+/",       "Open the help search. Search commands, shortcuts, and API reference.", () -> pushLegacyMode(new HelpMode(this, actionRegistry)));
+        actionRegistry.register("Navigate Back",   "View",   "Ctrl+Alt+Left",  "Jump to the previous stable cursor position (last edit, copy/cut/paste, tab change, or mode push/pop).", this::navigateBack);
+        actionRegistry.register("Navigate Forward","View",   "Ctrl+Alt+Right", "Jump to the next stable cursor position after a Navigate Back.", this::navigateForward);
     }
 
     // ---- Accessors -------------------------------------------------------

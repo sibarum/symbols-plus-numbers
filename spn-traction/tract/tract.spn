@@ -1,0 +1,41 @@
+-- A typical rational number
+type TractRational(num: int, denom: int)
+
+-- TODO: bitshifting down to 30 bits
+pure TractRational(int, int) -> TractRational = (num, denom) {
+  this(num, denom)
+}
+
+pure +(TractRational, TractRational) -> TractRational = ((n1,d1), (n2,d2)) {
+  TractRational(n1*d2 + n2*d1, d1*d2)
+}
+
+pure *(TractRational, TractRational) -> TractRational = ((n1,d1), (n2,d2)) {
+  TractRational(n1*n2, d1*d2)
+}
+  
+pure *_dot(TractRational, TractRational) -> TractRational = ((n1,d1), (n2,d2)) {
+  d1*d2 + n1*n2
+}
+
+pure *_wedge(TractRational, TractRational) -> TractRational = ((n1,d1), (n2,d2)) {
+  d1*n2 - n1*d2
+}
+
+-- Dot product with second operand conjugated: t1 *_dot t2.conj()
+-- Equivalently: real part of complex product (d1+n1·i)(d2+n2·i)
+pure *_ndot(TractRational, TractRational) -> int = ((n1,d1), (n2,d2)) {
+  d1*d2 - n1*n2
+}
+
+-- Wedge product with second operand conjugated: t1 *_wedge t2.conj()  
+-- Equivalently: imaginary part of complex product (d1+n1·i)(d2+n2·i)
+pure *_nwedge(TractRational, TractRational) -> int = ((n1,d1), (n2,d2)) {
+  d1*n2 + n1*d2
+}
+
+-- Of the form coef*0^(exp*w/2)
+type TractResidual(coef: TractRational, exp: TractRational)
+
+-- Of the form re+coef*0^(exp*w/2)
+type TractComplex(re: TractRational, im: TractResidual)

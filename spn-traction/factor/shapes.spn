@@ -1,0 +1,267 @@
+-- ═══════════════════════════════════════════════════════════════════════
+-- Shape Classification — synthetic test for quaternion networks
+-- ═══════════════════════════════════════════════════════════════════════
+-- Generates npts-point outlines of circle / square / triangle in the
+-- xy-plane, applies a random 3D rotation, and trains a network to
+-- classify which shape produced each input. The task is naturally
+-- rotation-equivariant: same shape at any orientation should yield the
+-- same answer. This exercises the parts of the architecture that
+-- quaternions are designed for, unlike the prime-factorization task
+-- whose 1D phases didn't.
+--
+-- Encoding: each point is a pure-imaginary TractionQuaternion (0+xi+yj+zk).
+-- Targets: 1 (circle), i (square), j (triangle) at the matching output
+-- index, zero quaternion at the others. Loss: sum of |output-target|².
+-- ═══════════════════════════════════════════════════════════════════════
+
+import factor.network
+import factor.neural
+import factor.neural_traction
+import numerics.traction
+import Math (cos, sin, sqrt, toFloat, round)
+
+-- ── Canonical shape outlines (xy-plane, centered, max distance = 1) ─────
+
+pure circlePoint(float) -> TractionQuaternion = (t) {
+  let angle = twoPi() * t
+  quatFromCart4(0.0, cos(angle), sin(angle), 0.0)
+}
+
+pure squareXY(float) -> (float, float) = (t) {
+  let s = t * 4.0
+  let side = round(s - 0.5)
+  let f = s - toFloat(side)
+  let scale = 0.7071067811865476
+  match side
+  | 0 -> (scale * (1.0 - 2.0*f), scale)
+  | 1 -> (-scale, scale * (1.0 - 2.0*f))
+  | 2 -> (scale * (-1.0 + 2.0*f), -scale)
+  | _ -> (scale, scale * (-1.0 + 2.0*f))
+}
+
+pure squarePoint(float) -> TractionQuaternion = (t) {
+  let (x, y) = squareXY(t)
+  quatFromCart4(0.0, x, y, 0.0)
+}
+
+pure triangleXY(float) -> (float, float) = (t) {
+  let s = t * 3.0
+  let side = round(s - 0.5)
+  let f = s - toFloat(side)
+  let v0x = 0.0
+  let v0y = 1.0
+  let v1x = -0.8660254037844386
+  let v1y = -0.5
+  let v2x = 0.8660254037844386
+  let v2y = -0.5
+  match side
+  | 0 -> (v0x + (v1x - v0x) * f, v0y + (v1y - v0y) * f)
+  | 1 -> (v1x + (v2x - v1x) * f, v1y + (v2y - v1y) * f)
+  | _ -> (v2x + (v0x - v2x) * f, v2y + (v0y - v2y) * f)
+}
+
+pure trianglePoint(float) -> TractionQuaternion = (t) {
+  let (x, y) = triangleXY(t)
+  quatFromCart4(0.0, x, y, 0.0)
+}
+
+pure shapePoints(int, int) -> QVec = (shapeId, npts) {
+  let pts = QVec()
+  let i = 0
+  while {i < npts} do {
+    let t = toFloat(i) / toFloat(npts)
+    let p = match shapeId
+      | 0 -> circlePoint(t)
+      | 1 -> squarePoint(t)
+      | _ -> trianglePoint(t)
+    pts = pts.push(p)
+    i = i + 1
+  }
+  pts
+}
+
+-- ── 3D rotation of pure-imaginary quaternions ──────────────────────────
+
+-- Apply rotation q (unit quaternion) to a pure-imaginary v: q·v·q.conj().
+-- For unit q this is the standard 3D rotation formula.
+pure rotatePoint(TractionQuaternion, TractionQuaternion) -> TractionQuaternion
+    = (q, v) {
+  q.compose(v).compose(q.conj())
+}
+
+pure rotateAll(TractionQuaternion, QVec) -> QVec = (q, points) {
+  let out = QVec()
+  let i = 0
+  let n = points.length()
+  while {i < n} do {
+    out = out.push(rotatePoint(q, points[i]))
+    i = i + 1
+  }
+  out
+}
+
+-- Translate a pure-imaginary point's xy by (dx, dy). Applied AFTER
+-- rotation so the shape rotates as a rigid body around its center, then
+-- shifts uniformly. The translation breaks the structural sum-to-zero
+-- of centered shapes — at identity-element weight init, layer outputs
+-- are now (0, 8·dx, 8·dy, 0) instead of (0, 0, 0, 0), so the err =
+-- output⁻¹ · target singularity at zero output goes away.
+pure translatePoint(TractionQuaternion, float, float) -> TractionQuaternion
+    = (q, dx, dy) {
+  let (w, x, y, z) = cartesianOf(q)
+  quatFromCart4(w, x + dx, y + dy, z)
+}
+
+pure translateAll(QVec, float, float) -> QVec = (points, dx, dy) {
+  let out = QVec()
+  let i = 0
+  let n = points.length()
+  while {i < n} do {
+    out = out.push(translatePoint(points[i], dx, dy))
+    i = i + 1
+  }
+  out
+}
+
+-- ── Example generation ─────────────────────────────────────────────────
+
+-- Cycle through shapes 0, 1, 2 for example indices 0, 1, 2, 3, ... so
+-- training sees all three classes equally.
+pure shapeOf(int) -> int = (idx) {
+  let m = idx % 3
+  match
+  | m < 0 -> m + 3
+  | _     -> m
+}
+
+-- Build an example: random rotation of the canonical shape's npts points,
+-- then a fixed off-center translation so the input sum is non-zero. The
+-- translation is the same constant for every shape and every example,
+-- so the network can absorb it into a learned offset and the
+-- classification task itself doesn't change — but identity-element init
+-- no longer produces structurally-zero layer outputs.
+pure genShapeExample(int, int, int) -> QVec = (seed, idx, npts) {
+  let shapeId = shapeOf(idx)
+  let canonical = shapePoints(shapeId, npts)
+  let r = randWeightQ(seed, idx, 0, 0)
+  let rotated = rotateAll(r, canonical)
+  translateAll(rotated, 1.0, 1.0)
+}
+
+-- ── Targets ────────────────────────────────────────────────────────────
+
+-- Hurwitz integer encoding. Each class is a quaternion with all four
+-- components ±1: every slot carries class signal, no algebraic-zero
+-- halves, no transcendentals. The three class quaternions are mutually
+-- orthogonal in 4D (every pairwise dot product = 1+1−1−1 = 0), the
+-- maximum separation for 3 vectors in 4D — and that separation is
+-- achieved with nothing but the integers ±1. Targets are magnitude 2
+-- each (predict-zero floor at 3·|2|² = 12). Permutation across output
+-- positions preserves the multi-output structure of the prior encoding.
+pure shapeTarget(int) -> QVec = (shapeId) {
+  let qC = quatFromCart4( 1.0,  1.0,  1.0,  1.0)   -- circle
+  let qS = quatFromCart4( 1.0,  1.0, -1.0, -1.0)   -- square
+  let qT = quatFromCart4( 1.0, -1.0,  1.0, -1.0)   -- triangle
+  match shapeId
+  | 0 -> QVec().push(qC).push(qS).push(qT)
+  | 1 -> QVec().push(qS).push(qT).push(qC)
+  | _ -> QVec().push(qT).push(qC).push(qS)
+}
+
+-- ── Loss ───────────────────────────────────────────────────────────────
+
+-- Squared 4D distance summed over output positions.
+pure shapeLoss(QVec, QVec) -> float = (preds, tgts) {
+  let total = 0.0
+  let i = 0
+  let n = preds.length()
+  while {i < n} do {
+    let diff = preds[i] - tgts[i]
+    total = total + tractionToFloat(diff.norm_sq())
+    i = i + 1
+  }
+  total
+}
+
+pure shapeAvgLoss(QNet, int, int, int) -> float
+    = (net, seed, npts, nExamples) {
+  let total = 0.0
+  let i = 0
+  while {i < nExamples} do {
+    let inputs = genShapeExample(seed, i, npts)
+    let target = shapeTarget(shapeOf(i))
+    let preds = net.forward(inputs)
+    total = total + shapeLoss(preds, target)
+    i = i + 1
+  }
+  total / toFloat(nExamples)
+}
+
+-- ── Training ───────────────────────────────────────────────────────────
+
+pure shapeEpoch(QNet, int, int, int, float) -> QNet
+    = (net, seed, npts, nExamples, lr) {
+  let cur = net
+  let i = 0
+  while {i < nExamples} do {
+    let inputs = genShapeExample(seed, i, npts)
+    let target = shapeTarget(shapeOf(i))
+    cur = cur.trainStep(inputs, target, lr)
+    i = i + 1
+  }
+  cur
+}
+
+pure shapeTrain(QNet, int, int, int, int, float) -> QNet
+    = (net, seed, npts, nExamples, epochs, lr) {
+  let cur = net
+  let e = 0
+  while {e < epochs} do {
+    -- Vary the seed each epoch so the random rotations differ — gives
+    -- the network many distinct examples per (idx, shape) pair.
+    cur = shapeEpoch(cur, seed + e * 7919, npts, nExamples, lr)
+    e = e + 1
+  }
+  cur
+}
+
+-- ── Architecture builders ──────────────────────────────────────────────
+
+pure buildShapeNet1(int) -> QNet = (npts) {
+  QNet().pushLayer(initQWeights(npts, 3, 0, 42), initQBiases(3))
+}
+
+pure buildShapeNet2(int, int) -> QNet = (npts, h) {
+  QNet()
+    .pushLayer(initQWeights(npts, h, 0, 42), initQBiases(h))
+    .pushLayer(initQWeights(h, 3, 1, 42), initQBiases(3))
+}
+
+pure buildShapeNet4(int, int) -> QNet = (npts, h) {
+  QNet()
+    .pushLayer(initQWeights(npts, h, 0, 42), initQBiases(h))
+    .pushLayer(initQWeights(h, h, 1, 42), initQBiases(h))
+    .pushLayer(initQWeights(h, h, 2, 42), initQBiases(h))
+    .pushLayer(initQWeights(h, 3, 3, 42), initQBiases(3))
+}
+
+-- Identity-init variants. Every weight is 1+0i+0j+0k, every bias 0.
+-- At init each neuron sees Σx_j (sum of inputs); divergence after
+-- training comes from the update rule alone, not from random noise.
+pure buildShapeNet1Identity(int) -> QNet = (npts) {
+  QNet().pushLayer(initQWeightsIdentity(npts, 3), initQBiases(3))
+}
+
+pure buildShapeNet2Identity(int, int) -> QNet = (npts, h) {
+  QNet()
+    .pushLayer(initQWeightsIdentity(npts, h), initQBiases(h))
+    .pushLayer(initQWeightsIdentity(h, 3), initQBiases(3))
+}
+
+pure buildShapeNet4Identity(int, int) -> QNet = (npts, h) {
+  QNet()
+    .pushLayer(initQWeightsIdentity(npts, h), initQBiases(h))
+    .pushLayer(initQWeightsIdentity(h, h), initQBiases(h))
+    .pushLayer(initQWeightsIdentity(h, h), initQBiases(h))
+    .pushLayer(initQWeightsIdentity(h, 3), initQBiases(3))
+}

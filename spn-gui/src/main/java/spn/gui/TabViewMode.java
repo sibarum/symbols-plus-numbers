@@ -26,6 +26,14 @@ class TabViewMode implements Mode {
 
     @Override
     public boolean onKey(int key, int scancode, int action, int mods) {
+        // Navigation history shortcuts. Sit ahead of the active tab so they
+        // work uniformly in editor and trace tabs and don't get shadowed.
+        if (action == GLFW_PRESS
+                && (mods & GLFW_MOD_CONTROL) != 0
+                && (mods & GLFW_MOD_ALT) != 0) {
+            if (key == GLFW_KEY_LEFT)  { window.navigateBack();    return true; }
+            if (key == GLFW_KEY_RIGHT) { window.navigateForward(); return true; }
+        }
         // Let the active tab handle Escape first (e.g., to dismiss a search
         // overlay). If the tab consumes it, we're done.
         if (tabView.onKey(key, scancode, action, mods)) {

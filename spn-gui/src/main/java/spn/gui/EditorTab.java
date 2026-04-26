@@ -47,6 +47,8 @@ public class EditorTab extends ScrollableTab {
         textArea.setChangeOverlay(changeOverlay);
         textArea.setOnEditCallback(() ->
                 diagnosticEngine.notifyEdit(glfwGetTime()));
+        textArea.setOnStablePositionCallback(() ->
+                window.recordStablePosition(this));
     }
 
     // ── File state ─────────────────────────────────────────────────────

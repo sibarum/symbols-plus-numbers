@@ -42,41 +42,71 @@ abstract class ScrollableTab implements Tab {
 
     /** Standard layout: TextArea fills content area, scrollbars on right and bottom. */
     protected void layoutAndRender(float x, float y, float width, float height) {
-        float hudH = window.getHudHeight();
-        float bottomBar = hudH + SCROLLBAR_SIZE;
+        renderWithScrollbars(textArea, vScroll, hScroll,
+                x, y, width, height, window.getHudHeight());
+    }
 
-        textArea.setBounds(x, y, width - SCROLLBAR_SIZE, height - bottomBar);
-        vScroll.setBounds(x + width - SCROLLBAR_SIZE, y, SCROLLBAR_SIZE, height - bottomBar);
-        hScroll.setBounds(x, y + height - SCROLLBAR_SIZE, width - SCROLLBAR_SIZE, SCROLLBAR_SIZE);
+    /**
+     * Lay out and render a {@link TextArea} flanked by a vertical and horizontal
+     * scrollbar. The text area occupies the box minus the right edge (vScroll)
+     * and the bottom edge (hScroll). {@code bottomReserved} is extra space kept
+     * between the bottom of the text area and the horizontal scrollbar — used
+     * by {@link ScrollableTab} to leave room for a per-window HUD strip.
+     */
+    static void renderWithScrollbars(TextArea ta, Scrollbar v, Scrollbar h,
+                                     float x, float y, float width, float height,
+                                     float bottomReserved) {
+        float bottomBar = bottomReserved + SCROLLBAR_SIZE;
+        ta.setBounds(x, y, width - SCROLLBAR_SIZE, height - bottomBar);
+        v.setBounds(x + width - SCROLLBAR_SIZE, y, SCROLLBAR_SIZE, height - bottomBar);
+        h.setBounds(x, y + height - SCROLLBAR_SIZE, width - SCROLLBAR_SIZE, SCROLLBAR_SIZE);
 
-        textArea.render();
+        ta.render();
 
-        vScroll.setContent(textArea.getContentRows(), textArea.getVisibleRows());
-        vScroll.setValue(textArea.getScrollRow());
-        vScroll.render();
+        v.setContent(ta.getContentRows(), ta.getVisibleRows());
+        v.setValue(ta.getScrollRow());
+        v.render();
 
-        hScroll.setContent(textArea.getContentCols(), textArea.getVisibleCols());
-        hScroll.setValue(textArea.getScrollCol());
-        hScroll.render();
+        h.setContent(ta.getContentCols(), ta.getVisibleCols());
+        h.setValue(ta.getScrollCol());
+        h.render();
+    }
+
+    /**
+     * Forward a left-button event to the scrollbars; if neither is dragging,
+     * also forward to the text area. Returns {@code true} when the event
+     * resulted in scrollbar drag activation.
+     */
+    static boolean dispatchMousePressToScrolled(TextArea ta, Scrollbar v, Scrollbar h,
+                                                int button, int action, int mods,
+                                                double mx, double my) {
+        v.onMouseButton(button, action, mods, mx, my);
+        h.onMouseButton(button, action, mods, mx, my);
+        if (!v.isDragging() && !h.isDragging()) {
+            ta.onMouseButton(button, action, mods, mx, my);
+            return false;
+        }
+        return true;
+    }
+
+    static void dispatchCursorToScrolled(TextArea ta, Scrollbar v, Scrollbar h,
+                                         double mx, double my) {
+        v.onCursorPos(mx, my);
+        h.onCursorPos(mx, my);
+        if (!v.isDragging() && !h.isDragging()) {
+            ta.onCursorPos(mx, my);
+        }
     }
 
     @Override
     public boolean onMouseButton(int button, int action, int mods, double mx, double my) {
-        vScroll.onMouseButton(button, action, mods, mx, my);
-        hScroll.onMouseButton(button, action, mods, mx, my);
-        if (!vScroll.isDragging() && !hScroll.isDragging()) {
-            textArea.onMouseButton(button, action, mods, mx, my);
-        }
+        dispatchMousePressToScrolled(textArea, vScroll, hScroll, button, action, mods, mx, my);
         return true;
     }
 
     @Override
     public boolean onCursorPos(double mx, double my) {
-        vScroll.onCursorPos(mx, my);
-        hScroll.onCursorPos(mx, my);
-        if (!vScroll.isDragging() && !hScroll.isDragging()) {
-            textArea.onCursorPos(mx, my);
-        }
+        dispatchCursorToScrolled(textArea, vScroll, hScroll, mx, my);
         return true;
     }
 

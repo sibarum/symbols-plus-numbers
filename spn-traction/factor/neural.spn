@@ -27,25 +27,39 @@ macro makeNeuralNet<T requires NeuralWeight> = {
   type TArray = Array<T>
   type TMatrix = Array<TArray>
 
-  type TLayer(weights: TMatrix, biases: TArray)
+  -- TLayer carries weights, biases, and per-neuron gated-activation
+  -- parameters. actK1 and actK2 are TArrays of the same length as biases
+  -- (one pair per output neuron). Empty arrays mean identity activation
+  -- (back-compat for layers built via plain pushLayer).
+  type TLayer(weights: TMatrix, biases: TArray, actK1: TArray, actK2: TArray)
   type TLayerArray = Array<TLayer>
 
   type Net(layers: TLayerArray)
 
-  pure TLayer(TMatrix, TArray) -> TLayer = (w, b) { this(w, b) }
+  pure TLayer(TMatrix, TArray, TArray, TArray) -> TLayer = (w, b, k1, k2) {
+    this(w, b, k1, k2)
+  }
   pure Net(TLayerArray) -> Net = (l) { this(l) }
   pure Net() -> Net = () { Net(TLayerArray()) }
 
-  -- Append a layer with the given weights and biases. Users build Nets
-  -- by chaining pushLayer calls, since TLayer itself isn't emitted.
+  -- Append a plain (identity-activation) layer.
   pure Net.pushLayer(TMatrix, TArray) -> Net = (weights, biases) {
-    Net(this.layers.push(TLayer(weights, biases)))
+    Net(this.layers.push(TLayer(weights, biases, TArray(), TArray())))
   }
 
-  -- Forward through one layer: z_j = bias[j] + Σ compose(W[j][i], x[i]),
-  -- a_j = activate(z_j). Bias seeds the aggregate so the signature
-  -- doesn't need a `zero` primitive.
-  pure TLayer.forward(TArray) -> TArray = (input) {
+  -- Append a gated-activation layer. actK1, actK2 must each have length
+  -- equal to biases (one pair per output neuron). The gate's selection
+  -- between k1 and k2 is via T.activate(k1, k2) — equivariance property
+  -- depends on T (see the activate(k1, k2) method on the chosen T).
+  pure Net.pushLayerGated(TMatrix, TArray, TArray, TArray) -> Net
+      = (weights, biases, k1, k2) {
+    Net(this.layers.push(TLayer(weights, biases, k1, k2)))
+  }
+
+  -- Pre-activation only: z_j = bias[j] + Σ compose(W[j][i], x[i]).
+  -- Saved separately because trainStep needs both pre and post for the
+  -- gated activation backward pass.
+  pure TLayer.forwardPre(TArray) -> TArray = (input) {
     let out = TArray()
     let j = 0
     let outDim = this.weights.length()
@@ -58,10 +72,32 @@ macro makeNeuralNet<T requires NeuralWeight> = {
         acc = acc.aggregate(row[i].compose(input[i]))
         i = i + 1
       }
-      out = out.push(acc.activate())
+      out = out.push(acc)
       j = j + 1
     }
     out
+  }
+
+  -- Apply per-neuron activation given the pre-activations. Identity if
+  -- this layer has no actK1/actK2; gated activateGated otherwise.
+  -- The bias acts as the per-neuron gate threshold (via its norm_sq).
+  pure TLayer.activatePre(TArray) -> TArray = (pre) {
+    let out = TArray()
+    let j = 0
+    let n = pre.length()
+    let hasGate = this.actK1.length()
+    while {j < n} do {
+      let activated = match hasGate
+        | 0 -> pre[j].activate()
+        | _ -> pre[j].activateGated(this.actK1[j], this.actK2[j], this.biases[j])
+      out = out.push(activated)
+      j = j + 1
+    }
+    out
+  }
+
+  pure TLayer.forward(TArray) -> TArray = (input) {
+    this.activatePre(this.forwardPre(input))
   }
 
   pure Net.forward(TArray) -> TArray = (x) {
@@ -93,6 +129,23 @@ macro makeNeuralNet<T requires NeuralWeight> = {
     acts
   }
 
+  -- Returns the pre-activation column produced by each layer (one row per
+  -- layer, length = nLayers). Lets external code inspect gate decisions
+  -- on the same pre-activation values trainStep sees during backward.
+  pure Net.forwardAllPre(TArray) -> TMatrix = (x) {
+    let pres = TMatrix()
+    let a = x
+    let i = 0
+    let n = this.layers.length()
+    while {i < n} do {
+      let pre = this.layers[i].forwardPre(a)
+      pres = pres.push(pre)
+      a = this.layers[i].activatePre(pre)
+      i = i + 1
+    }
+    pres
+  }
+
   -- Algebraic training step. For each output j:
   --   err_j = output_j.error(target_j)          -- what to compose to reach target
   -- For each weight W[l][j][i] with input x = acts[l][i]:
@@ -101,15 +154,24 @@ macro makeNeuralNet<T requires NeuralWeight> = {
   -- Bias shifts multiplicatively: b <- b.interp(b.compose(err_j), lr).
   -- Error propagates backward: err_prev_i = aggregate_j(W[j][i].invert().compose(err_j)).
   -- Activation derivative is approximated as identity — fine for small lr.
+  --
+  -- For gated activation: forward saves both pre- and post-activations.
+  -- Backward recomputes the gate decision per neuron (it's deterministic
+  -- given the pre-activation) and updates only the selected k via the
+  -- bias-like rule. The unselected k carries no gradient signal that
+  -- step, exactly like ReLU's "dead branch."
   pure Net.trainStep(TArray, TArray, float) -> Net = (input, target, lr) {
-    -- Forward, saving the input to each layer at acts[l].
+    -- Forward, saving pre- AND post-activations at each layer.
+    let preActs = TMatrix()
     let acts = TMatrix()
     acts = acts.push(input)
     let a = input
     let li = 0
     let nLayers = this.layers.length()
     while {li < nLayers} do {
-      a = this.layers[li].forward(a)
+      let pre = this.layers[li].forwardPre(a)
+      preActs = preActs.push(pre)
+      a = this.layers[li].activatePre(pre)
       acts = acts.push(a)
       li = li + 1
     }
@@ -162,6 +224,37 @@ macro makeNeuralNet<T requires NeuralWeight> = {
         bj = bj + 1
       }
 
+      -- Activation-parameter update. Recompute the gate decision per
+      -- neuron from the saved pre-activation, then nudge only the
+      -- selected k via the same interp rule used for biases. The other
+      -- k passes through unchanged. Layers without gate params (empty
+      -- actK1/actK2) skip this entirely and propagate them through.
+      let newActK1 = TArray()
+      let newActK2 = TArray()
+      let hasGate = layer.actK1.length()
+      match hasGate
+      | 0 -> { 0 }
+      | _ -> {
+          let pre = preActs[idx]
+          let aj = 0
+          while {aj < oDim} do {
+            let z = pre[aj]
+            let nSq = z.norm_sq()
+            let k1 = layer.actK1[aj]
+            let k2 = layer.actK2[aj]
+            match
+            | nSq.num > nSq.denom -> {
+                newActK1 = newActK1.push(k1.interp(k1.compose(err[aj]), lr))
+                newActK2 = newActK2.push(k2)
+              }
+            | _ -> {
+                newActK1 = newActK1.push(k1)
+                newActK2 = newActK2.push(k2.interp(k2.compose(err[aj]), lr))
+              }
+            aj = aj + 1
+          }
+        }
+
       -- Propagate error to the previous layer.
       match
       | idx > 0 -> {
@@ -181,7 +274,7 @@ macro makeNeuralNet<T requires NeuralWeight> = {
         }
       | _ -> { 0 }
 
-      newLayersRev = newLayersRev.push(TLayer(newWeights, newBiases))
+      newLayersRev = newLayersRev.push(TLayer(newWeights, newBiases, newActK1, newActK2))
       idx = idx - 1
     }
 

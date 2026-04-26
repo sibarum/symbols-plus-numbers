@@ -95,6 +95,7 @@ public class TextArea {
     private spn.gui.diagnostic.DiagnosticOverlay diagnosticOverlay;
     private spn.gui.diagnostic.ChangeOverlay changeOverlay;
     private Runnable onEditCallback; // notified on any edit for debounce
+    private Runnable onStablePositionCallback; // notified on edits, copy, cut, paste — feeds nav history
     private PreTextRenderer preTextRenderer; // drawn after background, before text
 
     /** Callback for rendering overlays between background and text. */
@@ -118,6 +119,12 @@ public class TextArea {
 
     public void setOnEditCallback(Runnable callback) {
         this.onEditCallback = callback;
+    }
+
+    /** Fires on any event that should be a navigation-history stable point:
+     *  buffer edits (typing, delete, cut, paste) and clipboard copy. */
+    public void setOnStablePositionCallback(Runnable callback) {
+        this.onStablePositionCallback = callback;
     }
 
     // ------------------------------------------------------------------
@@ -148,6 +155,7 @@ public class TextArea {
                 case TextBuffer.ChangeListener.BULK_CHANGE   -> highlightCache.invalidateAll();
             }
             if (onEditCallback != null) onEditCallback.run();
+            if (onStablePositionCallback != null) onStablePositionCallback.run();
         });
         recomputeMetrics();
     }
@@ -710,15 +718,25 @@ public class TextArea {
             }
 
             case GLFW_KEY_TAB -> {
-                int rB = cursorRow, cB = cursorCol;
-                String selRem = removeSelection();
-                int eRow = cursorRow, eCol = cursorCol;
-                for (int i = 0; i < 2; i++) {
-                    buffer.insertChar(cursorRow, cursorCol, ' ');
-                    cursorCol++;
+                if (shift) {
+                    dedentLines();
+                } else if (selectionSpansMultipleLines()) {
+                    indentLines();
+                } else {
+                    int rB = cursorRow, cB = cursorCol;
+                    String selRem = removeSelection();
+                    int eRow = cursorRow, eCol = cursorCol;
+                    for (int i = 0; i < 2; i++) {
+                        buffer.insertChar(cursorRow, cursorCol, ' ');
+                        cursorCol++;
+                    }
+                    if (!undoRedoInProgress)
+                        undo.record(eRow, eCol, selRem, "  ", rB, cB, cursorRow, cursorCol);
                 }
-                if (!undoRedoInProgress)
-                    undo.record(eRow, eCol, selRem, "  ", rB, cB, cursorRow, cursorCol);
+            }
+
+            case GLFW_KEY_D -> {
+                if (ctrl) duplicateLines();
             }
 
             case GLFW_KEY_A -> {
@@ -731,7 +749,12 @@ public class TextArea {
             }
 
             case GLFW_KEY_C -> {
-                if (ctrl && hasSelection()) clipboard.set(getSelectedText());
+                if (ctrl && hasSelection()) {
+                    clipboard.set(getSelectedText());
+                    // Buffer didn't change, so the change listener won't fire.
+                    // Notify the nav history explicitly so copy is a stable point.
+                    if (onStablePositionCallback != null) onStablePositionCallback.run();
+                }
             }
 
             case GLFW_KEY_X -> {
@@ -989,6 +1012,144 @@ public class TextArea {
     public boolean hasSelection() {
         return selAnchorRow >= 0
                 && (selAnchorRow != cursorRow || selAnchorCol != cursorCol);
+    }
+
+    /** True if the active selection covers two or more distinct rows. */
+    private boolean selectionSpansMultipleLines() {
+        if (!hasSelection()) return false;
+        int[] s = selectionBounds();
+        // A selection ending at column 0 of a row only "touches" that row;
+        // treat the affected range as ending on the previous row.
+        int lastRow = (s[3] == 0 && s[2] > s[0]) ? s[2] - 1 : s[2];
+        return s[0] < lastRow;
+    }
+
+    /**
+     * Indent every line touched by the selection (or current line if no selection)
+     * by 2 spaces. Records a single undo entry covering the whole region.
+     */
+    private void indentLines() {
+        int[] r = affectedLineRange();
+        int firstRow = r[0], lastRow = r[1];
+
+        int rB = cursorRow, cB = cursorCol;
+        int origAnchorRow = selAnchorRow, origAnchorCol = selAnchorCol;
+
+        int endCol = buffer.lineLength(lastRow);
+        String original = buffer.getTextRange(firstRow, 0, lastRow, endCol);
+        StringBuilder rebuilt = new StringBuilder();
+        String[] lines = original.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            if (i > 0) rebuilt.append('\n');
+            rebuilt.append("  ").append(lines[i]);
+        }
+        String replaced = rebuilt.toString();
+
+        buffer.deleteRange(firstRow, 0, lastRow, endCol);
+        buffer.insertText(firstRow, 0, replaced);
+
+        // Shift cursor and selection anchor by 2 columns on their respective rows
+        cursorCol = Math.max(0, cB + (rB >= firstRow && rB <= lastRow ? 2 : 0));
+        cursorRow = rB;
+        if (origAnchorRow >= firstRow && origAnchorRow <= lastRow) {
+            selAnchorRow = origAnchorRow;
+            selAnchorCol = origAnchorCol + 2;
+        }
+
+        if (!undoRedoInProgress) {
+            undo.record(firstRow, 0, original, replaced, rB, cB, cursorRow, cursorCol);
+        }
+    }
+
+    /**
+     * Remove up to 2 leading spaces from every line touched by the selection
+     * (or current line if no selection). Records a single undo entry.
+     */
+    private void dedentLines() {
+        int[] r = affectedLineRange();
+        int firstRow = r[0], lastRow = r[1];
+
+        int rB = cursorRow, cB = cursorCol;
+        int origAnchorRow = selAnchorRow, origAnchorCol = selAnchorCol;
+
+        int endCol = buffer.lineLength(lastRow);
+        String original = buffer.getTextRange(firstRow, 0, lastRow, endCol);
+        String[] lines = original.split("\n", -1);
+        int[] removedPerLine = new int[lines.length];
+        StringBuilder rebuilt = new StringBuilder();
+        for (int i = 0; i < lines.length; i++) {
+            if (i > 0) rebuilt.append('\n');
+            int strip = 0;
+            while (strip < 2 && strip < lines[i].length() && lines[i].charAt(strip) == ' ') {
+                strip++;
+            }
+            removedPerLine[i] = strip;
+            rebuilt.append(lines[i], strip, lines[i].length());
+        }
+        String replaced = rebuilt.toString();
+
+        if (replaced.equals(original)) return; // nothing to dedent
+
+        buffer.deleteRange(firstRow, 0, lastRow, endCol);
+        buffer.insertText(firstRow, 0, replaced);
+
+        // Shift cursor / anchor left by however much got stripped from their row
+        if (rB >= firstRow && rB <= lastRow) {
+            int strip = removedPerLine[rB - firstRow];
+            cursorCol = Math.max(0, cB - strip);
+        }
+        cursorRow = rB;
+        if (origAnchorRow >= firstRow && origAnchorRow <= lastRow) {
+            int strip = removedPerLine[origAnchorRow - firstRow];
+            selAnchorRow = origAnchorRow;
+            selAnchorCol = Math.max(0, origAnchorCol - strip);
+        }
+
+        if (!undoRedoInProgress) {
+            undo.record(firstRow, 0, original, replaced, rB, cB, cursorRow, cursorCol);
+        }
+    }
+
+    /**
+     * Duplicate every line touched by the selection (or current line if none),
+     * inserting a copy directly below. Cursor moves to the same column on the
+     * mirrored line. Records a single undo entry.
+     */
+    private void duplicateLines() {
+        int[] r = affectedLineRange();
+        int firstRow = r[0], lastRow = r[1];
+
+        int rB = cursorRow, cB = cursorCol;
+        int origAnchorRow = selAnchorRow, origAnchorCol = selAnchorCol;
+
+        int endCol = buffer.lineLength(lastRow);
+        String block = buffer.getTextRange(firstRow, 0, lastRow, endCol);
+        String inserted = block + "\n";
+
+        buffer.insertText(firstRow, 0, inserted);
+
+        int span = lastRow - firstRow + 1;
+        cursorRow = rB + span;
+        cursorCol = cB;
+        if (origAnchorRow >= 0) {
+            selAnchorRow = origAnchorRow + span;
+            selAnchorCol = origAnchorCol;
+        }
+
+        if (!undoRedoInProgress) {
+            undo.record(firstRow, 0, "", inserted, rB, cB, cursorRow, cursorCol);
+        }
+    }
+
+    /** [firstRow, lastRow] of the line range affected by the current selection
+     *  (or the cursor row if no selection). A selection that ends at column 0
+     *  of a row does not include that row. */
+    private int[] affectedLineRange() {
+        if (!hasSelection()) return new int[]{cursorRow, cursorRow};
+        int[] s = selectionBounds();
+        int firstRow = s[0];
+        int lastRow = (s[3] == 0 && s[2] > s[0]) ? s[2] - 1 : s[2];
+        return new int[]{firstRow, lastRow};
     }
 
     private int[] selectionBounds() {

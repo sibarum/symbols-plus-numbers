@@ -104,6 +104,21 @@ public class SpnParser {
 
     // Macro expansion state
     private boolean insideMacroExpansion = false;
+    // Stack of macro invocation frames for the macro currently expanding
+    // (and any outer expansions that contain it). Captured on each deferred
+    // operator dispatch so end-of-parse error messages can attribute the
+    // failure to the macro invocation site.
+    private record MacroFrame(String name, String file, int line) {}
+    private final java.util.Deque<MacroFrame> macroContextStack = new java.util.ArrayDeque<>();
+    // Operator dispatches that couldn't be resolved when their containing
+    // macro body was parsed (the relevant overload may be registered later
+    // in the source). Resolved at the end of parse() against the final
+    // operator registry.
+    private record DeferredDispatch(spn.node.expr.SpnDeferredOpNode node,
+                                    BinaryFallback fallback,
+                                    SpnParseToken opTok,
+                                    java.util.List<MacroFrame> frames) {}
+    private final List<DeferredDispatch> deferredOps = new ArrayList<>();
     // Names emitted by the currently-expanding macro. Cleared at the start of
     // each expansion. Typical macros emit exactly one entry — `renameMacroEmittedType`
     // rejects multi-emit when the caller uses `type X = macro<...>`.
@@ -383,6 +398,11 @@ public class SpnParser {
                 synchronize();
             }
         }
+
+        // Final pass: re-attempt resolution of any operator dispatches deferred
+        // from macro bodies. Anything still unresolved becomes a parse error
+        // attributed to the macro invocation that emitted it.
+        resolveDeferredOps();
 
         SpnExpressionNode body;
         if (statements.isEmpty()) {
@@ -793,6 +813,7 @@ public class SpnParser {
         boolean wasInMacro = insideMacroExpansion;
         insideMacroExpansion = true;
         macroEmittedBundle.clear();
+        macroContextStack.push(new MacroFrame(macro.name(), sourceName, nameTok.line()));
 
         // Add a sentinel at the end so we know when the macro body is done
         expanded.add(new SpnParseToken(
@@ -827,7 +848,14 @@ public class SpnParser {
         revertNamedRegistries(snapStructs, snapTypes, snapFunctions, snapMethods,
                 snapDescriptors, snapFactories, snapConstants, snapFunctionOverloads);
 
+        macroContextStack.pop();
         insideMacroExpansion = wasInMacro;
+
+        // Try to resolve any operator dispatches deferred from this expansion
+        // against the registry as it stands now (the body may have registered
+        // overloads later than the call sites). Any still unresolved are
+        // retried at end-of-parse, when the rest of the file has run.
+        retryDeferredOps();
 
         // Record the (first) emitted type in the memo so subsequent invocations
         // with the same args reuse it.
@@ -3663,6 +3691,14 @@ public class SpnParser {
             at(dispatched, opTok);
         }
         if (dispatched == null) {
+            // Inside a macro body, a non-primitive operand to an op whose
+            // fallback would error means the user-defined overload either
+            // hasn't been registered yet, or will be registered later in the
+            // source. Defer the dispatch and retry at end-of-parse rather
+            // than failing eagerly.
+            SpnExpressionNode deferred = maybeDeferDispatch(symbol, left, right, fallback, resultType, opTok);
+            if (deferred != null) return deferred;
+
             dispatched = switch (fallback) {
                 case ARITHMETIC -> {
                     FieldType lt = inferType(left), rt = inferType(right);
@@ -3691,6 +3727,91 @@ public class SpnParser {
         }
         if (resultType != null) trackType(dispatched, resultType);
         return dispatched;
+    }
+
+    /**
+     * If we're inside a macro expansion and dispatch failed on a non-primitive
+     * operand, emit a {@link spn.node.expr.SpnDeferredOpNode SpnDeferredOpNode}
+     * placeholder and queue it for end-of-parse resolution. Returns the
+     * deferred node, or null if the call site should fall through to its
+     * normal fallback.
+     */
+    private SpnExpressionNode maybeDeferDispatch(String symbol,
+            SpnExpressionNode left, SpnExpressionNode right,
+            BinaryFallback fallback, FieldType resultType, SpnParseToken opTok) {
+        if (!insideMacroExpansion) return null;
+        if (fallback == BinaryFallback.NO_DISPATCH || fallback == BinaryFallback.ALLOW_ANY) {
+            return null;
+        }
+        FieldType lt = inferType(left), rt = inferType(right);
+        boolean nonPrim = (lt != null && isDefinitelyNonPrimitive(lt))
+                       || (rt != null && isDefinitelyNonPrimitive(rt));
+        if (!nonPrim) return null;
+
+        spn.node.expr.SpnDeferredOpNode deferred = new spn.node.expr.SpnDeferredOpNode(symbol, left, right);
+        at(deferred, opTok);
+        if (resultType != null) trackType(deferred, resultType);
+        deferredOps.add(new DeferredDispatch(deferred, fallback, opTok,
+                java.util.List.copyOf(macroContextStack)));
+        return deferred;
+    }
+
+    /**
+     * Try to resolve any still-unresolved deferred ops against the current
+     * operator registry, in queue order. Successful resolutions are removed
+     * from the list. Called after each macro expansion ends and once more at
+     * end-of-parse.
+     */
+    private void retryDeferredOps() {
+        if (deferredOps.isEmpty()) return;
+        java.util.Iterator<DeferredDispatch> it = deferredOps.iterator();
+        while (it.hasNext()) {
+            DeferredDispatch d = it.next();
+            if (d.node().isResolved()) { it.remove(); continue; }
+            SpnExpressionNode resolved = resolver.tryOperatorDispatch(
+                    d.node().op, d.node().leftRef, d.node().rightRef);
+            if (resolved != null) {
+                d.node().setResolved(resolved);
+                it.remove();
+            }
+        }
+    }
+
+    /**
+     * Final pass at end-of-parse: any deferred op still unresolved becomes a
+     * parse error. The error is attributed to the macro invocation site (the
+     * outermost macro frame) so the user sees which expansion failed, not the
+     * line inside the macro body that they didn't write.
+     */
+    private void resolveDeferredOps() {
+        retryDeferredOps();
+        for (DeferredDispatch d : deferredOps) {
+            if (d.node().isResolved()) continue;
+            FieldType lt = inferType(d.node().leftRef);
+            FieldType rt = inferType(d.node().rightRef);
+            String typeStr = describeTypeOrUnknown(lt);
+            String otherStr = describeTypeOrUnknown(rt);
+            // Outermost frame = invocation site the user actually wrote.
+            MacroFrame outer = d.frames().isEmpty()
+                    ? null : d.frames().get(d.frames().size() - 1);
+            String hint = lt != null && rt != null && typeStr.equals(otherStr)
+                    ? " — define '" + d.node().op + "(" + typeStr + ", " + typeStr
+                            + ")' before this expansion"
+                    : "";
+            String msg = "No overload of '" + d.node().op + "' for "
+                    + typeStr + (typeStr.equals(otherStr) ? "" : " and " + otherStr)
+                    + hint;
+            SpnParseException ex = outer != null
+                    ? new SpnParseException(msg, outer.file(), outer.line(), 1)
+                    : new SpnParseException(msg);
+            // Build the full macro frame trace (innermost first) so nested
+            // expansions are visible.
+            for (MacroFrame f : d.frames()) {
+                ex.pushMacroFrame(f.name(), f.file(), f.line());
+            }
+            collectedErrors.add(ex);
+        }
+        deferredOps.clear();
     }
 
     /** One infix operator's precedence-table entry. */

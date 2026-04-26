@@ -1,0 +1,4 @@
+import tract.rational
+import tract.residual
+
+type TractComplex(re: TractRational, im: TractResidual)

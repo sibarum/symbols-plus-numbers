@@ -264,12 +264,19 @@ pure learnRate()   -> float = () { 0.01 }
 
 -- Build the initial net from a deterministic seed. The renderer derives
 -- column count from net.layers.length(), so adding or removing a layer
--- here automatically updates the visualization.
+-- here automatically updates the visualization. Each layer uses gated
+-- activation: per-neuron k1 random unit, k2 = k1.conj() — opposite
+-- rotations at init for maximum gate effect, free to drift apart during
+-- training.
 pure buildInitialNet(int) -> QNet = (k) {
   let h = k
+  let h_k1 = initActK1(h, 0, seed())
+  let h_k2 = initActK2FromK1(h_k1)
+  let o_k1 = initActK1(k, 1, seed())
+  let o_k2 = initActK2FromK1(o_k1)
   QNet()
-    .pushLayer(initQWeights(k, h, 0, seed()), initQBiases(h))
-    .pushLayer(initQWeights(h, k, 1, seed()), initQBiases(k))
+    .pushLayerGated(initQWeights(k, h, 0, seed()), initQBiases(h), h_k1, h_k2)
+    .pushLayerGated(initQWeights(h, k, 1, seed()), initQBiases(k), o_k1, o_k2)
     .pushLayer(initQWeights(k, h, 2, seed()), initQBiases(h))
 }
 

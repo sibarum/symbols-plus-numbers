@@ -1,121 +1,228 @@
 
-import Math (abs, sign, max, bitWidth, shr, shl, toFloat, round, cos, sin, sqrt)
+import Math (abs, sign, max, bitWidth, shr, shl, toFloat, round, cos, sin, sqrt, log, exp, atan2)
 import Ordering
 
+------------------------------------------------
+-- TODO: You can't extend a type that's been constructed via macro.
+-- But you can extend the type if it's not constructed via macro.
+-- This behavior should be consistent.
+-- The "generics" from the macro are not truly singleton/canonical. Thy should be.
+-- TODO: Macro system can't accept non-generic-type arguments?
+-- There's no way currntly to combine Absorbing and NonAbsorbing into a macro.
+
+type Absorbing(v: int)
+
+pure Absorbing(int) -> Absorbing = (v) {
+  this(v)
+}
+
+pure Absorbing(float) -> Absorbing = (v) {
+  this(round(v))
+}
+
+pure +(Absorbing, Absorbing) -> Absorbing = (a, b) {
+  Absorbing(a.v + b.v)
+}
+
+pure *(Absorbing, Absorbing) -> Absorbing = (a, b) {
+  Absorbing(a.v * b.v)
+}
+
+pure -(Absorbing, Absorbing) -> Absorbing = (a, b) {
+  Absorbing(a.v - b.v)
+}
+
+pure /(Absorbing, Absorbing) -> Absorbing = (a, b) {
+  Absorbing(a.v / b.v)
+}
+
+pure Absorbing.neg() -> Absorbing = () {
+  Absorbing(-this.v)
+}
+
+pure compareAbsorbing(Absorbing, Absorbing) -> int = (t1, t2) {
+  (t1 - t2).v
+}
+
+deriveOrderingFromInt<Absorbing, compareAbsorbing>
+
+pure Absorbing.neuralValue() -> int = () {
+  this.v
+}
+
+pure Absorbing.newFromNeuralValue(int) -> Absorbing = (x) {
+  Absorbing(x)
+}
+
+------------------------------------------------
+type NonAbsorbing(v: int)
+
+pure NonAbsorbing(int) -> NonAbsorbing = (v) {
+  this(v)
+}
+
+pure NonAbsorbing(float) -> NonAbsorbing = (v) {
+  this(round(v))
+}
+
+pure +(NonAbsorbing, NonAbsorbing) -> NonAbsorbing = (a, b) {
+  NonAbsorbing(a.v + b.v)
+}
+
+pure *(NonAbsorbing, NonAbsorbing) -> NonAbsorbing = (a, b) {
+  NonAbsorbing(a.v * b.v)
+}
+
+pure -(NonAbsorbing, NonAbsorbing) -> NonAbsorbing = (a, b) {
+  NonAbsorbing(a.v - b.v)
+}
+
+pure /(NonAbsorbing, NonAbsorbing) -> NonAbsorbing = (a, b) {
+  NonAbsorbing(a.v / b.v)
+}
+
+pure NonAbsorbing.neg() -> NonAbsorbing = () {
+  NonAbsorbing(-this.v)
+}
+
+pure compareNonAbsorbing(NonAbsorbing, NonAbsorbing) -> int = (t1, t2) {
+  (t1 - t2).v
+}
+
+deriveOrderingFromInt<NonAbsorbing, compareNonAbsorbing>
+
+pure NonAbsorbing.neuralValue() -> int = () {
+  match
+  | this.v < 0 -> this.v-1
+  | this.v > 0 -> this.v+1
+  | _ -> -1
+}
+
+pure NonAbsorbing.newFromNeuralValue(int) -> NonAbsorbing = (x) {
+  let v = match
+  | x < 0 -> x+1
+  | x > 0 -> x-1
+  | _ -> 0
+  NonAbsorbing(v)
+}
+
+------------------------------------------------------------------------
+
+macro TractionMacro<T> = {
+  type Traction(num: T, denom: T)
+  
+  -- Bit-budget normalization: after any construction, if either component
+  -- exceeds 30 significant bits, right-shift both by the minimum amount
+  -- needed so the largest fits in 30 bits. Signs on num and denom are
+  -- preserved independently — Traction does NOT sign-migrate like Rational,
+  -- since operations like `*_ndot` legitimately produce (24, -7) etc. where
+  -- the sign of denom carries quadrant information.
+  --
+  -- The 30-bit budget keeps products of two Tractions at ≤ 60 bits, well
+  -- under the 63-bit signed-long headroom, so the arithmetic chain never
+  -- overflows. Long animation loops (quaternion composition per frame)
+  -- trade exact-rational purity for bounded magnitude — the cube stays
+  -- rotating smoothly indefinitely instead of overflowing after a few
+  -- thousand frames.
+  pure Traction(T, T) -> Traction = (num, denom) {
+    let maxB = max(bitWidth(abs(num)), bitWidth(abs(denom)))
+    let k = max(0, maxB - 30)
+    match
+    | k == 0 -> this(num, denom)
+    | _ -> {
+        let half = shl(1, k - 1)
+        let nAbs = shr(abs(num) + half, k)
+        let dAbs = shr(abs(denom) + half, k)
+        this(sign(num) * nAbs, sign(denom) * dAbs)
+      }
+  }
+  
+  
+  pure Traction(T) -> Traction = (n) {
+    this(n, 1)
+  }
+  
+  const Traction.zero = Traction(0,1)
+  
+  pure +(Traction, Traction) -> Traction = ((n1,d1), (n2,d2)) {
+    Traction(n1*d2 + n2*d1, d1*d2)
+  }
+  
+  pure *(Traction, Traction) -> Traction = ((n1,d1), (n2,d2)) {
+    Traction(n1*n2, d1*d2)
+  }
+  
+  pure *_dot(Traction, Traction) -> T = ((n1,d1), (n2,d2)) {
+    d1*d2 + n1*n2
+  }
+  
+  pure *_wedge(Traction, Traction) -> T = ((n1,d1), (n2,d2)) {
+    d1*n2 - n1*d2
+  }
+  
+  -- Dot product with second operand conjugated: t1 *_dot t2.conj()
+  -- Equivalently: real part of complex product (d1+n1·i)(d2+n2·i)
+  pure *_ndot(Traction, Traction) -> T = ((n1,d1), (n2,d2)) {
+    d1*d2 - n1*n2
+  }
+  
+  -- Wedge product with second operand conjugated: t1 *_wedge t2.conj()  
+  -- Equivalently: imaginary part of complex product (d1+n1·i)(d2+n2·i)
+  pure *_nwedge(Traction, Traction) -> T = ((n1,d1), (n2,d2)) {
+    d1*n2 + n1*d2
+  }
+  
+  pure Traction.neg() -> Traction = () {
+    Traction(-this.num, -this.denom)
+  }
+  
+  pure -(Traction, Traction) -> Traction = (t1, t2) {
+    t1 + t2.neg()
+  }
+  
+  pure Traction.inv() -> Traction = () {
+    Traction(this.denom, this.num)
+  }
+  
+  pure /(Traction, Traction) -> Traction = (t1, t2) {
+    t1 * t2.inv()
+  }
+  
+  pure compare(Traction, Traction) -> T = (t1, t2) {
+    (t1 - t2).0
+  }
+
+  deriveOrderingFromInt<Traction, compare>
+  
+  pure Traction.conj() -> Traction = () {
+    Traction(-this.num, this.denom)
+  }
+  
+  promote int -> Traction = (i) {
+    Traction(i)
+  }
+  
+  pure Traction.toFloat() -> float = ((n, d)) {
+    match d
+    | 0 -> 0.0
+    | _ -> toFloat(n) / toFloat(d)
+  }
+  emit Traction
+}
+
+type Traction = TractionMacro<int>
 
 -------------------------------------------------
-type Traction(num: int, denom: int)
-
--- Bit-budget normalization: after any construction, if either component
--- exceeds 30 significant bits, right-shift both by the minimum amount
--- needed so the largest fits in 30 bits. Signs on num and denom are
--- preserved independently — Traction does NOT sign-migrate like Rational,
--- since operations like `*_ndot` legitimately produce (24, -7) etc. where
--- the sign of denom carries quadrant information.
---
--- The 30-bit budget keeps products of two Tractions at ≤ 60 bits, well
--- under the 63-bit signed-long headroom, so the arithmetic chain never
--- overflows. Long animation loops (quaternion composition per frame)
--- trade exact-rational purity for bounded magnitude — the cube stays
--- rotating smoothly indefinitely instead of overflowing after a few
--- thousand frames.
-pure Traction(int, int) -> Traction = (num, denom) {
---  match (num, denom)
-  -- 0/0 = 1 in traction theory: the "operational zero" carries a
-  -- multiplicative-identity residual, so downstream operations never
-  -- fully annihilate. Canonicalize (0, 0) to (1, 1) at the constructor.
---  | (0, 0) -> this(1, 1)
---  | _ -> {
-  let maxB = max(bitWidth(abs(num)), bitWidth(abs(denom)))
-  let k = max(0, maxB - 30)
-  match
-  | k == 0 -> this(num, denom)
-  | _ -> {
-      -- Round-to-nearest on magnitude; re-apply sign.
-      let half = shl(1, k - 1)
-      let nAbs = shr(abs(num) + half, k)
-      let dAbs = shr(abs(denom) + half, k)
-      this(sign(num) * nAbs, sign(denom) * dAbs)
-    }
---    }
-}
-
-
-pure Traction(int) -> Traction = (n) {
-  this(n, 1)
-}
-
-const Traction.zero = Traction(0,1)
-
-pure +(Traction, Traction) -> Traction = ((n1,d1), (n2,d2)) {
-  Traction(n1*d2 + n2*d1, d1*d2)
-}
-
-pure *(Traction, Traction) -> Traction = ((n1,d1), (n2,d2)) {
-  Traction(n1*n2, d1*d2)
-}
-
-pure *_dot(Traction, Traction) -> int = ((n1,d1), (n2,d2)) {
-  d1*d2 + n1*n2
-}
-
-pure *_wedge(Traction, Traction) -> int = ((n1,d1), (n2,d2)) {
-  d1*n2 - n1*d2
-}
-
--- Dot product with second operand conjugated: t1 *_dot t2.conj()
--- Equivalently: real part of complex product (d1+n1·i)(d2+n2·i)
-pure *_ndot(Traction, Traction) -> int = ((n1,d1), (n2,d2)) {
-  d1*d2 - n1*n2
-}
-
--- Wedge product with second operand conjugated: t1 *_wedge t2.conj()  
--- Equivalently: imaginary part of complex product (d1+n1·i)(d2+n2·i)
-pure *_nwedge(Traction, Traction) -> int = ((n1,d1), (n2,d2)) {
-  d1*n2 + n1*d2
-}
-
-pure Traction.neg() -> Traction = () {
-  Traction(-this.num, -this.denom)
-}
-
-pure -(Traction, Traction) -> Traction = (t1, t2) {
-  t1 + t2.neg()
-}
-
-pure Traction.inv() -> Traction = () {
-  Traction(this.denom, this.num)
-}
-
-pure /(Traction, Traction) -> Traction = (t1, t2) {
-  t1 * t2.inv()
-}
-
-pure compare(Traction, Traction) -> int = (t1, t2) {
-  (t1 - t2).0
-}
-
-deriveOrderingFromInt<Traction, compare>
-
-pure Traction.conj() -> Traction = () {
-  Traction(-this.num, this.denom)
-}
-
-promote int -> Traction = (i) {
-  Traction(i)
-}
-
-pure Traction.toFloat() -> float = ((n, d)) {
-  match d
-  | 0 -> 0.0
-  | _ -> toFloat(n) / toFloat(d)
-}
 
 ----------------------------------------------------
 
 -- Exact-arithmetic 2D vector over Traction. Used in rotation pipelines
 -- where every coordinate stays rational.
-type Vector2(Traction, Traction)
+macro Vector2Macro<T> = {
+  type Vector2(T, T)
+  emit Vector2
+}
+type Vector2 = Vector2Macro<Traction>
 
 -- Float projection of Vector2 — the observable form. Crossing into floats
 -- canonicalizes: two mathematically-equal Tractions with different internal
@@ -124,176 +231,155 @@ type Vector2(Traction, Traction)
 -- expects decimals.
 type FVec2(float, float)
 
----------------------------------------------------------
-type TractionComplex(scale: Traction, tangent: Traction)
 
-pure TractionComplex() -> TractionComplex = () {
-  this(Traction(1,1), Traction(0,1))
-}
 
-pure TractionComplex(Traction, Traction) -> TractionComplex = (t1, t2) {
-  this(t1, t2)
-}
-
-const TractionComplex.i = TractionComplex(Traction(1,1), Traction(1,0))
-
-pure TractionComplex(int, int, int) -> TractionComplex = (a, b, c) {
-  this(Traction(1, c), Traction(b, a))
-}
-
-pure TractionComplex.neg() -> TractionComplex = () {
-  TractionComplex(Traction(-this.scale.num, this.scale.denom), this.tangent)
-}
-
-pure /(TractionComplex, TractionComplex) -> TractionComplex = ((s1,t1), (s2,t2)) {
-  TractionComplex(s1 * s2, Traction(t1 *_wedge t2, t1 *_dot t2))
-}
-
-pure *(TractionComplex, TractionComplex) -> TractionComplex = ((s1,t1), (s2,t2)) {
-  TractionComplex(s1 * s2, Traction(t1 *_nwedge t2, t1 *_ndot t2))
-}
-
--- Short-circuit zero-scale operands: if either addend's scale.num is 0 the
--- addend is algebraically zero and the sum is just the other addend. Without
--- this, the general formula produces scale=(1, b*d) with tangent=(0,0) when
--- both addends are zero — now canonicalized to Traction(1,1) by the Traction
--- constructor, but that's "operational 1", not the clean zero we want for a
--- zero quaternion component. Later products amplify the drift until scale
--- collapses under the 30-bit budget. Short-circuiting preserves zero-ness.
-pure +(TractionComplex, TractionComplex) -> TractionComplex = ((s1, t1), (s2, t2)) {
-  let (a, b) = s1
-  let (c, d) = s2
-  match
-  | a == 0 && c == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
-  | a == 0 -> TractionComplex(s2, t2)
-  | c == 0 -> TractionComplex(s1, t1)
+-- Round-to-nearest integer division. Half cases round away from zero,
+-- matching what `Math.round(p/q)` would give for the float p/q.
+pure roundDiv(int, int) -> int = (p, q) {
+  match q
+  | 0 -> 0
   | _ -> {
-      let (n1, d1) = t1
-      let (n2, d2) = t2
-      -- Fast path when both operands share a denominator. The general
-      -- formula below would build Traction(1, b*d), which for b=d=10^8
-      -- (the standard post-renormalize product denominator) exceeds the
-      -- 30-bit budget and rounds the numerator to zero — collapsing the
-      -- scale entirely. When b == d we don't need to multiply:
-      --   (a/b)(d1+n1i) + (c/b)(d2+n2i) = (1/b)·((a·d1+c·d2) + (a·n1+c·n2)i)
-      -- This is the dominant case in any compose chain: everything exits
-      -- renormalize at scale=(1, 10000), so every TC product has
-      -- scale=(1, 10^8), so every sum here has b == d.
-      match
-      | b == d -> TractionComplex(
-            Traction(1, b),
-            Traction(a*n1 + c*n2, a*d1 + c*d2)
-          )
-      | _ -> TractionComplex(
-            Traction(1, b*d),
-            Traction(a*d*n1 + c*b*n2, a*d*d1 + c*b*d2)
-          )
+      let s = sign(p) * sign(q)
+      let r = (abs(p) + abs(q) / 2) / abs(q)
+      s * r
     }
 }
 
-pure -(TractionComplex, TractionComplex) -> TractionComplex = (tc1, tc2) {
-  tc1 + tc2.neg()
+---------------------------------------------------------
+macro TractionComplexMacro<T> = {
+  type TractionComplex(scale: T, tangent: T)
+  
+  pure TractionComplex() -> TractionComplex = () {
+    this(T(1,1), T(0,1))
+  }
+  
+  pure TractionComplex(T, T) -> TractionComplex = (t1, t2) {
+    this(t1, t2)
+  }
+
+  pure TractionComplex(int, int, int) -> TractionComplex = (a, b, c) {
+    this(T(1, c), T(b, a))
+  }
+  
+  pure TractionComplex.neg() -> TractionComplex = () {
+    TractionComplex(T(-this.scale.num, this.scale.denom), this.tangent)
+  }
+  
+  pure /(TractionComplex, TractionComplex) -> TractionComplex = ((s1,t1), (s2,t2)) {
+    TractionComplex(s1 * s2, T(t1 *_wedge t2, t1 *_dot t2))
+  }
+  
+  pure *(TractionComplex, TractionComplex) -> TractionComplex = ((s1,t1), (s2,t2)) {
+    TractionComplex(s1 * s2, T(t1 *_nwedge t2, t1 *_ndot t2))
+  }
+  
+  -- Short-circuit zero-scale operands: if either addend's scale.num is 0 the
+  -- addend is algebraically zero and the sum is just the other addend. Without
+  -- this, the general formula produces scale=(1, b*d) with tangent=(0,0) when
+  -- both addends are zero — now canonicalized to Traction(1,1) by the Traction
+  -- constructor, but that's "operational 1", not the clean zero we want for a
+  -- zero quaternion component. Later products amplify the drift until scale
+  -- collapses under the 30-bit budget. Short-circuiting preserves zero-ness.
+  pure +(TractionComplex, TractionComplex) -> TractionComplex = ((s1, t1), (s2, t2)) {
+    let (a, b) = s1
+    let (c, d) = s2
+    match
+    | a == 0 && c == 0 -> TractionComplex(T(0, 1), T(0, 1))
+    | a == 0 -> TractionComplex(s2, t2)
+    | c == 0 -> TractionComplex(s1, t1)
+    | _ -> {
+        let (n1, d1) = t1
+        let (n2, d2) = t2
+        -- Fast path when both operands share a denominator. The general
+        -- formula below would build Traction(1, b*d), which for b=d=10^8
+        -- (the standard post-renormalize product denominator) exceeds the
+        -- 30-bit budget and rounds the numerator to zero — collapsing the
+        -- scale entirely. When b == d we don't need to multiply:
+        --   (a/b)(d1+n1i) + (c/b)(d2+n2i) = (1/b)·((a·d1+c·d2) + (a·n1+c·n2)i)
+        -- This is the dominant case in any compose chain: everything exits
+        -- renormalize at scale=(1, 10000), so every TC product has
+        -- scale=(1, 10^8), so every sum here has b == d.
+        match
+        | b == d -> TractionComplex(
+              T(1, b),
+              T(a*n1 + c*n2, a*d1 + c*d2)
+            )
+        | _ -> TractionComplex(
+              T(1, b*d),
+              T(a*d*n1 + c*b*n2, a*d*d1 + c*b*d2)
+            )
+      }
+  }
+  
+  pure -(TractionComplex, TractionComplex) -> TractionComplex = (tc1, tc2) {
+    tc1 + tc2.neg()
+  }
+  
+  pure TractionComplex.cart() -> Vector2 = () {
+    let (a, b) = this.scale
+    let (n, d) = this.tangent
+    Vector2(T(a*d, b), T(a*n, b))
+  }
+  
+  -- Float projection of cart(). Computes the same geometric value
+  -- (scale · (d, n) / b) directly in floats, so the result compares by
+  -- value rather than by Traction internal representation.
+  pure TractionComplex.cartF() -> FVec2 = () {
+    let (a, b) = this.scale
+    let (n, d) = this.tangent
+    match b
+    | 0 -> FVec2(0.0, 0.0)
+    | _ -> FVec2(toFloat(a*d) / toFloat(b), toFloat(a*n) / toFloat(b))
+  }
+  
+  pure *_dot(TractionComplex, TractionComplex) -> T = ((s1,t1), (s2,t2)) {
+    T(s1.num * s2.num * (t1 *_dot t2), s1.denom * s2.denom)
+  }
+  
+  pure *_wedge(TractionComplex, TractionComplex) -> T = ((s1,t1), (s2,t2)) {
+    T(s1.num * s2.num * (t1 *_wedge t2), s1.denom * s2.denom)
+  }
+  
+  pure TractionComplex.conj() -> TractionComplex = () {
+    TractionComplex(this.scale, this.tangent.conj())
+  }
+  
+  pure TractionComplex.norm_sq() -> T = () {
+    let (n, d) = this.tangent
+    let (a, b) = this.scale
+    -- Vector is (a/b)·⟨d, n⟩, magnitude squared is (a/b)²·(d² + n²)
+    T(a*a * (d*d + n*n), b*b)
+  }
+
+
+  -- Rescale a TractionComplex to scale=(1, denom) without crossing through
+  -- floats. Algebraically equivalent to tcFromCart(cartF(tc).0, cartF(tc).1):
+  --   cart = (a·d/b, a·n/b)  →  rebuild tangent at denom
+  --   newDen = round(denom·a·d / b),  newNum = round(denom·a·n / b)
+  -- All integer arithmetic. The same quantization step the float-based
+  -- renormalize already paid, just without the round-trip.
+  pure TractionComplex.rescale(int) -> TractionComplex = (denom) {
+    let (a, b) = this.scale
+    let (n, d) = this.tangent
+    match
+    | a == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
+    | b == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
+    | _ -> {
+        let newDen = roundDiv(denom * a * d, b)
+        let newNum = roundDiv(denom * a * n, b)
+        match
+        | newDen == 0 && newNum == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
+        | _ -> TractionComplex(Traction(1, denom), Traction(newNum, newDen))
+      }
+  }
+  emit TractionComplex
 }
 
-pure TractionComplex.cart() -> Vector2 = () {
-  let (a, b) = this.scale
-  let (n, d) = this.tangent
-  Vector2(Traction(a*d, b), Traction(a*n, b))
-}
+type TractionComplex = TractionComplexMacro<Traction>
 
--- Float projection of cart(). Computes the same geometric value
--- (scale · (d, n) / b) directly in floats, so the result compares by
--- value rather than by Traction internal representation.
-pure TractionComplex.cartF() -> FVec2 = () {
-  let (a, b) = this.scale
-  let (n, d) = this.tangent
-  match b
-  | 0 -> FVec2(0.0, 0.0)
-  | _ -> FVec2(toFloat(a*d) / toFloat(b), toFloat(a*n) / toFloat(b))
-}
-
-pure *_dot(TractionComplex, TractionComplex) -> Traction = ((s1,t1), (s2,t2)) {
-  Traction(s1.num * s2.num * (t1 *_dot t2), s1.denom * s2.denom)
-}
-
-pure *_wedge(TractionComplex, TractionComplex) -> Traction = ((s1,t1), (s2,t2)) {
-  Traction(s1.num * s2.num * (t1 *_wedge t2), s1.denom * s2.denom)
-}
-
-pure TractionComplex.conj() -> TractionComplex = () {
-  TractionComplex(this.scale, this.tangent.conj())
-}
-
-pure TractionComplex.norm_sq() -> Traction = () {
-  let (n, d) = this.tangent
-  let (a, b) = this.scale
-  -- Vector is (a/b)·⟨d, n⟩, magnitude squared is (a/b)²·(d² + n²)
-  Traction(a*a * (d*d + n*n), b*b)
-}
-
-----------------------------------------
-type TractionQuaternion(real: TractionComplex, imag: TractionComplex)
-
--- Default: multiplicative identity (1 + 0i + 0j + 0k)
-pure TractionQuaternion() -> TractionQuaternion = () {
-  this(
-    TractionComplex(Traction(1,1), Traction(0,1)),  -- real part = 1
-    TractionComplex(Traction(0,1), Traction(0,1))   -- imag part = 0
-  )
-}
-pure TractionQuaternion.conj() -> TractionQuaternion = () {
-  TractionQuaternion(this.real.conj(), this.imag.neg())
-}
-
-pure TractionQuaternion(TractionComplex, TractionComplex) -> TractionQuaternion 
-  = (r, i) { this(r, i) }
-
-pure *(TractionQuaternion, TractionQuaternion) -> TractionQuaternion = ((a,b), (c,d)) {
-  TractionQuaternion(a * c - d.conj() * b, d * a + b * c.conj())
-}
-
-pure +(TractionQuaternion, TractionQuaternion) -> TractionQuaternion = ((a,b), (c,d)) {
-  TractionQuaternion(a + c, b + d)
-}
-pure TractionQuaternion.neg() -> TractionQuaternion = () {
-  TractionQuaternion(this.real.neg(), this.imag.neg())
-}
-
-pure -(TractionQuaternion, TractionQuaternion) -> TractionQuaternion = (q1, q2) {
-  q1 + q2.neg()
-}
-
-pure TractionQuaternion.norm_sq() -> Traction = () {
-  this.real.norm_sq() + this.imag.norm_sq()
-}
-
-pure TractionQuaternion.inv() -> TractionQuaternion = () {
-  let n_sq = this.norm_sq()
-  let conj = this.conj()
-  -- Divide each TractionComplex by the scalar n_sq
-  -- (Scalar division of TractionComplex: multiply scale by n_sq.inv())
-  TractionQuaternion(
-    TractionComplex(conj.real.scale * n_sq.inv(), conj.real.tangent),
-    TractionComplex(conj.imag.scale * n_sq.inv(), conj.imag.tangent)
-  )
-}
-
--- ═══════════════════════════════════════════════════════════════════════
--- Cartesian projection and fixed-denominator reconstruction
--- ═══════════════════════════════════════════════════════════════════════
--- Repeated Hamilton products grow scale denominators; the 30-bit bit-budget
--- eventually rounds the numerator to zero and the quaternion collapses to
--- the origin. Rebuilding from the cartesian projection each step clamps
--- the denominator at a fixed ceiling and keeps composition stable
--- indefinitely — trading exact-rational purity for bounded magnitude.
+const TractionComplex.i = TractionComplex(Traction(1,1), Traction(1,0))
 
 pure tractionDenom() -> int = () { 10000 }
-
-pure cartesianOf(TractionQuaternion) -> (float, float, float, float) = (q) {
-  let r = q.real.cartF()
-  let i = q.imag.cartF()
-  (r.0, r.1, i.0, i.1)
-}
 
 -- Encode a float complex (re + im·i) as a TractionComplex at a fixed
 -- denominator. Scale = 1/denom, tangent = (im·denom, re·denom), so cartF
@@ -310,59 +396,192 @@ pure tcFromCart(float, float) -> TractionComplex = (re, im) {
   | _ -> TractionComplex(Traction(1, denom), Traction(yn, xn))
 }
 
+----------------------------------------
+macro TractionQuaternionMacro<T, TC> = {
+  type TractionQuaternion(real: TC, imag: TC)
+
+  -- Default: multiplicative identity (1 + 0i + 0j + 0k)
+  pure TractionQuaternion() -> TractionQuaternion = () {
+    this(
+      TC(Traction(1,1), Traction(0,1)),  -- real part = 1
+      TC(Traction(0,1), Traction(0,1))   -- imag part = 0
+    )
+  }
+  pure TractionQuaternion.conj() -> TractionQuaternion = () {
+    TractionQuaternion(this.real.conj(), this.imag.neg())
+  }
+  
+  pure TractionQuaternion(TC, TC) -> TractionQuaternion 
+    = (r, i) { this(r, i) }
+  
+  pure *(TractionQuaternion, TractionQuaternion) -> TractionQuaternion = ((a,b), (c,d)) {
+    TractionQuaternion(a * c - d.conj() * b, d * a + b * c.conj())
+  }
+  
+  pure +(TractionQuaternion, TractionQuaternion) -> TractionQuaternion = ((a,b), (c,d)) {
+    TractionQuaternion(a + c, b + d)
+  }
+  pure TractionQuaternion.neg() -> TractionQuaternion = () {
+    TractionQuaternion(this.real.neg(), this.imag.neg())
+  }
+  
+  pure -(TractionQuaternion, TractionQuaternion) -> TractionQuaternion = (q1, q2) {
+    q1 + q2.neg()
+  }
+  
+  pure TractionQuaternion.norm_sq() -> T = () {
+    this.real.norm_sq() + this.imag.norm_sq()
+  }
+  
+  pure TractionQuaternion.inv() -> TractionQuaternion = () {
+    let n_sq = this.norm_sq()
+    -- At the singularity (output = 0, so |q|² = 0), the algebraic
+    -- inverse is ω-encoded and cart()'s back to zero — eating the
+    -- gradient signal. Return identity here instead, so that
+    --   err = output⁻¹ · target = 1 · target = target
+    -- The network receives the target as the gradient when its output
+    -- is zero, which is the right signal: "you're stuck at zero, the
+    -- answer is target, move weights so the next pass produces target."
+    -- Closer in spirit to Traction Theory's 0·ω = 1 than the absorbing
+    -- collapse, even though the equation 0 · inv(0) = 1 isn't satisfied
+    -- by identity literally — it's the gradient-preserving choice.
+    -- Identity at the singularity AND its neighbourhood. Three paths
+    -- into "essentially zero output":
+    --   1. n_sq's denom was bit-clamped to 0 (ω-encoded near-infinity
+    --      because output magnitude got tiny enough to wrap the rep)
+    --   2. n_sq's num is 0 (structurally exact zero)
+    --   3. n_sq's float value is below threshold (numerically near-zero)
+    -- Any of these means the regular inverse formula would cart() to 0
+    -- and eat the gradient. Return identity so err = identity · target =
+    -- target keeps the signal flowing.
+    let (nNum, nDenom) = n_sq
+    match
+    | nDenom == 0 -> TractionQuaternion()
+    | nNum == 0   -> TractionQuaternion()
+    | _ -> {
+        let conj = this.conj()
+        TractionQuaternion(
+          TC(conj.real.scale * n_sq.inv(), conj.real.tangent),
+          TC(conj.imag.scale * n_sq.inv(), conj.imag.tangent)
+        )
+      }
+  }
+
+  -- ── Cartesian projection and reconstruction (as methods/ctors) ────
+  -- These are method/ctor forms so they ride along on `emit
+  -- TractionQuaternion` and remain callable both inside the macro
+  -- (where free functions defined later in the file are out of scope)
+  -- and externally via the emitted type.
+
+  pure TractionQuaternion.cartesianOf() -> (float, float, float, float) = () {
+    let r = this.real.cartF()
+    let i = this.imag.cartF()
+    (r.0, r.1, i.0, i.1)
+  }
+
+  -- Float-4 ctor overload: build a TQ from cartesian (w, x, y, z).
+  pure TractionQuaternion(float, float, float, float) -> TractionQuaternion
+      = (w, x, y, z) {
+    TractionQuaternion(tcFromCart(w, x), tcFromCart(y, z))
+  }
+
+  -- Traction-native renormalize. Rebuilds each half at scale=(1, denom)
+  -- via integer rescale instead of cart→float→tcFromCart.
+  pure TractionQuaternion.renormalize() -> TractionQuaternion = () {
+    let denom = tractionDenom()
+    TractionQuaternion(this.real.rescale(denom), this.imag.rescale(denom))
+  }
+
+  -- ── NeuralWeight signature methods ─────────────────────────────────
+  -- These live inside the macro so they register on the same expanded
+  -- type as the receiver. External `pure TractionQuaternion.X = ...`
+  -- extensions don't link up across method calls because the alias
+  -- re-expands per reference.
+
+  pure TractionQuaternion.compose(TractionQuaternion) -> TractionQuaternion
+      = (other) {
+    (this * other).renormalize()
+  }
+
+  pure TractionQuaternion.invert() -> TractionQuaternion = () {
+    this.inv()
+  }
+
+  pure TractionQuaternion.aggregate(TractionQuaternion) -> TractionQuaternion
+      = (other) {
+    this + other
+  }
+
+  pure TractionQuaternion.activate() -> TractionQuaternion = () {
+    this
+  }
+
+  pure TractionQuaternion.activateGated(TractionQuaternion, TractionQuaternion,
+      TractionQuaternion) -> TractionQuaternion = (k1, k2, bias) {
+    let nSq = this.norm_sq()
+    let bSq = bias.norm_sq()
+    match
+    | nSq.num * bSq.denom > bSq.num * nSq.denom -> this.compose(k1)
+    | _                                          -> this.compose(k2)
+  }
+
+  pure TractionQuaternion.error(TractionQuaternion) -> TractionQuaternion
+      = (target) {
+    this.invert().compose(target)
+  }
+
+  pure TractionQuaternion.pow(float) -> TractionQuaternion = (t) {
+    let (w, x, y, z) = this.cartesianOf()
+    let vNormSq = x*x + y*y + z*z
+    let normSq = w*w + vNormSq
+    match
+    | normSq < 0.000000000001 -> this
+    | _ -> {
+        let mag = sqrt(normSq)
+        let newMag = exp(t * log(mag))
+        let vMag = sqrt(vNormSq)
+        let theta = atan2(vMag, w)
+        let newTheta = t * theta
+        let newW = newMag * cos(newTheta)
+        match
+        | vMag < 0.000000000001 -> TractionQuaternion(newW, 0.0, 0.0, 0.0)
+        | _ -> {
+            let axisScale = newMag * sin(newTheta) / vMag
+            TractionQuaternion(newW, x * axisScale, y * axisScale, z * axisScale)
+          }
+      }
+  }
+
+  pure TractionQuaternion.interp(TractionQuaternion, float) -> TractionQuaternion
+      = (target, t) {
+    this.compose(this.invert().compose(target).pow(t))
+  }
+
+  emit TractionQuaternion
+}
+type TractionQuaternion = TractionQuaternionMacro<Traction, TractionComplex>
+
+-- ── Top-level free-function wrappers ───────────────────────────────────
+-- The methods/ctors that compose/pow rely on are defined inside the TQ
+-- macro. These thin wrappers preserve the legacy free-function names
+-- used by external modules (network.spn, shapes.spn, demos).
+
 pure quatFromCart4(float, float, float, float) -> TractionQuaternion
     = (w, x, y, z) {
-  TractionQuaternion(tcFromCart(w, x), tcFromCart(y, z))
+  TractionQuaternion(w, x, y, z)
 }
 
--- Round-to-nearest integer division. Half cases round away from zero,
--- matching what `Math.round(p/q)` would give for the float p/q.
-pure roundDiv(int, int) -> int = (p, q) {
-  match q
-  | 0 -> 0
-  | _ -> {
-      let s = sign(p) * sign(q)
-      let r = (abs(p) + abs(q) / 2) / abs(q)
-      s * r
-    }
+pure cartesianOf(TractionQuaternion) -> (float, float, float, float) = (q) {
+  q.cartesianOf()
 }
 
--- Rescale a TractionComplex to scale=(1, denom) without crossing through
--- floats. Algebraically equivalent to tcFromCart(cartF(tc).0, cartF(tc).1):
---   cart = (a·d/b, a·n/b)  →  rebuild tangent at denom
---   newDen = round(denom·a·d / b),  newNum = round(denom·a·n / b)
--- All integer arithmetic. The same quantization step the float-based
--- renormalize already paid, just without the round-trip.
-pure TractionComplex.rescale(int) -> TractionComplex = (denom) {
-  let (a, b) = this.scale
-  let (n, d) = this.tangent
-  match
-  | a == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
-  | b == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
-  | _ -> {
-      let newDen = roundDiv(denom * a * d, b)
-      let newNum = roundDiv(denom * a * n, b)
-      match
-      | newDen == 0 && newNum == 0 -> TractionComplex(Traction(0, 1), Traction(0, 1))
-      | _ -> TractionComplex(Traction(1, denom), Traction(newNum, newDen))
-    }
-}
-
--- Traction-native renormalize. Rebuilds each half at scale=(1, denom)
--- via integer rescale instead of cart→float→tcFromCart. Same value
--- semantics as the original cart-based version (modulo round-half edge
--- cases), zero float arithmetic, no allocation of the intermediate
--- 4-tuple.
 pure renormalize(TractionQuaternion) -> TractionQuaternion = (q) {
-  let denom = tractionDenom()
-  TractionQuaternion(q.real.rescale(denom), q.imag.rescale(denom))
+  q.renormalize()
 }
 
 -- Axis-angle constructor. Builds the unit rotation quaternion
 --   q = cos(θ/2) + sin(θ/2)·(x·i + y·j + z·k)
--- for an angle θ in radians about axis (x, y, z). The axis is normalized
--- internally, so passing (1, 1, 0) gives the same rotation as
--- (1/√2, 1/√2, 0). A near-zero axis collapses to the identity.
+-- for an angle θ in radians about axis (x, y, z). Near-zero axis → identity.
 pure axisAngle(float, float, float, float) -> TractionQuaternion
     = (angle, ax, ay, az) {
   let mag = sqrt(ax*ax + ay*ay + az*az)
@@ -371,7 +590,9 @@ pure axisAngle(float, float, float, float) -> TractionQuaternion
   | _ -> {
       let half = angle * 0.5
       let s = sin(half) / mag
-      quatFromCart4(cos(half), ax * s, ay * s, az * s)
+      TractionQuaternion(cos(half), ax * s, ay * s, az * s)
     }
 }
+
+
 
