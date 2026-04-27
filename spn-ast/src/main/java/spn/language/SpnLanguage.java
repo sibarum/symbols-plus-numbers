@@ -3,6 +3,7 @@ package spn.language;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.source.Source;
+import spn.type.FieldType;
 
 /**
  * Entry point for the SPN language in the Truffle framework.
@@ -21,6 +22,10 @@ public final class SpnLanguage extends TruffleLanguage<SpnContext> {
 
     public static final String ID = "spn";
     public static final String MIME_TYPE = "application/x-spn";
+
+    static {
+        FieldType.installCallableTest(v -> v instanceof CallTarget);
+    }
 
     @Override
     protected SpnContext createContext(Env env) {

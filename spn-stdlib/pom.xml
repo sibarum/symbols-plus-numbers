@@ -20,6 +20,11 @@
     <dependencies>
         <dependency>
             <groupId>sibarum.spn.core</groupId>
+            <artifactId>spn-builtin</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>sibarum.spn.core</groupId>
             <artifactId>spn-ast</artifactId>
             <version>${project.version}</version>
         </dependency>

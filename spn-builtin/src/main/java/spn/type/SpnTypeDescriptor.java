@@ -1,6 +1,5 @@
 package spn.type;
 
-import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -8,15 +7,7 @@ import java.util.List;
  * Describes a user-defined constrained type at runtime.
  *
  * A type descriptor is created once (when the type definition is evaluated) and then
- * shared by all values of that type. It is immutable and compilation-final, meaning
- * Graal treats it and all its fields as constants during JIT compilation.
- *
- * KEY TRUFFLE CONCEPT: @CompilationFinal(dimensions = 1)
- *
- * By default, @CompilationFinal marks a field as constant after first write. For arrays,
- * "dimensions = 1" additionally marks each *element* of the array as constant. This is
- * critical for @ExplodeLoop: Graal needs to see each Constraint, Rule, and Element
- * object as a constant to devirtualize their method calls.
+ * shared by all values of that type. It is immutable.
  *
  * A type can be either scalar (single value + constraints) or a product type
  * (multiple named components + operation definitions). Product types enable
@@ -54,19 +45,10 @@ public final class SpnTypeDescriptor {
     /** The name of the constrained value parameter, e.g. "n" in type Natural(n). */
     private final String valueParam;
 
-    @CompilationFinal(dimensions = 1)
     private final Constraint[] constraints;
-
-    @CompilationFinal(dimensions = 1)
     private final SpnDistinguishedElement[] elements;
-
-    @CompilationFinal(dimensions = 1)
     private final AlgebraicRule[] rules;
-
-    @CompilationFinal(dimensions = 1)
     private final ComponentDescriptor[] componentDescriptors;
-
-    @CompilationFinal(dimensions = 1)
     private final ProductOperationDef[] productOperationDefs;
 
     private SpnTypeDescriptor(String name, String valueParam, Constraint[] constraints,

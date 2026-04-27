@@ -9,22 +9,22 @@ import spn.language.SpnException;
 import spn.node.SpnExpressionNode;
 import spn.node.builtin.SpnBuiltin;
 
-@SpnBuiltin(name = "rotorInterpAngles", module = "Clifford",
+@SpnBuiltin(name = "rotorSlerp", module = "Clifford",
         params = {"rotor", "other", "t"}, returns = "TractionRotor",
-        receiver = "TractionRotor", method = "interpAngles")
+        receiver = "TractionRotor", method = "slerp")
 @NodeChild("rotor")
 @NodeChild("other")
 @NodeChild("t")
-@NodeInfo(shortName = "rotorInterpAngles")
-public abstract class SpnTractionRotorInterpAnglesNode extends SpnExpressionNode {
+@NodeInfo(shortName = "rotorSlerp")
+public abstract class SpnTractionRotorSlerpNode extends SpnExpressionNode {
 
     @Specialization
-    protected TractionRotor interpAngles(TractionRotor rotor, TractionRotor other, double t) {
-        return rotor.interpAngles(other, t);
+    protected TractionRotor slerp(TractionRotor rotor, TractionRotor other, double t) {
+        return rotor.slerp(other, t);
     }
 
     @Fallback
     protected Object typeError(Object rotor, Object other, Object t) {
-        throw new SpnException("interpAngles expects (TractionRotor, TractionRotor, Double)", this);
+        throw new SpnException("slerp expects (TractionRotor, TractionRotor, Double)", this);
     }
 }

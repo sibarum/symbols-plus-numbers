@@ -1,6 +1,5 @@
 package spn.type;
 
-import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -43,10 +42,7 @@ public final class SpnStructDescriptor {
 
     private final String name;
 
-    @CompilationFinal(dimensions = 1)
     private FieldDescriptor[] fields; // non-final: constructor fields are added at parse time
-
-    @CompilationFinal(dimensions = 1)
     private final String[] typeParams;
 
     private SpnStructDescriptor(String name, FieldDescriptor[] fields, String[] typeParams) {

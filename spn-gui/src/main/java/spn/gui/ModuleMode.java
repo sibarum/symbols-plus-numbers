@@ -3,8 +3,8 @@ package spn.gui;
 import spn.fonts.SdfFontRenderer;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.util.List;
+import java.util.regex.PatternSyntaxException;
 
 import static org.lwjgl.glfw.GLFW.*;
 
@@ -29,6 +29,11 @@ class ModuleMode implements Mode {
     private static final float PROMPT_R = 0.55f, PROMPT_G = 0.55f, PROMPT_B = 0.60f;
     private static final float HEADER_R = 0.45f, HEADER_G = 0.65f, HEADER_B = 0.85f;
     private static final float VERSION_R = 0.55f, VERSION_G = 0.55f, VERSION_B = 0.60f;
+    private static final float HL_R = 0.55f, HL_G = 0.45f, HL_B = 0.10f;
+    private static final float HIT_R = 1.0f, HIT_G = 0.95f, HIT_B = 0.55f;
+    private static final float ERR_R = 0.95f, ERR_G = 0.45f, ERR_B = 0.45f;
+
+    private enum SearchKind { FILENAME, TEXT, REGEX }
 
     private final EditorWindow window;
     private final SdfFontRenderer font;
@@ -38,14 +43,20 @@ class ModuleMode implements Mode {
     private int cursorPos;
     private int selectedIndex;
     private int scrollOffset;
-    private List<ModuleContext.ModuleFile> filtered;
-    private boolean fullTextSearch; // false = filename, true = content search
+    private SearchKind kind = SearchKind.FILENAME;
+    private List<ModuleContext.ModuleFile> nameResults;
+    private List<ModuleContext.ContentMatch> contentResults = List.of();
+    private String regexError;
 
     ModuleMode(EditorWindow window, ModuleContext module) {
         this.window = window;
         this.font = window.getFont();
         this.module = module;
-        this.filtered = module.getFiles();
+        this.nameResults = module.getFiles();
+    }
+
+    private int resultCount() {
+        return kind == SearchKind.FILENAME ? nameResults.size() : contentResults.size();
     }
 
     @Override
@@ -57,9 +68,7 @@ class ModuleMode implements Mode {
         switch (key) {
             case GLFW_KEY_ESCAPE -> { window.popMode(); return true; }
             case GLFW_KEY_ENTER -> {
-                if (!filtered.isEmpty() && selectedIndex < filtered.size()) {
-                    openFile(filtered.get(selectedIndex));
-                }
+                openSelected();
                 return true;
             }
             case GLFW_KEY_UP -> {
@@ -68,7 +77,7 @@ class ModuleMode implements Mode {
                 return true;
             }
             case GLFW_KEY_DOWN -> {
-                if (selectedIndex < filtered.size() - 1) selectedIndex++;
+                if (selectedIndex < resultCount() - 1) selectedIndex++;
                 ensureVisible();
                 return true;
             }
@@ -93,9 +102,13 @@ class ModuleMode implements Mode {
             case GLFW_KEY_END -> { cursorPos = query.length(); return true; }
         }
 
-        // Ctrl+F toggles search mode
+        // Ctrl+F cycles search kind: filename -> full-text -> regex -> filename
         if (ctrl && key == GLFW_KEY_F) {
-            fullTextSearch = !fullTextSearch;
+            kind = switch (kind) {
+                case FILENAME -> SearchKind.TEXT;
+                case TEXT -> SearchKind.REGEX;
+                case REGEX -> SearchKind.FILENAME;
+            };
             refilter();
             return true;
         }
@@ -114,8 +127,7 @@ class ModuleMode implements Mode {
         // Ctrl+R refreshes module: rescan files, clear caches, force re-parse
         if (ctrl && key == GLFW_KEY_R) {
             module.rescan();
-            filtered = fullTextSearch ? module.searchContents(query.toString())
-                    : module.filterByName(query.toString());
+            refilter();
             window.refreshModuleCaches();
             window.flash("Module refreshed — caches cleared", false);
             return true;
@@ -136,8 +148,9 @@ class ModuleMode implements Mode {
     public boolean onMouseButton(int button, int action, int mods, double mx, double my) {
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
             int clicked = rowAtY(my);
-            if (clicked >= 0 && clicked < filtered.size()) {
-                openFile(filtered.get(clicked));
+            if (clicked >= 0 && clicked < resultCount()) {
+                selectedIndex = clicked;
+                openSelected();
             }
         }
         return true;
@@ -146,14 +159,14 @@ class ModuleMode implements Mode {
     @Override
     public boolean onCursorPos(double mx, double my) {
         int hover = rowAtY(my);
-        if (hover >= 0 && hover < filtered.size()) selectedIndex = hover;
+        if (hover >= 0 && hover < resultCount()) selectedIndex = hover;
         return true;
     }
 
     @Override
     public boolean onScroll(double xoff, double yoff) {
         scrollOffset = Math.max(0, Math.min(scrollOffset - ListScroll.delta(yoff),
-                Math.max(0, filtered.size() - MAX_VISIBLE_ROWS)));
+                Math.max(0, resultCount() - MAX_VISIBLE_ROWS)));
         return true;
     }
 
@@ -183,8 +196,12 @@ class ModuleMode implements Mode {
         y += smallHeight;
 
         // File count + search mode
-        String modeLabel = fullTextSearch ? "Full-text search" : "Filename search";
-        font.drawText(module.getFiles().size() + " files | " + modeLabel + " (Ctrl+F toggle)",
+        String modeLabel = switch (kind) {
+            case FILENAME -> "Filename search";
+            case TEXT -> "Full-text (wildcards: * ?)";
+            case REGEX -> "Regex search";
+        };
+        font.drawText(module.getFiles().size() + " files | " + modeLabel + " (Ctrl+F cycle)",
                 paletteX, y, SMALL_SCALE, PROMPT_R, PROMPT_G, PROMPT_B);
         y += smallHeight + 16f;
 
@@ -200,13 +217,22 @@ class ModuleMode implements Mode {
                 CURSOR_R, CURSOR_G, CURSOR_B);
         y += inputH + 8f;
 
+        // Regex error (replaces results when present)
+        if (regexError != null) {
+            font.drawText("Regex error: " + regexError, paletteX, y + rowHeight - 4f,
+                    SMALL_SCALE, ERR_R, ERR_G, ERR_B);
+            listTop = y;
+            listRowH = rowHeight;
+            return;
+        }
+
         // Results
         listTop = y;
         listRowH = rowHeight;
-        int visibleCount = Math.min(MAX_VISIBLE_ROWS, filtered.size() - scrollOffset);
+        int total = resultCount();
+        int visibleCount = Math.min(MAX_VISIBLE_ROWS, total - scrollOffset);
         for (int i = 0; i < visibleCount; i++) {
             int idx = scrollOffset + i;
-            ModuleContext.ModuleFile f = filtered.get(idx);
             float rowY = y + i * rowHeight;
 
             if (idx == selectedIndex) {
@@ -215,14 +241,20 @@ class ModuleMode implements Mode {
             }
 
             float itemY = rowY + rowHeight - 4f;
-            font.drawText(f.relativePath(), paletteX + 12f, itemY, FONT_SCALE,
-                    NAME_R, NAME_G, NAME_B);
+            if (kind == SearchKind.FILENAME) {
+                ModuleContext.ModuleFile f = nameResults.get(idx);
+                font.drawText(f.relativePath(), paletteX + 12f, itemY, FONT_SCALE,
+                        NAME_R, NAME_G, NAME_B);
+            } else {
+                drawContentRow(contentResults.get(idx), paletteX + 12f, itemY,
+                        paletteWidth - 24f);
+            }
         }
 
         // Scroll indicator
-        if (filtered.size() > MAX_VISIBLE_ROWS) {
+        if (total > MAX_VISIBLE_ROWS) {
             String info = (scrollOffset + 1) + "-" + (scrollOffset + visibleCount)
-                    + " of " + filtered.size();
+                    + " of " + total;
             float infoWidth = font.getTextWidth(info, SMALL_SCALE);
             font.drawText(info,
                     paletteX + paletteWidth - 12f - infoWidth,
@@ -231,20 +263,74 @@ class ModuleMode implements Mode {
         }
     }
 
+    /**
+     * Draw one content-match row: dim {@code path:line} prefix, then the source line
+     * with the matched span highlighted. Snippet is left-trimmed; long lines render
+     * past the palette right edge but selection background already clips visually.
+     */
+    private void drawContentRow(ModuleContext.ContentMatch m, float x, float y, float maxW) {
+        String prefix = m.file().relativePath() + ":" + m.lineNumber() + "  ";
+        font.drawText(prefix, x, y, SMALL_SCALE, PATH_R, PATH_G, PATH_B);
+        float prefixW = font.getTextWidth(prefix, SMALL_SCALE);
+
+        // Left-trim leading whitespace, adjusting highlight offsets to match.
+        String line = m.lineText();
+        int trim = 0;
+        while (trim < line.length() && Character.isWhitespace(line.charAt(trim))) trim++;
+        int hlStart = Math.max(0, m.matchStart() - trim);
+        int hlEnd = Math.max(hlStart, m.matchEnd() - trim);
+        String snippet = line.substring(trim);
+        if (snippet.length() > 200) snippet = snippet.substring(0, 200) + "…";
+        if (hlEnd > snippet.length()) hlEnd = snippet.length();
+
+        // Pre-match
+        String pre = snippet.substring(0, hlStart);
+        font.drawText(pre, x + prefixW, y, FONT_SCALE, NAME_R, NAME_G, NAME_B);
+        float preW = font.getTextWidth(pre, FONT_SCALE);
+
+        // Match (highlight bg + bright text)
+        String hit = snippet.substring(hlStart, hlEnd);
+        if (!hit.isEmpty()) {
+            float hitW = font.getTextWidth(hit, FONT_SCALE);
+            float lh = font.getLineHeight(FONT_SCALE);
+            font.drawRect(x + prefixW + preW, y - lh + 4f, hitW, lh,
+                    HL_R, HL_G, HL_B);
+            font.drawText(hit, x + prefixW + preW, y, FONT_SCALE, HIT_R, HIT_G, HIT_B);
+        }
+
+        // Post-match
+        String post = snippet.substring(hlEnd);
+        font.drawText(post, x + prefixW + preW + font.getTextWidth(hit, FONT_SCALE),
+                y, FONT_SCALE, NAME_R, NAME_G, NAME_B);
+    }
+
     private float listTop;
     private float listRowH;
 
     @Override
     public String hudText() {
-        String mode = fullTextSearch ? "Full-text" : "Filename";
-        return "Type to search (" + mode + ") | Ctrl+F Toggle | Ctrl+R Refresh | Enter Open | Esc Close";
+        String mode = switch (kind) {
+            case FILENAME -> "Filename";
+            case TEXT -> "Text/Wildcard";
+            case REGEX -> "Regex";
+        };
+        return "Type to search (" + mode + ") | Ctrl+F Cycle | Ctrl+R Refresh | Enter Open | Esc Close";
     }
 
     private void refilter() {
-        if (fullTextSearch) {
-            filtered = module.searchContents(query.toString());
+        regexError = null;
+        String q = query.toString();
+        if (kind == SearchKind.FILENAME) {
+            nameResults = module.filterByName(q);
+            contentResults = List.of();
         } else {
-            filtered = module.filterByName(query.toString());
+            nameResults = List.of();
+            try {
+                contentResults = module.searchContents(q, kind == SearchKind.REGEX);
+            } catch (PatternSyntaxException e) {
+                contentResults = List.of();
+                regexError = e.getDescription();
+            }
         }
         selectedIndex = 0;
         scrollOffset = 0;
@@ -256,8 +342,20 @@ class ModuleMode implements Mode {
             scrollOffset = selectedIndex - MAX_VISIBLE_ROWS + 1;
     }
 
+    private void openSelected() {
+        int n = resultCount();
+        if (n == 0 || selectedIndex >= n) return;
+        if (kind == SearchKind.FILENAME) {
+            openFile(nameResults.get(selectedIndex));
+        } else {
+            ModuleContext.ContentMatch m = contentResults.get(selectedIndex);
+            window.popMode();
+            window.openFileAtLine(m.file().absolutePath(), m.lineNumber(), m.matchStart() + 1);
+        }
+    }
+
     private void openFile(ModuleContext.ModuleFile file) {
-        window.popMode(); // pop ModuleMode
+        window.popMode();
         try {
             window.loadFile(file.absolutePath());
         } catch (IOException e) {

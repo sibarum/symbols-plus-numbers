@@ -4,37 +4,44 @@ import java.util.Locale;
 import java.util.Objects;
 
 /**
- * Clifford-algebra rotor from Traction Theory, parameterized by two angles
- * (thetaW, thetaU).
+ * Elliptic rotor in the even subalgebra of Cl(3,0) — equivalent to a unit
+ * quaternion / classical 3D rotor. Tower components (a, b, c, d) coordinatize
+ * the four-dimensional even subalgebra; on the unit 3-sphere
+ * {@code a² + b² + c² + d² = 1} they parameterize SO(3) (double cover).
  *
- * <p>Scope: this class represents only rotors of the canonical form
- * {@code R = R_w(thetaW) · R_u(thetaU)}. Ring multiplication, algebraic
- * inversion, and conjugation are NOT supported because their results leave
- * the 4-component {1, t, w, tw} subspace. The 4-vector arithmetic methods
- * (negate / add / scale / dot / norm) operate on tower components as a plain
- * 4-vector and produce results that are generally not canonical rotors —
- * they lose their angle parameters.
+ * <p>This is the elliptic case of a planned family of Traction-Theory rotors
+ * (parabolic, hyperbolic, projective). Composition ({@link #multiply}),
+ * inversion ({@link #inverse}, {@link #reverse}), great-circle interpolation
+ * ({@link #slerp}), and the sandwich action on 3-vectors ({@link #apply})
+ * are all closed in this algebra.
+ *
+ * <p>The 4-vector arithmetic methods (negate / add / subtract / scale / dot /
+ * norm) operate on tower components linearly. They generally produce
+ * non-unit rotors and are intended for differentiation and parameter-update
+ * code paths.
  */
+@Deprecated(since = "Kept only for historical documentation purposes", forRemoval = true)
 public final class TractionRotor {
 
     private static final double DISPLAY_EPS = 1e-10;
+    private static final double UNIT_EPS = 1e-9;
 
     private final double a;
     private final double b;
     private final double c;
     private final double d;
-    private final Double thetaW;
-    private final Double thetaU;
 
-    private TractionRotor(double a, double b, double c, double d, Double thetaW, Double thetaU) {
+    private TractionRotor(double a, double b, double c, double d) {
         this.a = a;
         this.b = b;
         this.c = c;
         this.d = d;
-        this.thetaW = thetaW;
-        this.thetaU = thetaU;
     }
 
+    /** Convenience factory: builds the rotor for R_x(thetaU) ∘ R_z(thetaW)
+     *  acting on 3-vectors (so {@code fromAngles(W, U).apply({1,0,0})} gives
+     *  the standard sphere point). The result is just a generic unit rotor;
+     *  the angles are NOT recoverable after composition. */
     public static TractionRotor fromAngles(double thetaW, double thetaU) {
         double alpha = Math.cos(thetaW / 2.0);
         double beta  = Math.sin(thetaW / 2.0);
@@ -44,19 +51,18 @@ public final class TractionRotor {
                 alpha * gamma,
                 alpha * delta,
                 beta  * gamma,
-                beta  * delta,
-                thetaW,
-                thetaU);
+                beta  * delta);
     }
 
-    /** Raw tower components. The result is generally not a canonical rotor;
-     *  sphere projection and angle-space ops are unavailable. */
+    /** Raw tower components. No unit-norm check; suitable for differentiation
+     *  or arithmetic paths. Use {@link #normalize()} before applying or
+     *  slerping if the result must act as a rotation. */
     public static TractionRotor fromTower(double a, double b, double c, double d) {
-        return new TractionRotor(a, b, c, d, null, null);
+        return new TractionRotor(a, b, c, d);
     }
 
     public static TractionRotor identity() {
-        return fromAngles(0.0, 0.0);
+        return new TractionRotor(1.0, 0.0, 0.0, 0.0);
     }
 
     public double a() { return a; }
@@ -64,23 +70,19 @@ public final class TractionRotor {
     public double c() { return c; }
     public double d() { return d; }
 
-    public boolean hasAngles() { return thetaW != null && thetaU != null; }
-    public double thetaW() { requireAngles("thetaW()"); return thetaW; }
-    public double thetaU() { requireAngles("thetaU()"); return thetaU; }
-
     public double scalarCoeff()     { return a + d; }
     public double quarterCoeff()    { return b + c; }
     public double negQuarterCoeff() { return b; }
     public double halfCoeff()       { return d; }
 
     // ── 4-vector arithmetic on tower components ───────────────────────
-    // Linear ops on the 4-component vector. Results are generally NOT of the
-    // canonical R_w·R_u form and lose their angle parameters.
+    // Linear ops on the underlying 4-component vector. Results are generally
+    // not unit rotors.
 
-    public TractionRotor negate()                  { return fromTower(-a, -b, -c, -d); }
-    public TractionRotor scale(double k)           { return fromTower(k*a, k*b, k*c, k*d); }
-    public TractionRotor add(TractionRotor o)      { return fromTower(a+o.a, b+o.b, c+o.c, d+o.d); }
-    public TractionRotor subtract(TractionRotor o) { return fromTower(a-o.a, b-o.b, c-o.c, d-o.d); }
+    public TractionRotor negate()                  { return new TractionRotor(-a, -b, -c, -d); }
+    public TractionRotor scale(double k)           { return new TractionRotor(k*a, k*b, k*c, k*d); }
+    public TractionRotor add(TractionRotor o)      { return new TractionRotor(a+o.a, b+o.b, c+o.c, d+o.d); }
+    public TractionRotor subtract(TractionRotor o) { return new TractionRotor(a-o.a, b-o.b, c-o.c, d-o.d); }
 
     public double dot(TractionRotor o) { return a*o.a + b*o.b + c*o.c + d*o.d; }
     public double normSquared()        { return dot(this); }
@@ -101,50 +103,106 @@ public final class TractionRotor {
             && Math.abs(d - o.d) <= eps;
     }
 
-    // ── Parameter-space interpolation ─────────────────────────────────
+    // ── Rotor algebra ─────────────────────────────────────────────────
 
-    /** Linear interp on the angle parameters, shortest arc on each.
-     *  Not a great-circle geodesic on the sphere — a smooth path through
-     *  the (thetaW, thetaU) parameterization. t=0 -> this, t=1 -> other. */
-    public TractionRotor interpAngles(TractionRotor other, double t) {
-        requireAngles("interpAngles()");
-        other.requireAngles("interpAngles() argument");
-        double dW = shortestArc(other.thetaW - this.thetaW);
-        double dU = shortestArc(other.thetaU - this.thetaU);
-        return fromAngles(this.thetaW + t * dW, this.thetaU + t * dU);
+    /** Clifford / quaternion product. Closed in the 4D even subalgebra:
+     *  composing two rotors yields another rotor with no escape. The 3D
+     *  rotation induced by {@code r.multiply(s)} is the rotation of {@code s}
+     *  followed by the rotation of {@code r}. */
+    public TractionRotor multiply(TractionRotor o) {
+        // Derived from quaternion product under the mapping
+        // (a,b,c,d) ↔ (s,x,y,z) = (a, b, -d, c).
+        double na = a*o.a - b*o.b - c*o.c - d*o.d;
+        double nb = a*o.b + b*o.a + c*o.d - d*o.c;
+        double nc = a*o.c - b*o.d + c*o.a + d*o.b;
+        double nd = a*o.d + b*o.c - c*o.b + d*o.a;
+        return new TractionRotor(na, nb, nc, nd);
+    }
+
+    /** Reverse (Clifford {@code R~}): flip the sign of the bivector grades.
+     *  For a unit rotor this equals {@link #inverse()}; for a non-unit rotor
+     *  it does NOT. */
+    public TractionRotor reverse() {
+        return new TractionRotor(a, -b, -c, -d);
+    }
+
+    /** Group inverse: {@code R · R.inverse() == identity} for any non-zero
+     *  rotor. Equals {@link #reverse()} divided by {@link #normSquared()}. */
+    public TractionRotor inverse() {
+        double n2 = normSquared();
+        if (n2 < 1e-30) {
+            throw new ArithmeticException("Cannot invert a zero-norm rotor.");
+        }
+        double k = 1.0 / n2;
+        return new TractionRotor(a*k, -b*k, -c*k, -d*k);
+    }
+
+    /** Spherical linear interpolation on the unit 3-sphere. Both endpoints
+     *  are normalized defensively; the shorter arc is taken automatically.
+     *  {@code t=0} returns this, {@code t=1} returns other. */
+    public TractionRotor slerp(TractionRotor other, double t) {
+        TractionRotor p = this.normalize();
+        TractionRotor q = other.normalize();
+        double cosOmega = p.dot(q);
+        if (cosOmega < 0.0) {
+            q = q.negate();
+            cosOmega = -cosOmega;
+        }
+        // For nearly-parallel rotors, fall back to lerp+normalize to avoid
+        // dividing by sin(Ω) near zero.
+        if (cosOmega > 1.0 - 1e-9) {
+            double na = p.a + t * (q.a - p.a);
+            double nb = p.b + t * (q.b - p.b);
+            double nc = p.c + t * (q.c - p.c);
+            double nd = p.d + t * (q.d - p.d);
+            return new TractionRotor(na, nb, nc, nd).normalize();
+        }
+        double omega = Math.acos(cosOmega);
+        double sinOmega = Math.sin(omega);
+        double w0 = Math.sin((1.0 - t) * omega) / sinOmega;
+        double w1 = Math.sin(t * omega) / sinOmega;
+        return new TractionRotor(
+                w0 * p.a + w1 * q.a,
+                w0 * p.b + w1 * q.b,
+                w0 * p.c + w1 * q.c,
+                w0 * p.d + w1 * q.d);
     }
 
     // ── 3D action ─────────────────────────────────────────────────────
 
-    /** Apply the SO(3) rotation R_z(thetaW) ∘ R_x(thetaU) to a 3-vector.
-     *  This is the parameterization-induced rotation chosen so that
-     *  apply(+x) reproduces toSpherePoint(). It is NOT a Clifford sandwich
-     *  product on the algebra (which would need the full polynomial-in-s
-     *  representation). Two TractionRotors composed as 3D rotations do not
-     *  generally produce another canonical TractionRotor. */
+    /** Apply the rotor to a 3-vector via the sandwich product
+     *  {@code R · v · R~}. Requires a unit rotor; non-unit rotors should be
+     *  normalized first. */
     public double[] apply(double[] v) {
         if (v.length != 3) {
             throw new IllegalArgumentException("apply expects a 3-vector, got length " + v.length);
         }
-        requireAngles("apply()");
-        double cw = Math.cos(thetaW);
-        double sw = Math.sin(thetaW);
-        double cu = Math.cos(thetaU);
-        double su = Math.sin(thetaU);
-        double x1 = cw * v[0] - sw * v[1];
-        double y1 = sw * v[0] + cw * v[1];
-        double z1 = v[2];
+        double n2 = normSquared();
+        if (Math.abs(n2 - 1.0) > UNIT_EPS) {
+            throw new IllegalStateException(
+                    "apply() requires a unit rotor; |R|² = " + n2 + ". Call normalize() first.");
+        }
+        // Direct expansion of (a + b·e₂₃ + c·e₁₂ + d·...) · v · reverse, with
+        // bivector basis chosen so that fromAngles(W, U).apply({1,0,0}) yields
+        // (cos W, sin W cos U, sin W sin U). Equivalent to the standard
+        // quaternion sandwich under (a,b,c,d) ↔ (s,x,y,z) = (a, b, -d, c):
+        //   v' = (s² - x² - y² - z²) v + 2(qv · v) qv + 2 s (qv × v)
+        // with qv = (b, -d, c).
+        double vx = v[0], vy = v[1], vz = v[2];
+        double scale = 2.0 * a * a - 1.0;
+        double dot = b * vx - d * vy + c * vz;
+        // qv × v = (-d·vz - c·vy, c·vx - b·vz, b·vy + d·vx)
+        double crossX = -d * vz - c * vy;
+        double crossY =  c * vx - b * vz;
+        double crossZ =  b * vy + d * vx;
         return new double[] {
-                x1,
-                cu * y1 - su * z1,
-                su * y1 + cu * z1,
+                scale * vx + 2.0 * dot * b   + 2.0 * a * crossX,
+                scale * vy + 2.0 * dot * (-d) + 2.0 * a * crossY,
+                scale * vz + 2.0 * dot * c   + 2.0 * a * crossZ,
         };
     }
 
-    /** Standard spherical coords with +x as the pole; equals apply({1,0,0}):
-     *    x = cos(thetaW)
-     *    y = sin(thetaW) * cos(thetaU)
-     *    z = sin(thetaW) * sin(thetaU) */
+    /** Convenience: {@code apply({1, 0, 0})}. */
     public double[] toSpherePoint() {
         return apply(new double[] { 1.0, 0.0, 0.0 });
     }
@@ -191,19 +249,6 @@ public final class TractionRotor {
     @Override
     public int hashCode() {
         return Objects.hash(a, b, c, d);
-    }
-
-    private void requireAngles(String name) {
-        if (!hasAngles()) {
-            throw new IllegalStateException(
-                    name + " requires a rotor built via fromAngles().");
-        }
-    }
-
-    private static double shortestArc(double delta) {
-        double twoPi = 2.0 * Math.PI;
-        double m = ((delta + Math.PI) % twoPi + twoPi) % twoPi - Math.PI;
-        return m;
     }
 
     // ── Reference-data verification ───────────────────────────────────

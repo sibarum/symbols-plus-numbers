@@ -1,8 +1,10 @@
 package spn.node;
 
+import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.dsl.TypeSystemReference;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.NodeInfo;
+import spn.type.FieldType;
 import spn.type.SpnTypes;
 
 /**
@@ -22,6 +24,10 @@ import spn.type.SpnTypes;
 @TypeSystemReference(SpnTypes.class)
 @NodeInfo(language = "SPN", description = "The abstract base node for all SPN nodes")
 public abstract class SpnNode extends Node {
+
+    static {
+        FieldType.installCallableTest(v -> v instanceof CallTarget);
+    }
 
     // ── Source location (set by parser, read by SpnException and IDE) ──────
 

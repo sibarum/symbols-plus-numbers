@@ -1,6 +1,5 @@
 package spn.type;
 
-import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import java.util.Arrays;
 
 /**
@@ -29,7 +28,6 @@ import java.util.Arrays;
  */
 public final class SpnTupleDescriptor {
 
-    @CompilationFinal(dimensions = 1)
     private final FieldType[] elementTypes;
 
     public SpnTupleDescriptor(FieldType... elementTypes) {

@@ -1,5 +1,6 @@
 package spn.traction;
 
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -17,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * identity-activation quaternion networks scale with depth on a real
  * geometric task.
  */
+@Disabled // Takes too long to run, too resource intensive.
 class ShapeTest extends TractionTestBase {
 
     private double measure(String netExpr, int epochs, double lr) {

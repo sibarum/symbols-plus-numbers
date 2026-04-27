@@ -15,6 +15,7 @@
     </build>
 
     <modules>
+        <module>spn-builtin</module>
         <module>spn-ast</module>
         <module>spn-parse</module>
         <module>spn-pkg</module>

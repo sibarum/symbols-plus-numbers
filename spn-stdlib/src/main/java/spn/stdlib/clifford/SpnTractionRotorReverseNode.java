@@ -9,20 +9,20 @@ import spn.language.SpnException;
 import spn.node.SpnExpressionNode;
 import spn.node.builtin.SpnBuiltin;
 
-@SpnBuiltin(name = "rotorHasAngles", module = "Clifford",
-        params = {"rotor"}, returns = "Boolean",
-        receiver = "TractionRotor", method = "hasAngles")
+@SpnBuiltin(name = "rotorReverse", module = "Clifford",
+        params = {"rotor"}, returns = "TractionRotor",
+        receiver = "TractionRotor", method = "reverse")
 @NodeChild("rotor")
-@NodeInfo(shortName = "rotorHasAngles")
-public abstract class SpnTractionRotorHasAnglesNode extends SpnExpressionNode {
+@NodeInfo(shortName = "rotorReverse")
+public abstract class SpnTractionRotorReverseNode extends SpnExpressionNode {
 
     @Specialization
-    protected boolean hasAngles(TractionRotor rotor) {
-        return rotor.hasAngles();
+    protected TractionRotor reverse(TractionRotor rotor) {
+        return rotor.reverse();
     }
 
     @Fallback
     protected Object typeError(Object rotor) {
-        throw new SpnException("hasAngles expects a TractionRotor", this);
+        throw new SpnException("reverse expects a TractionRotor", this);
     }
 }

@@ -9,20 +9,20 @@ import spn.language.SpnException;
 import spn.node.SpnExpressionNode;
 import spn.node.builtin.SpnBuiltin;
 
-@SpnBuiltin(name = "rotorThetaU", module = "Clifford",
-        params = {"rotor"}, returns = "Double",
-        receiver = "TractionRotor", method = "thetaU")
+@SpnBuiltin(name = "rotorInverse", module = "Clifford",
+        params = {"rotor"}, returns = "TractionRotor",
+        receiver = "TractionRotor", method = "inverse")
 @NodeChild("rotor")
-@NodeInfo(shortName = "rotorThetaU")
-public abstract class SpnTractionRotorThetaUNode extends SpnExpressionNode {
+@NodeInfo(shortName = "rotorInverse")
+public abstract class SpnTractionRotorInverseNode extends SpnExpressionNode {
 
     @Specialization
-    protected double thetaU(TractionRotor rotor) {
-        return rotor.thetaU();
+    protected TractionRotor inverse(TractionRotor rotor) {
+        return rotor.inverse();
     }
 
     @Fallback
     protected Object typeError(Object rotor) {
-        throw new SpnException("thetaU expects a TractionRotor", this);
+        throw new SpnException("inverse expects a TractionRotor", this);
     }
 }

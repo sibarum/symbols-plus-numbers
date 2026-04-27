@@ -6,6 +6,9 @@ import java.io.IOException;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 /**
  * Cached module information for the currently open file's module.
@@ -21,6 +24,10 @@ public class ModuleContext {
     private volatile List<ModuleFile> files;
 
     public record ModuleFile(Path absolutePath, String relativePath) {}
+
+    /** A single matched line within a file. {@code matchStart}/{@code matchEnd} are 0-based char offsets within {@code lineText}. */
+    public record ContentMatch(ModuleFile file, int lineNumber, String lineText,
+                               int matchStart, int matchEnd) {}
 
     private ModuleContext(Path root, String namespace, String version, List<ModuleFile> files) {
         this.root = root;
@@ -114,24 +121,60 @@ public class ModuleContext {
     }
 
     /**
-     * Search file contents for a query string. Only searches .spn and .spnt files.
-     * Returns files that contain the query (case-insensitive).
+     * Search file contents line-by-line. {@code query} is interpreted as a literal
+     * with {@code *} / {@code ?} wildcards when {@code isRegex} is false, or as a
+     * full regex when true. Both modes are case-insensitive. The first match per
+     * line is reported; multiple matched lines per file are returned in order.
+     *
+     * @throws PatternSyntaxException if {@code isRegex} is true and the query is not
+     *         a valid regex. Callers (the GUI) catch and surface this to the user.
      */
-    public List<ModuleFile> searchContents(String query) {
-        if (query == null || query.isEmpty()) return files;
-        String lower = query.toLowerCase();
-        List<ModuleFile> result = new ArrayList<>();
+    public List<ContentMatch> searchContents(String query, boolean isRegex) {
+        if (query == null || query.isEmpty()) return List.of();
+        String regex = isRegex ? query : wildcardToRegex(query);
+        Pattern pattern = Pattern.compile(regex, Pattern.CASE_INSENSITIVE);
+
+        List<ContentMatch> result = new ArrayList<>();
         for (ModuleFile f : files) {
+            String content;
             try {
-                String content = Files.readString(f.absolutePath()).toLowerCase();
-                if (content.contains(lower)) {
-                    result.add(f);
-                }
+                content = Files.readString(f.absolutePath());
             } catch (IOException ignored) {
-                // skip unreadable files
+                continue;
+            }
+            int lineNum = 1;
+            int start = 0;
+            int len = content.length();
+            while (start <= len) {
+                int end = content.indexOf('\n', start);
+                if (end < 0) end = len;
+                String line = content.substring(start, end);
+                Matcher m = pattern.matcher(line);
+                if (m.find()) {
+                    result.add(new ContentMatch(f, lineNum, line, m.start(), m.end()));
+                }
+                if (end == len) break;
+                start = end + 1;
+                lineNum++;
             }
         }
         return result;
+    }
+
+    /** Convert a glob-style query ({@code *}, {@code ?}) to a regex; other regex metachars are escaped. */
+    static String wildcardToRegex(String query) {
+        StringBuilder sb = new StringBuilder(query.length() * 2);
+        for (int i = 0; i < query.length(); i++) {
+            char c = query.charAt(i);
+            switch (c) {
+                case '*' -> sb.append(".*");
+                case '?' -> sb.append(".");
+                case '.', '\\', '+', '(', ')', '[', ']', '{', '}', '^', '$', '|' ->
+                        sb.append('\\').append(c);
+                default -> sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     // ---- Loading ----

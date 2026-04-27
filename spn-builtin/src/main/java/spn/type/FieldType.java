@@ -40,6 +40,20 @@ public sealed interface FieldType {
     /** Human-readable description for error messages. */
     String describe();
 
+    /**
+     * Predicate used by {@link OfFunction#accepts(Object)} to decide whether a value is
+     * a function value. spn-builtin doesn't depend on Truffle, so it can't reference
+     * {@code CallTarget} directly; spn-ast installs the real test at language-init time
+     * via {@link #installCallableTest(java.util.function.Predicate)}.
+     */
+    java.util.concurrent.atomic.AtomicReference<java.util.function.Predicate<Object>> CALLABLE_TEST =
+            new java.util.concurrent.atomic.AtomicReference<>(v -> false);
+
+    /** Installs the predicate that decides whether a value is a function/callable. */
+    static void installCallableTest(java.util.function.Predicate<Object> test) {
+        CALLABLE_TEST.set(test);
+    }
+
     // ── Convenience constants ───────────────────────────────────────────────
 
     Untyped UNTYPED = new Untyped();
@@ -270,13 +284,14 @@ public sealed interface FieldType {
     }
 
     /**
-     * Accepts function values (CallTarget instances). Carries the full signature
-     * for type checking and display: {@code (Long, Long) -> Long}.
+     * Accepts function values. Carries the full signature for type checking and
+     * display: {@code (Long, Long) -> Long}. The "callable" decision is delegated
+     * to {@link FieldType#CALLABLE_TEST} so this class stays Truffle-free.
      */
     record OfFunction(FieldType[] paramTypes, FieldType returnType) implements FieldType {
         @Override
         public boolean accepts(Object value) {
-            return value instanceof com.oracle.truffle.api.CallTarget;
+            return CALLABLE_TEST.get().test(value);
         }
 
         @Override

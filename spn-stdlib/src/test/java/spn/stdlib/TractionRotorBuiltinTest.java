@@ -12,12 +12,14 @@ import spn.type.SpnSymbolTable;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Smoke test for the TractionRotor builtin type. Exercises factories,
- * tower-component accessors, sphere projection, 3D action, the Tier-1
- * 4-vector ops, parameter-space interpolation, and display.
+ * tower-component accessors, the rotor algebra (multiply / inverse / reverse
+ * / slerp), the sandwich action on 3-vectors, and the 4-vector arithmetic
+ * helpers used by NN code paths.
  */
 class TractionRotorBuiltinTest {
 
@@ -66,7 +68,6 @@ class TractionRotorBuiltinTest {
 
     @Test
     void applyAsMethodOnPlusX() {
-        // apply(+x) must equal toSpherePoint() — verified by the Java main()
         Object result = run("""
             import Clifford
             let r = tractionRotor(0.7853981633974483, 4.71238898038469)
@@ -106,8 +107,6 @@ class TractionRotorBuiltinTest {
         assertEquals(0.6, rotor.b(), 1e-9);
         assertEquals(0.7, rotor.c(), 1e-9);
         assertEquals(0.8, rotor.d(), 1e-9);
-        // fromTower-built rotors have no angles
-        assertEquals(false, rotor.hasAngles());
     }
 
     // ── Component and Traction-basis accessors ─────────────────────────
@@ -121,34 +120,6 @@ class TractionRotorBuiltinTest {
             """);
         // (pi/2, 0) -> a = cos(pi/4) ≈ 0.7071
         assertEquals(0.7071, (Double) result, 1e-3);
-    }
-
-    @Test
-    void thetaWAndThetaU() {
-        double tw = (Double) run("""
-            import Clifford
-            tractionRotor(1.0, 2.0).thetaW()
-            """);
-        double tu = (Double) run("""
-            import Clifford
-            tractionRotor(1.0, 2.0).thetaU()
-            """);
-        assertEquals(1.0, tw, 1e-9);
-        assertEquals(2.0, tu, 1e-9);
-    }
-
-    @Test
-    void hasAngles() {
-        boolean withAngles = (Boolean) run("""
-            import Clifford
-            tractionRotor(0.5, 0.5).hasAngles()
-            """);
-        boolean withoutAngles = (Boolean) run("""
-            import Clifford
-            tractionRotorFromTower(1.0, 0.0, 0.0, 0.0).hasAngles()
-            """);
-        assertTrue(withAngles);
-        assertTrue(!withoutAngles);
     }
 
     @Test
@@ -242,7 +213,6 @@ class TractionRotorBuiltinTest {
 
     @Test
     void normalizeUnitRotorIsSelf() {
-        // normalize() on an already-unit rotor returns one with the same components
         double n = (Double) run("""
             import Clifford
             tractionRotor(0.7, 1.3).normalize().norm()
@@ -269,32 +239,128 @@ class TractionRotorBuiltinTest {
         assertTrue(!eq);
     }
 
-    // ── interpAngles ───────────────────────────────────────────────────
+    // ── Rotor algebra ──────────────────────────────────────────────────
 
     @Test
-    void interpAnglesAtZeroIsThis() {
-        Object r = run("""
+    void multiplyByIdentityIsSelf() {
+        TractionRotor r = (TractionRotor) run("""
             import Clifford
-            let a = tractionRotor(0.5, 1.0)
-            let b = tractionRotor(2.0, 3.0)
-            a.interpAngles(b, 0.0)
+            let r = tractionRotor(0.5, 1.0)
+            r.multiply(tractionRotorIdentity())
             """);
-        var rotor = assertInstanceOf(TractionRotor.class, r);
-        assertEquals(0.5, rotor.thetaW(), 1e-9);
-        assertEquals(1.0, rotor.thetaU(), 1e-9);
+        TractionRotor expected = TractionRotor.fromAngles(0.5, 1.0);
+        assertTrue(r.approxEquals(expected, 1e-12), "got " + r);
     }
 
     @Test
-    void interpAnglesAtOneIsOther() {
-        Object r = run("""
+    void multiplyComposesRotations() {
+        // R_z(W=pi) applied to R_z(W=pi) should give R_z(2pi) = identity
+        // (up to the double-cover sign: it actually gives -identity, since
+        // unit-rotor S³ double-covers SO(3)). Check via the 3D action.
+        Object result = run("""
+            import Clifford
+            let r = tractionRotor(3.141592653589793, 0.0)
+            let composed = r.multiply(r)
+            composed.apply([1.0, 0.0, 0.0])
+            """);
+        var arr = assertInstanceOf(SpnArrayValue.class, result);
+        // Two pi-rotations about z take (1,0,0) back to itself.
+        assertEquals(1.0, (Double) arr.get(0), 1e-9);
+        assertTrue(Math.abs((Double) arr.get(1)) < 1e-9);
+        assertTrue(Math.abs((Double) arr.get(2)) < 1e-9);
+    }
+
+    @Test
+    void multiplyIsClosedOffAngleSubmanifold() {
+        // Compose two angle-built rotors with non-aligned axes; the result is
+        // a generic unit rotor. We just verify it stays unit.
+        double n = (Double) run("""
+            import Clifford
+            let a = tractionRotor(0.5, 0.7)
+            let b = tractionRotor(1.1, 0.3)
+            a.multiply(b).norm()
+            """);
+        assertEquals(1.0, n, 1e-9);
+    }
+
+    @Test
+    void inverseTimesSelfIsIdentity() {
+        TractionRotor r = (TractionRotor) run("""
+            import Clifford
+            let r = tractionRotor(0.5, 1.0)
+            r.multiply(r.inverse())
+            """);
+        assertEquals(1.0, r.a(), 1e-9);
+        assertTrue(Math.abs(r.b()) < 1e-9);
+        assertTrue(Math.abs(r.c()) < 1e-9);
+        assertTrue(Math.abs(r.d()) < 1e-9);
+    }
+
+    @Test
+    void reverseFlipsBivectorGrades() {
+        TractionRotor r = (TractionRotor) run("""
+            import Clifford
+            tractionRotorFromTower(0.5, 0.6, 0.7, 0.8).reverse()
+            """);
+        assertEquals( 0.5, r.a(), 1e-12);
+        assertEquals(-0.6, r.b(), 1e-12);
+        assertEquals(-0.7, r.c(), 1e-12);
+        assertEquals(-0.8, r.d(), 1e-12);
+    }
+
+    @Test
+    void reverseEqualsInverseOnUnitRotor() {
+        TractionRotor diff = (TractionRotor) run("""
+            import Clifford
+            let r = tractionRotor(0.5, 1.0)
+            r.reverse().subtract(r.inverse())
+            """);
+        assertTrue(diff.norm() < 1e-12, "reverse vs inverse drift: " + diff.norm());
+    }
+
+    @Test
+    void slerpAtZeroIsThis() {
+        TractionRotor r = (TractionRotor) run("""
+            import Clifford
+            let a = tractionRotor(0.5, 1.0)
+            let b = tractionRotor(2.0, 3.0)
+            a.slerp(b, 0.0)
+            """);
+        TractionRotor a = TractionRotor.fromAngles(0.5, 1.0);
+        assertTrue(r.approxEquals(a, 1e-9), "slerp(0) = " + r);
+    }
+
+    @Test
+    void slerpAtOneIsOther() {
+        TractionRotor r = (TractionRotor) run("""
             import Clifford
             let a = tractionRotor(0.5, 1.0)
             let b = tractionRotor(1.5, 2.0)
-            a.interpAngles(b, 1.0)
+            a.slerp(b, 1.0)
             """);
-        var rotor = assertInstanceOf(TractionRotor.class, r);
-        assertEquals(1.5, rotor.thetaW(), 1e-9);
-        assertEquals(2.0, rotor.thetaU(), 1e-9);
+        TractionRotor b = TractionRotor.fromAngles(1.5, 2.0);
+        // slerp may pick the antipodal representative; compare up to sign.
+        boolean same    = r.approxEquals(b, 1e-9);
+        boolean flipped = r.approxEquals(b.negate(), 1e-9);
+        assertTrue(same || flipped, "slerp(1) = " + r + " vs b = " + b);
+    }
+
+    @Test
+    void slerpStaysOnUnitSphere() {
+        double n = (Double) run("""
+            import Clifford
+            let a = tractionRotor(0.5, 1.0)
+            let b = tractionRotor(2.0, 0.3)
+            a.slerp(b, 0.37).norm()
+            """);
+        assertEquals(1.0, n, 1e-9);
+    }
+
+    @Test
+    void applyRequiresUnitRotor() {
+        // fromTower(2,0,0,0) has norm 2; apply must reject it.
+        TractionRotor nonUnit = TractionRotor.fromTower(2.0, 0.0, 0.0, 0.0);
+        assertThrows(IllegalStateException.class, () -> nonUnit.apply(new double[] {1.0, 0.0, 0.0}));
     }
 
     // ── Display ────────────────────────────────────────────────────────
