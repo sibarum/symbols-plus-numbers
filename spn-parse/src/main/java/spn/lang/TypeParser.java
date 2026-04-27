@@ -181,6 +181,7 @@ final class TypeParser {
                 case "string", "String" -> FieldType.STRING;
                 case "bool", "Boolean" -> FieldType.BOOLEAN;
                 case "Symbol" -> FieldType.SYMBOL;
+                case "TractionRotor" -> FieldType.TRACTION_ROTOR;
                 case "Array", "UntypedArray", "Collection" -> FieldType.ofArray(FieldType.UNTYPED);
                 case "Set", "UntypedSet" -> FieldType.ofSet(FieldType.UNTYPED);
                 case "Dict", "UntypedDict" -> FieldType.ofDictionary(FieldType.UNTYPED);

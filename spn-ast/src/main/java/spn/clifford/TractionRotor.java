@@ -1,4 +1,4 @@
-package spn.stdlib.clifford;
+package spn.clifford;
 
 import java.util.Locale;
 import java.util.Objects;

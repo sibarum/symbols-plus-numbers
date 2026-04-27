@@ -734,6 +734,7 @@ public final class StdlibRegistryGenerator {
             case "Boolean" -> "FieldType.BOOLEAN";
             case "String" -> "FieldType.STRING";
             case "Symbol" -> "FieldType.SYMBOL";
+            case "TractionRotor" -> "FieldType.TRACTION_ROTOR";
             case "Array" -> "FieldType.ofArray(FieldType.UNTYPED)";
             case "Set" -> "FieldType.ofSet(FieldType.UNTYPED)";
             case "Dict" -> "FieldType.ofDictionary(FieldType.UNTYPED)";

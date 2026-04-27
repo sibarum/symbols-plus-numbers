@@ -1,5 +1,7 @@
 package spn.type;
 
+import spn.clifford.TractionRotor;
+
 /**
  * The type annotation on a struct field or tuple position.
  *
@@ -46,6 +48,7 @@ public sealed interface FieldType {
     OfClass DOUBLE = new OfClass(Double.class, "Double");
     OfClass BOOLEAN = new OfClass(Boolean.class, "Boolean");
     OfClass STRING = new OfClass(String.class, "String");
+    OfClass TRACTION_ROTOR = new OfClass(TractionRotor.class, "TractionRotor");
 
     // ── Convenience factories ───────────────────────────────────────────────
 
