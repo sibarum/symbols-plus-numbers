@@ -74,6 +74,13 @@ public record CliffordInteger(long value)
         if (other instanceof CliffordInteger(long value1)) {
             return new CliffordInteger(value * value1);
         }
+        // Scalar × fractional: lift this to (this, 1) and delegate to the
+        // field-of-fractions rule. Mathematically unambiguous; avoids the
+        // cross-flavor ambiguity that mixing distinct generator leaves
+        // would introduce.
+        if (other instanceof FractionalElement) {
+            return new CliffordProjectiveRational(this, ONE).mult(other);
+        }
         throw new CliffordIncompatibleArithmeticException(this, other);
     }
 
@@ -104,6 +111,9 @@ public record CliffordInteger(long value)
         if (other instanceof CliffordInteger(long value1)) {
             return new CliffordInteger(value + value1);
         }
+        if (other instanceof FractionalElement) {
+            return new CliffordProjectiveRational(this, ONE).add(other);
+        }
         throw new CliffordIncompatibleArithmeticException(this, other);
     }
 
@@ -111,6 +121,9 @@ public record CliffordInteger(long value)
     public CliffordNumber sub(CliffordNumber other) {
         if (other instanceof CliffordInteger(long value1)) {
             return new CliffordInteger(value - value1);
+        }
+        if (other instanceof FractionalElement) {
+            return new CliffordProjectiveRational(this, ONE).sub(other);
         }
         throw new CliffordIncompatibleArithmeticException(this, other);
     }

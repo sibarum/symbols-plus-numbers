@@ -108,30 +108,57 @@ class CliffordIntegerTest {
 
     @Test
     void multiplyWithIncompatibleTypeThrows() {
-        CliffordElement composite = new CliffordElement(CliffordInteger.ONE, CliffordInteger.ONE);
+        // Pair leaves carry generator-flavor; multiplying a scalar by a
+        // bilinear pair is genuinely ambiguous (which level? which slot?)
+        // and throws. Scalar × FractionalElement is allowed (see below).
+        CliffordEllipticPair pair = new CliffordEllipticPair(CliffordInteger.ONE, CliffordInteger.ZERO);
         assertThrows(CliffordIncompatibleArithmeticException.class,
-                () -> new CliffordInteger(1).mult(composite));
+                () -> new CliffordInteger(1).mult(pair));
     }
 
     @Test
     void addWithIncompatibleTypeThrows() {
-        CliffordElement composite = new CliffordElement(CliffordInteger.ONE, CliffordInteger.ONE);
+        CliffordEllipticPair pair = new CliffordEllipticPair(CliffordInteger.ONE, CliffordInteger.ZERO);
         assertThrows(CliffordIncompatibleArithmeticException.class,
-                () -> new CliffordInteger(1).add(composite));
+                () -> new CliffordInteger(1).add(pair));
     }
 
     @Test
     void subWithIncompatibleTypeThrows() {
-        CliffordElement composite = new CliffordElement(CliffordInteger.ONE, CliffordInteger.ONE);
+        CliffordEllipticPair pair = new CliffordEllipticPair(CliffordInteger.ONE, CliffordInteger.ZERO);
         assertThrows(CliffordIncompatibleArithmeticException.class,
-                () -> new CliffordInteger(1).sub(composite));
+                () -> new CliffordInteger(1).sub(pair));
     }
 
     @Test
     void divWithIncompatibleTypeThrows() {
-        CliffordElement composite = new CliffordElement(CliffordInteger.ONE, CliffordInteger.ONE);
+        CliffordEllipticPair pair = new CliffordEllipticPair(CliffordInteger.ONE, CliffordInteger.ZERO);
         assertThrows(CliffordIncompatibleArithmeticException.class,
-                () -> new CliffordInteger(1).div(composite));
+                () -> new CliffordInteger(1).div(pair));
+    }
+
+    // ── Scalar × FractionalElement (newly supported) ──────────────────
+
+    @Test
+    void multiplyByRationalLiftsToFraction() {
+        // 7 · (3/4) = (21/4). Scalar promoted via the (this, 1) fractional view.
+        CliffordProjectiveRational threeFourths = new CliffordProjectiveRational(
+                new CliffordInteger(3), new CliffordInteger(4));
+        CliffordNumber result = new CliffordInteger(7).mult(threeFourths);
+        var r = assertInstanceOf(CliffordElement.class, result);
+        assertEquals(new CliffordInteger(21), r.top());
+        assertEquals(new CliffordInteger(4), r.bottom());
+    }
+
+    @Test
+    void addRationalLiftsToFraction() {
+        // 7 + (3/4) = (7·4 + 3)/4 = (31/4)
+        CliffordProjectiveRational threeFourths = new CliffordProjectiveRational(
+                new CliffordInteger(3), new CliffordInteger(4));
+        CliffordNumber result = new CliffordInteger(7).add(threeFourths);
+        var r = assertInstanceOf(CliffordElement.class, result);
+        assertEquals(new CliffordInteger(31), r.top());
+        assertEquals(new CliffordInteger(4), r.bottom());
     }
 
     @Test

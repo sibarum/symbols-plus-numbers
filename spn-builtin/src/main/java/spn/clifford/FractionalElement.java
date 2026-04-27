@@ -22,7 +22,7 @@ package spn.clifford;
  * (integer-typed) — exhaust the patterns we need; new fractional shapes
  * should be added to the {@code permits} list deliberately.
  */
-public sealed interface FractionalElement extends CliffordNumber
+public sealed interface FractionalElement extends CliffordNumber, Conjugatable
         permits CliffordElement, CliffordProjectiveRational {
 
     @Override
@@ -65,5 +65,32 @@ public sealed interface FractionalElement extends CliffordNumber
     @Override
     default boolean isZero() {
         return top().isZero() && !bottom().isZero();
+    }
+
+    @Override
+    default CliffordNumber divLeaves(CliffordNumber scalar) {
+        return new CliffordElement(
+                top().divLeaves(scalar),
+                bottom().divLeaves(scalar)
+        );
+    }
+
+    @Override
+    default CliffordNumber multLeaves(CliffordNumber scalar) {
+        return new CliffordElement(
+                top().multLeaves(scalar),
+                bottom().multLeaves(scalar)
+        );
+    }
+
+    /** Conjugate of a fraction is the fraction of conjugates: {@code (a/b)̄ = (ā/b̄)}.
+     *  Requires both components to be {@link Conjugatable}. */
+    @Override
+    default CliffordNumber conjugate() {
+        if (top() instanceof Conjugatable t && bottom() instanceof Conjugatable b) {
+            return new CliffordElement(t.conjugate(), b.conjugate());
+        }
+        throw new IllegalStateException(
+                "FractionalElement.conjugate requires Conjugatable top and bottom");
     }
 }

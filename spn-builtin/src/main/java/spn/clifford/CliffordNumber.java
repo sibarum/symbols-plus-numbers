@@ -26,4 +26,38 @@ public interface CliffordNumber {
     CliffordNumber negate();
 
     boolean isZero();
+
+    /**
+     * Element-wise scaling: divide every scalar leaf in the tree by
+     * {@code scalar}. Pairs override to recurse into top and bottom; the
+     * default falls back to {@link #div}, which is correct for scalar
+     * leaves where there's nothing to recurse into.
+     *
+     * <p>Used by element-wise operations like inverse normalization
+     * ({@code conj / |x|²}) and the {@code ½} factor in
+     * {@link Symmetric}/{@link Antisymmetric} — places where the structural
+     * fraction-style {@link #div} would silently corrupt at non-leaf levels.
+     */
+    default CliffordNumber divLeaves(CliffordNumber scalar) {
+        return this.div(scalar);
+    }
+
+    /**
+     * Element-wise scaling: multiply every scalar leaf in the tree by
+     * {@code scalar}. Symmetric to {@link #divLeaves}. Used by the
+     * Cayley-Dickson bilinear formula's {@code δ·d̄·b} term — particularly
+     * for the traction case where δ = ω requires actual leaf-level
+     * multiplication rather than a simple sign flip.
+     *
+     * <p><b>Zero absorption:</b> if {@code this} is zero, returns {@code this}
+     * unchanged rather than lifting through {@link #mult}. This keeps
+     * {@code 0·ω = 0} at the leaf level, preventing the cross-leaf scalar
+     * lift from producing {@code (0, 0)} (the wheel bottom) for what should
+     * be ordinary scalar absorption. Without this, even pure scalar
+     * arithmetic in the traction algebra leaks ω-flavored data.
+     */
+    default CliffordNumber multLeaves(CliffordNumber scalar) {
+        if (this.isZero()) return this;
+        return this.mult(scalar);
+    }
 }
