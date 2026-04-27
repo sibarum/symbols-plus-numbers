@@ -221,13 +221,6 @@ public class EditorTab extends ScrollableTab {
             return true;
         }
 
-        // Sample shortcuts (F1, F2, ...)
-        if (!ctrl && action == GLFW_PRESS) {
-            for (EditorWindow.Sample s : EditorWindow.SAMPLES) {
-                if (key == s.key()) { window.openSample(s); return true; }
-            }
-        }
-
         if (ctrl && key == GLFW_KEY_N && action == GLFW_PRESS) {
             window.openNewTab();
             return true;

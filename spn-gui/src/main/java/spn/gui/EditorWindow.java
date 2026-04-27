@@ -47,14 +47,6 @@ public class EditorWindow {
     // window-refresh callback from stealing the GL context.
     private volatile boolean canvasActive;
 
-    // ---- Sample scripts -------------------------------------------------
-
-    record Sample(int key, String label, String resource) {}
-    static final Sample[] SAMPLES = {
-            new Sample(GLFW_KEY_F1, "Shapes",   "/samples/canvas_shapes.spn"),
-            new Sample(GLFW_KEY_F2, "Plot",     "/samples/canvas_grid.spn"),
-    };
-
     EditorWindow(long shareWith) {
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
@@ -213,8 +205,6 @@ public class EditorWindow {
         actionRegistry.register("Zoom In",       "View",   "Ctrl+=",       "Increase editor font size.",                            () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomIn(); });
         actionRegistry.register("Zoom Out",      "View",   "Ctrl+-",       "Decrease editor font size.",                            () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomOut(); });
         actionRegistry.register("Zoom Reset",    "View",   "Ctrl+0",       "Reset editor font size to default.",                    () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomReset(); });
-        actionRegistry.register("Shapes Sample", "Sample", "F1",           "Load the canvas shapes demo into a tab.",               () -> openSample(SAMPLES[0]));
-        actionRegistry.register("Plot Sample",   "Sample", "F2",           "Load the function plot demo into a tab.",                () -> openSample(SAMPLES[1]));
         actionRegistry.register("Logs",          "View",   "Ctrl+G",       "Open the execution log viewer in a tab. Shows run results, errors, and messages.", this::openLogTab);
         actionRegistry.register("Action Menu",   "View",   "Ctrl+P",       "Open the command palette for quick action search.",     () -> pushLegacyMode(new ActionMenuMode(this, actionRegistry)));
         actionRegistry.register("Import Browser","File",   "Ctrl+I",       "Search and insert import statements for modules and their exports.", () -> pushLegacyMode(new ImportMode(this)));
@@ -477,33 +467,6 @@ public class EditorWindow {
     }
 
     void destroy() { glfwDestroyWindow(handle); }
-
-    // ---- Sample loading -------------------------------------------------
-
-    void openSample(Sample sample) {
-        try (InputStream in = getClass().getResourceAsStream(sample.resource())) {
-            if (in == null) {
-                flash("Sample not found: " + sample.resource(), true);
-                return;
-            }
-            String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-
-            EditorTab et = getActiveEditorTab();
-            if (et != null && et.getFilePath() == null && et.getTextArea().getText().isBlank()) {
-                // Load into current empty tab
-                et.loadContent(content);
-                glfwSetWindowTitle(handle, sample.label() + " - Symbols+Numbers");
-            } else {
-                // Open in a new tab
-                EditorTab newTab = new EditorTab(this);
-                newTab.loadContent(content);
-                tabView.addTab(newTab);
-                glfwSetWindowTitle(handle, sample.label() + " - Symbols+Numbers");
-            }
-        } catch (IOException e) {
-            flash("Error loading sample: " + e.getMessage(), true);
-        }
-    }
 
     // ---- Build & Run ----------------------------------------------------
 

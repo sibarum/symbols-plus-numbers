@@ -1,53 +1,22 @@
 package spn.clifford;
 
-public class CliffordElement implements CliffordNumber {
+/**
+ * Generic top/bottom pair carrying field-of-fractions arithmetic via the
+ * {@link FractionalElement} default methods. Both components are arbitrary
+ * {@link CliffordNumber}s, so this class supports recursive nesting
+ * (Element-of-Element) and the wheel/projective {@code ω = (1, 0)} as raw
+ * data without canonicalization.
+ *
+ * <p>Equality and {@code hashCode} are auto-generated and structural —
+ * {@code (1, 2)} and {@code (2, 4)} are deliberately NOT equal even though
+ * they represent the same rational value, per the substrate's
+ * remove-normalization stance.
+ */
+public record CliffordElement(CliffordNumber top, CliffordNumber bottom)
+        implements FractionalElement {
 
-    private CliffordNumber top;
-
-    private CliffordNumber bottom;
-
-    public CliffordElement(CliffordNumber top, CliffordNumber bottom) {
-        this.top = top;
-        this.bottom = bottom;
-    }
-
-    public CliffordNumber getTop() {
-        return top;
-    }
-
-    public CliffordNumber getBottom() {
-        return bottom;
-    }
-
-    public CliffordNumber mult(CliffordNumber other) {
-        return new CliffordElement(
-                top.mult(other.getTop()),
-                bottom.mult(other.getBottom())
-        );
-    }
-
-    public CliffordNumber div(CliffordNumber other) {
-        return new CliffordElement(
-                top.mult(other.getBottom()),
-                bottom.mult(other.getTop())
-        );
-    }
-
-    public CliffordNumber add(CliffordNumber other) {
-        return new CliffordElement(
-                top.mult(other.getBottom()).add(
-                        other.getTop().mult(bottom)
-                ),
-                bottom.mult(other.getBottom())
-        );
-    }
-
-    public CliffordNumber sub(CliffordNumber other) {
-        return new CliffordElement(
-                top.mult(other.getBottom()).sub(
-                        other.getTop().mult(bottom)
-                ),
-                bottom.mult(other.getBottom())
-        );
+    @Override
+    public String toString() {
+        return "(" + top + " / " + bottom + ")";
     }
 }

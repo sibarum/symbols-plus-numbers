@@ -98,16 +98,6 @@ class SplashMode implements Mode {
             window.openFile();
             return true;
         }
-        if (key == GLFW_KEY_F1) {
-            window.popMode();
-            window.openSample(EditorWindow.SAMPLES[0]);
-            return true;
-        }
-        if (key == GLFW_KEY_F2) {
-            window.popMode();
-            window.openSample(EditorWindow.SAMPLES[1]);
-            return true;
-        }
         // Any other key dismisses the splash
         if (key == GLFW_KEY_ESCAPE || key == GLFW_KEY_ENTER || key == GLFW_KEY_SPACE) {
             window.popMode();
@@ -141,6 +131,6 @@ class SplashMode implements Mode {
 
     @Override
     public String hudText() {
-        return "Ctrl+N New | Ctrl+O Open | F1 Shapes | F2 Plot | Esc Dismiss";
+        return "Ctrl+N New | Ctrl+O Open | Esc Dismiss";
     }
 }
