@@ -24,7 +24,7 @@ public record CliffordTractionPair(CliffordNumber top, CliffordNumber bottom)
 
     /** δ = ω = (1, 0) — the wheel-projective inverse of zero. */
     public static final CliffordNumber DELTA =
-            new CliffordProjectiveRational(CliffordInteger.ONE, CliffordInteger.ZERO);
+            new CliffordProjectiveRational(CliffordInteger.ZERO, CliffordInteger.NEGATIVE_ONE);
 
     @Override
     public CliffordNumber delta() { return DELTA; }

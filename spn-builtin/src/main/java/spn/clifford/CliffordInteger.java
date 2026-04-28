@@ -5,6 +5,7 @@ public record CliffordInteger(long value)
 
     public static final CliffordInteger ZERO = new CliffordInteger(0);
     public static final CliffordInteger ONE = new CliffordInteger(1);
+    public static final CliffordInteger NEGATIVE_ONE = new CliffordInteger(-1);
 
     @Override
     public CliffordNumber top() {

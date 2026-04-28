@@ -14,7 +14,7 @@ public record CliffordEllipticPair(CliffordNumber top, CliffordNumber bottom)
         implements CayleyDicksonPair {
 
     /** δ = −1 — the value the unit element of this level squares to. */
-    public static final CliffordNumber DELTA = new CliffordInteger(-1);
+    public static final CliffordNumber DELTA = CliffordInteger.NEGATIVE_ONE;
 
     @Override
     public CliffordNumber delta() { return DELTA; }
