@@ -32,17 +32,22 @@ class CliffordTractionPairTest {
 
     @Test
     void unitElementSquaresToOmega() {
-        // k = (0, 1). k² = (0·0 + ω·1·1, 1·0 + 1·0) = (ω, 0).
-        // Top is the ω-flavored CliffordElement(1, 0); bottom is integer 0.
+        // k = (0, 1). With δ = (0, -1) (the user's "−0" reinterpretation of ω),
+        // k² = (0·0 + δ·(1·1), 1·0 + 1·0).
+        // The δ·1 step lifts to FractionalElement.mult: (1, 1)·(0, -1) = (0, -1),
+        // then 0 + (0, -1) = (0·-1 + 0·1, 1·-1) = (0, -1) as CliffordElement.
         CliffordTractionPair k = p(0, 1);
-        CliffordTractionPair expected = new CliffordTractionPair(omegaTimes(1), i(0));
+        CliffordElement deltaTimesOne = new CliffordElement(i(0), i(-1));
+        CliffordTractionPair expected = new CliffordTractionPair(deltaTimesOne, i(0));
         assertEquals(expected, k.composeBilinear(k));
     }
 
     @Test
     void deltaIsOmega() {
+        // δ was changed from (1, 0) [+ω] to (0, -1) [-0]; both represent the
+        // "k corner" in the substrate but with different propagation behavior.
         assertEquals(
-                new CliffordProjectiveRational(CliffordInteger.ONE, CliffordInteger.ZERO),
+                new CliffordProjectiveRational(CliffordInteger.ZERO, CliffordInteger.NEGATIVE_ONE),
                 p(0, 0).delta());
     }
 
@@ -91,19 +96,18 @@ class CliffordTractionPairTest {
 
     @Test
     void productMixingScalarAndTractionPart() {
-        // (2, 3)·(5, 7) = (2·5 + ω·7·3, 7·2 + 3·5) = (10 + 21ω, 29)
-        // newTop is 10 + 21ω as CliffordElement; newBottom is integer 29.
+        // (2, 3)·(5, 7) with δ = (0, -1):
+        //   product(a, c)    = 2·5 = 10
+        //   product(dBar, b) = 7·3 = 21
+        //   21.multLeaves((0,-1)): lift 21 to (21, 1), then (21, 1)·(0, -1) =
+        //       (0, -1) as CliffordElement.
+        //   newTop = 10.add((0, -1)) = (10, 1)·(0, -1)-style add =
+        //       (10·-1 + 0·1, 1·-1) = (-10, -1).
+        //   newBottom = 7·2 + 3·5 = 29.
         CliffordNumber result = p(2, 3).composeBilinear(p(5, 7));
         var pair = (CliffordTractionPair) result;
-        // The bottom is straightforward integer arithmetic.
         assertEquals(i(29), pair.bottom());
-        // The top is "10 + 21·ω", which the substrate represents as a
-        // CliffordElement obtained by adding integer 10 to ω-flavored
-        // CliffordElement(21, 0). That add lifts via the cross-leaf
-        // promotion to fraction (10/1) + (21/0) = (10·0 + 21·1)/(1·0)
-        //                                       = (21, 0) under wheel rules.
-        // Verify the top is structurally what the substrate produces.
-        assertEquals(new CliffordElement(i(21), i(0)), pair.top());
+        assertEquals(new CliffordElement(i(-10), i(-1)), pair.top());
     }
 
     // ── Conjugate / universal ops ───────────────────────────────────
