@@ -32,22 +32,19 @@ class CliffordTractionPairTest {
 
     @Test
     void unitElementSquaresToOmega() {
-        // k = (0, 1). With δ = (0, -1) (the user's "−0" reinterpretation of ω),
-        // k² = (0·0 + δ·(1·1), 1·0 + 1·0).
-        // The δ·1 step lifts to FractionalElement.mult: (1, 1)·(0, -1) = (0, -1),
-        // then 0 + (0, -1) = (0·-1 + 0·1, 1·-1) = (0, -1) as CliffordElement.
+        // k = (0, 1). With δ = ω = (1, 0), k² = (0·0 + δ·(1·1), 1·0 + 1·0).
+        // The δ·1 step lifts 1 to (1, 1) and multiplies in FractionalElement:
+        // (1, 1)·(1, 0) = (1, 0), then 0 + (1, 0) = (0·0 + 1·1, 1·0) = (1, 0)
+        // as CliffordElement — i.e. ω.
         CliffordTractionPair k = p(0, 1);
-        CliffordElement deltaTimesOne = new CliffordElement(i(0), i(-1));
-        CliffordTractionPair expected = new CliffordTractionPair(deltaTimesOne, i(0));
+        CliffordTractionPair expected = new CliffordTractionPair(omegaTimes(1), i(0));
         assertEquals(expected, k.composeBilinear(k));
     }
 
     @Test
     void deltaIsOmega() {
-        // δ was changed from (1, 0) [+ω] to (0, -1) [-0]; both represent the
-        // "k corner" in the substrate but with different propagation behavior.
         assertEquals(
-                new CliffordProjectiveRational(CliffordInteger.ZERO, CliffordInteger.NEGATIVE_ONE),
+                new CliffordProjectiveRational(CliffordInteger.ONE, CliffordInteger.ZERO),
                 p(0, 0).delta());
     }
 
@@ -96,18 +93,18 @@ class CliffordTractionPairTest {
 
     @Test
     void productMixingScalarAndTractionPart() {
-        // (2, 3)·(5, 7) with δ = (0, -1):
+        // (2, 3)·(5, 7) with δ = ω = (1, 0):
         //   product(a, c)    = 2·5 = 10
         //   product(dBar, b) = 7·3 = 21
-        //   21.multLeaves((0,-1)): lift 21 to (21, 1), then (21, 1)·(0, -1) =
-        //       (0, -1) as CliffordElement.
-        //   newTop = 10.add((0, -1)) = (10, 1)·(0, -1)-style add =
-        //       (10·-1 + 0·1, 1·-1) = (-10, -1).
+        //   21.multLeaves((1, 0)): lift 21 to (21, 1), then (21, 1)·(1, 0) =
+        //       (21, 0) as CliffordElement.
+        //   newTop = 10.add((21, 0)) = (10, 1).add((21, 0)) =
+        //       (10·0 + 21·1, 1·0) = (21, 0).
         //   newBottom = 7·2 + 3·5 = 29.
         CliffordNumber result = p(2, 3).composeBilinear(p(5, 7));
         var pair = (CliffordTractionPair) result;
         assertEquals(i(29), pair.bottom());
-        assertEquals(new CliffordElement(i(-10), i(-1)), pair.top());
+        assertEquals(omegaTimes(21), pair.top());
     }
 
     // ── Conjugate / universal ops ───────────────────────────────────

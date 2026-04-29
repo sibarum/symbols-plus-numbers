@@ -22,9 +22,9 @@ package spn.clifford;
 public record CliffordTractionPair(CliffordNumber top, CliffordNumber bottom)
         implements CayleyDicksonPair {
 
-    /** δ = ω = (1, 0) — the wheel-projective inverse of zero. */
+    /** δ = ω = (1,0) — the wheel-projective inverse of zero. */
     public static final CliffordNumber DELTA =
-            new CliffordProjectiveRational(CliffordInteger.ZERO, CliffordInteger.NEGATIVE_ONE);
+            new CliffordProjectiveRational(CliffordInteger.ONE, CliffordInteger.ZERO);
 
     @Override
     public CliffordNumber delta() { return DELTA; }
