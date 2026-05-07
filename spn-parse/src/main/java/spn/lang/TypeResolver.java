@@ -643,7 +643,10 @@ public final class TypeResolver {
                 else if (v instanceof Boolean) litType = FieldType.BOOLEAN;
                 else if (v instanceof SpnSymbol) litType = FieldType.SYMBOL;
                 if (litType == null) yield null;
-                yield typesMatch(subjectType, litType) ? null
+                boolean numericCompatible =
+                        (litType == FieldType.LONG && subjectType == FieldType.DOUBLE)
+                     || (litType == FieldType.DOUBLE && subjectType == FieldType.LONG);
+                yield (typesMatch(subjectType, litType) || numericCompatible) ? null
                         : "literal of type " + litType.describe() + " cannot match " + subjectType.describe();
             }
         };

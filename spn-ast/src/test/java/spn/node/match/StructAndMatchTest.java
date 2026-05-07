@@ -13,6 +13,8 @@ import spn.node.struct.SpnFieldAccessNodeGen;
 import spn.node.struct.SpnStructConstructNode;
 import spn.type.SpnStructDescriptor;
 import spn.type.SpnStructValue;
+import spn.type.SpnTupleDescriptor;
+import spn.type.SpnTupleValue;
 import spn.type.SpnTypeDescriptor;
 import spn.type.SpnProductValue;
 import spn.node.type.SpnProductConstructNode;
@@ -304,6 +306,34 @@ class StructAndMatchTest {
 
             assertEquals(1L, execute(new SpnMatchNode(new SpnStringLiteralNode("hello"), branch, fallback)));
             assertEquals(0L, execute(new SpnMatchNode(new SpnStringLiteralNode("world"), branch, fallback)));
+        }
+
+        @Test
+        void intLiteralMatchesFloatScrutinee() {
+            // `match x | 0 -> ...` should fire when x is a Double 0.0.
+            var zeroPattern = new MatchPattern.Literal(0L);
+            assertTrue(zeroPattern.matches(0.0));
+            assertTrue(zeroPattern.matches(0.0f));
+            assertFalse(zeroPattern.matches(1.0));
+
+            // And the symmetric case: float pattern against long scrutinee.
+            var zeroDoublePattern = new MatchPattern.Literal(0.0);
+            assertTrue(zeroDoublePattern.matches(0L));
+            assertFalse(zeroDoublePattern.matches(1L));
+
+            // Long-vs-long still works.
+            assertTrue(new MatchPattern.Literal(0L).matches(0L));
+            assertFalse(new MatchPattern.Literal(0L).matches(1L));
+        }
+
+        @Test
+        void tupleElementIntLiteralMatchesFloat() {
+            // `match (a, b) | (_, 0) -> ...` should fire when b is a Double 0.0.
+            var pattern = new MatchPattern.TupleElements(
+                    new MatchPattern[]{new MatchPattern.Wildcard(), new MatchPattern.Literal(0L)}, 2);
+            var desc = SpnTupleDescriptor.untyped(2);
+            assertTrue(pattern.matches(new SpnTupleValue(desc, 1.0, 0.0)));
+            assertFalse(pattern.matches(new SpnTupleValue(desc, 1.0, 2.0)));
         }
     }
 

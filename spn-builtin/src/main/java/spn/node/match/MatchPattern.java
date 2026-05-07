@@ -423,11 +423,18 @@ public sealed interface MatchPattern {
 
     /**
      * Matches a value that equals the expected literal.
-     * Uses Objects.equals for comparison, so works with boxed primitives and strings.
+     * Numeric literals compare across Long/Double so an int pattern matches a float scrutinee
+     * (mirrors the long→double widening that arithmetic and constructor calls already perform).
      */
     record Literal(Object expected) implements MatchPattern {
         @Override
         public boolean matches(Object value) {
+            if (expected instanceof Number e && value instanceof Number v) {
+                boolean floating = e instanceof Double || e instanceof Float
+                                || v instanceof Double || v instanceof Float;
+                if (floating) return e.doubleValue() == v.doubleValue();
+                return e.longValue() == v.longValue();
+            }
             return Objects.equals(expected, value);
         }
 
