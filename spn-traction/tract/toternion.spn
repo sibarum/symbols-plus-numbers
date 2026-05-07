@@ -1,0 +1,49 @@
+
+type Toternion(z:float, n:float, w:float)
+
+pure +(Toternion, Toternion) -> Toternion = ((z1,n1,w1),(z2,n2,w2)) {
+  Toternion(z1+z2, n1+n2, w1+w2)
+}
+
+pure *(Toternion, Toternion) -> Toternion = ((z1,n1,w1),(z2,n2,w2)) {
+  let z = z1*z2 + n1*z2 + n2*z1
+  let n = z1*w2 + z2*w1 + n1*n2
+  let w = w1*w2
+  Toternion(z1+z2, n1+n2, w1+w2)
+}
+
+pure /(Toternion, Toternion) -> Toternion = ((z1,n1,w1),(z2,n2,w2)) {
+  let z = match (z1,z2)
+  | (0,0) -> 1
+  | (_,0) -> 0
+  | _ -> z1 / z2
+  let n = match (n1, n2)
+  | (0,0) -> 1
+  | (_,0) -> 0
+  | (0,_) -> 0
+  | _ -> n1 / n2
+  let w = match(w1, w2)
+  | (0,0) -> 1
+  | (_,0) -> w1
+  | (0,_) -> 0
+  | _ -> w1 / w2
+  let nn = match (z2, w1)
+  | (0,0) -> z1 + w2
+  | (_,0) -> w2
+  | (0,_) -> z1
+  | _ -> 0
+  let zn = match n1
+  | 0.0 -> n2
+  | _ -> 0
+  let wn = match n2
+  | 0.0 -> n1
+  | _ -> 0
+
+  Toternion(z+zn, n+nn, w+wn)
+}
+
+pure -(Toternion, Toternion) -> Toternion = ((z1,n1,w1),(z2,n2,w2)) {
+  Toternion(z1-z2, n1-n2, w1-w2)
+}
+
+Toternion(1, 1, 0) / Toternion(1, 0, 0)

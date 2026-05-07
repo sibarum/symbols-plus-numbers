@@ -27,6 +27,7 @@
         <module>spn-fonts</module>
         <module>spn-stdui</module>
         <module>spn-canvasgui</module>
+        <module>spn-claude</module>
         <module>spn-traction</module>
     </modules>
 

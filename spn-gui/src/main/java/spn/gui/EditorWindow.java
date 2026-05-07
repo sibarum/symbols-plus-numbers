@@ -1,5 +1,10 @@
 package spn.gui;
 
+import spn.claude.ActivityLog;
+import spn.claude.ClaudeService;
+import spn.claude.ClaudeSettings;
+import spn.claude.ClaudeSettingsStore;
+import spn.claude.MainThreadQueue;
 import spn.fonts.SdfFontRenderer;
 import spn.lang.SpnParser;
 import spn.node.SpnRootNode;
@@ -42,6 +47,15 @@ public class EditorWindow {
     private final LogBuffer logBuffer = new LogBuffer();
     private final NavigationHistory navHistory = new NavigationHistory();
     private boolean initialized;
+
+    // Claude integration — initialized lazily on first use so the IDE
+    // starts up unaffected if the SDK or settings file have problems.
+    private final ClaudeSettingsStore claudeSettingsStore = new ClaudeSettingsStore();
+    private final MainThreadQueue claudeMainQueue = new MainThreadQueue();
+    private ClaudeSettings claudeSettings;
+    private ClaudeService claudeService;
+    private ActivityLog claudeActivityLog;
+    private int claudeChatCounter;
 
     /** Tint applied to the HUD bar whenever a mode is capturing input
      *  (search, replace, autocomplete, palettes, dialogs). Warm amber against
@@ -229,6 +243,65 @@ public class EditorWindow {
         actionRegistry.register("Help",          "Help",   "Ctrl+/",       "Open the help search. Searches IDE commands and reference articles for Canvas, CanvasGui, and stdlib modules. Selecting an article shows long-form prose plus runnable example files that open in new editor tabs.", () -> pushLegacyMode(new HelpMode(this, actionRegistry)));
         actionRegistry.register("Navigate Back",   "View",   "Ctrl+Alt+Left",  "Jump to the previous stable cursor position (last edit, copy/cut/paste, tab change, or mode push/pop).", this::navigateBack);
         actionRegistry.register("Navigate Forward","View",   "Ctrl+Alt+Right", "Jump to the next stable cursor position after a Navigate Back.", this::navigateForward);
+        actionRegistry.register("New Claude Chat", "Claude", "Ctrl+J",         "Open a new chat tab with Claude. Each tab is its own conversation; closing the tab discards the conversation.", this::openNewClaudeChat);
+        actionRegistry.register("Claude Settings", "Claude", "",               "Edit Claude API key, model, system prompt, and IDE-mutation permissions. Saved to ~/.spn/claude.settings.", this::openClaudeSettings);
+        actionRegistry.register("Claude Log",      "Claude", "",               "Open the Claude activity log in a tab. Shows every request and response with token usage.", this::openClaudeLog);
+    }
+
+    // ---- Claude integration ----------------------------------------------
+
+    /** Lazy-init claude settings + service. Returns the cached settings. */
+    private ClaudeSettings ensureClaudeReady() {
+        if (claudeSettings == null) {
+            claudeSettings = claudeSettingsStore.load();
+            if (claudeSettings.logPath().isBlank()) {
+                claudeSettings.setLogPath(claudeSettingsStore.defaultLogPath().toString());
+            }
+            claudeActivityLog = new ActivityLog(java.nio.file.Path.of(claudeSettings.logPath()));
+        }
+        return claudeSettings;
+    }
+
+    /**
+     * Lazy-init the service. Returns null when no API key is configured. The
+     * service is rebuilt automatically after a settings change (see
+     * {@link #openClaudeSettings}), so callers should fetch a fresh reference
+     * per send rather than caching one.
+     */
+    public ClaudeService getClaudeService() {
+        ClaudeSettings s = ensureClaudeReady();
+        if (claudeService == null && s.hasApiKey()) {
+            claudeService = new ClaudeService(s, claudeActivityLog);
+        }
+        return claudeService;
+    }
+
+    void openNewClaudeChat() {
+        ensureClaudeReady();
+        claudeChatCounter++;
+        tabView.addTab(new ClaudeChatTab(this, claudeMainQueue,
+                claudeSettings, claudeActivityLog, claudeChatCounter));
+    }
+
+    void openClaudeSettings() {
+        ensureClaudeReady();
+        pushLegacyMode(new ClaudeSettingsMode(this, claudeSettings, claudeSettingsStore));
+        // Force-rebuild the service on the next chat send so a new API key
+        // takes effect without restarting the IDE.
+        if (claudeService != null) {
+            claudeService.shutdown();
+            claudeService = null;
+        }
+    }
+
+    void openClaudeLog() {
+        ensureClaudeReady();
+        Tab existing = tabView.findTab(t -> t instanceof ClaudeLogTab);
+        if (existing != null) {
+            tabView.switchTo(existing);
+        } else {
+            tabView.addTab(new ClaudeLogTab(this, claudeActivityLog));
+        }
     }
 
     // ---- Accessors -------------------------------------------------------
@@ -463,6 +536,11 @@ public class EditorWindow {
     // ---- Rendering (delegates to WindowFrame) ----------------------------
 
     void render() {
+        // Drain any worker-thread results posted since the last frame
+        // (Claude responses, tool callbacks). Done before rendering so the
+        // updated state appears this frame.
+        claudeMainQueue.drain();
+
         int[] w = new int[1], h = new int[1];
         glfwGetFramebufferSize(handle, w, h);
         glViewport(0, 0, w[0], h[0]);
