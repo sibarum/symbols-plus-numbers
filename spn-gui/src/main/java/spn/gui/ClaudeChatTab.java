@@ -48,9 +48,15 @@ public final class ClaudeChatTab extends ScrollableTab {
         this.log = log;
         this.instanceNumber = instanceNumber;
 
+        // History: plain-text rendering — chat output is prose, not SPN code,
+        // so syntax coloring and line numbers would mislead. The history is
+        // read-only, so suppress its cursor entirely.
+        textArea.setPlainTextMode(true);
+        textArea.setCursorEnabled(false);
         textArea.setText("");
 
         inputArea = new TextArea(window.getFont());
+        inputArea.setPlainTextMode(true);
         inputArea.setClipboard(new TextArea.ClipboardHandler() {
             @Override public void set(String text) { glfwSetClipboardString(window.getHandle(), text); }
             @Override public String get()          { return glfwGetClipboardString(window.getHandle()); }
@@ -112,6 +118,34 @@ public final class ClaudeChatTab extends ScrollableTab {
         // Esc not consumed — TabViewMode closes the tab.
         if (key == GLFW_KEY_ESCAPE) return false;
 
+        // Pass through editor-window shortcuts so the user isn't trapped when
+        // the chat tab is the only one open. Without these, Ctrl+N / Ctrl+O /
+        // Ctrl+M etc. would be silently swallowed by inputArea.
+        if (ctrl && action == GLFW_PRESS) {
+            switch (key) {
+                case GLFW_KEY_N -> { window.openNewTab(); return true; }
+                case GLFW_KEY_O -> { window.openFile(); return true; }
+                case GLFW_KEY_G -> { window.openLogTab(); return true; }
+                case GLFW_KEY_M -> {
+                    ModuleContext ctx = window.findAnyModuleContext();
+                    if (ctx != null) window.pushLegacyMode(new ModuleMode(window, ctx));
+                    else window.flash("No module loaded — cannot find module.spn", true);
+                    return true;
+                }
+                case GLFW_KEY_P -> {
+                    window.pushLegacyMode(new ActionMenuMode(window, window.getActionRegistry()));
+                    return true;
+                }
+                case GLFW_KEY_SLASH -> {
+                    if (!shift) {
+                        window.pushLegacyMode(new HelpMode(window, window.getActionRegistry()));
+                        return true;
+                    }
+                }
+                default -> { /* fall through to inputArea */ }
+            }
+        }
+
         // Everything else (typing, navigation, copy/paste, undo, etc.) flows
         // to the input area. The history is read-only and ignores keystrokes.
         inputArea.onKey(key, mods);
@@ -151,9 +185,9 @@ public final class ClaudeChatTab extends ScrollableTab {
     @Override
     public String hudText() {
         if (!settings.hasApiKey()) {
-            return "Claude — no API key | Ctrl+P → Claude Settings";
+            return "Claude - no API key | Ctrl+P -> Claude Settings";
         }
-        if (inFlight) return "Claude | Thinking…";
+        if (inFlight) return "Claude | Thinking...";
         return "Claude | Enter Send | Shift+Enter Newline | Ctrl+L Clear | Esc Close Tab";
     }
 
@@ -171,7 +205,7 @@ public final class ClaudeChatTab extends ScrollableTab {
         log.user(text);
         inputArea.setText("");
         inFlight = true;
-        statusMessage = "Thinking…";
+        statusMessage = "Thinking...";
         rebuildHistory();
         scrollHistoryToBottom();
 
@@ -204,7 +238,7 @@ public final class ClaudeChatTab extends ScrollableTab {
     private void rebuildHistory() {
         StringBuilder sb = new StringBuilder();
         for (var t : conversation.turns()) {
-            String prefix = t.role() == ConversationState.Turn.Role.USER ? "▶ You" : "◀ Claude";
+            String prefix = t.role() == ConversationState.Turn.Role.USER ? "> You" : "< Claude";
             sb.append(prefix).append('\n');
             sb.append(t.text());
             sb.append("\n\n");

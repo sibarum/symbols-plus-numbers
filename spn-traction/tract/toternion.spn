@@ -1,6 +1,14 @@
-
+-- Toternion: Total arithmetic 
 -- z*0 + n + w*Infinity
 type Toternion(z:float, n:float, w:float)
+
+pure Toternion(int) -> Toternion = (n) {
+  Toternion(0,n,0)
+}
+
+pure Toternion(float) -> Toternion = (n) {
+  Toternion(0,n,0)
+}
 
 pure +(Toternion, Toternion) -> Toternion = ((z1,n1,w1),(z2,n2,w2)) {
   Toternion(z1+z2, n1+n2, w1+w2)
@@ -10,8 +18,8 @@ pure *(Toternion, Toternion) -> Toternion = ((z1,n1,w1),(z2,n2,w2)) {
   let z = z1*z2 + n1*z2 + n2*z1
   let zn = match (n1,n2)
   | (0,0) -> 2
-  | (_,0) -> 1
-  | (0,_) -> 1
+  | (_,0) -> n1
+  | (0,_) -> n2
   | _ -> 0
   let n = z1*w2 + z2*w1 + n1*n2
   let w = w1*w2
@@ -30,14 +38,9 @@ pure /(Toternion, Toternion) -> Toternion = ((z1,n1,w1),(z2,n2,w2)) {
   | _ -> n1 / n2
   let w = match(w1, w2)
   | (0,0) -> 0
-  | (_,0) -> w1+1
+  | (_,0) -> w1*w1
   | (0,_) -> 0
   | _ -> w1 / w2
-  let nn = match (z2, w1)
-  | (0,0) -> z1 + w2
-  | (_,0) -> w2
-  | (0,_) -> z1
-  | _ -> 0
   let zn = match n1
   | 0 -> n2
   | _ -> 0
@@ -45,7 +48,7 @@ pure /(Toternion, Toternion) -> Toternion = ((z1,n1,w1),(z2,n2,w2)) {
   | 0 -> n1
   | _ -> 0
 
-  Toternion(z+zn, n+nn, w+wn)
+  Toternion(z+zn, n, w+wn)
 }
 
 pure -(Toternion, Toternion) -> Toternion = ((z1,n1,w1),(z2,n2,w2)) {
@@ -53,7 +56,69 @@ pure -(Toternion, Toternion) -> Toternion = ((z1,n1,w1),(z2,n2,w2)) {
 }
 
 pure ^(Toternion, Toternion) -> Toternion = ((z1,n1,w1),(z2,n2,w2)) {
-  Toternion(z1^n2, z1^w2*n1^n2, n1^w2*w1^n2)
+  Toternion(z1^z2+z1^n2, n1^n2, n1^w2*w1^n2)
 }
 
-Toternion(0, 0, 0) * Toternion(0, 3, 0)
+pure Toternion.magnitude() -> float = () {
+  (this.z^2 + this.n^2 + this.w^2)^(1.0/3.0)
+}
+
+promote float -> Toternion = (n) {
+  Toternion(n)
+}
+
+promote int -> Toternion = (n) {
+  Toternion(n)
+}
+
+type HyperToternion(z:Toternion, n:Toternion, w:Toternion)
+
+pure HyperToternion(Toternion) -> HyperToternion = (n) {
+  HyperToternion(Toternion(0), n, Toternion(0))
+}
+
+pure HyperToternion(int) -> HyperToternion = (n) {
+  HyperToternion(Toternion(0), Toternion(n), Toternion(0))
+}
+
+pure HyperToternion(float) -> HyperToternion = (n) {
+  HyperToternion(Toternion(0), Toternion(n), Toternion(0))
+}
+
+pure +(HyperToternion, HyperToternion) -> HyperToternion = ((z1,n1,w1),(z2,n2,w2)) {
+  HyperToternion(z1+z2, n1+n2, w1+w2)
+}
+
+pure -(HyperToternion, HyperToternion) -> HyperToternion = ((z1,n1,w1),(z2,n2,w2)) {
+  HyperToternion(z1-z2, n1-n2, w1-w2)
+}
+
+pure *(HyperToternion, HyperToternion) -> HyperToternion = ((z1,n1,w1),(z2,n2,w2)) {
+  let z = z1*z2 + z1*n2 + z2*n1
+  let n = n1*n2 + z1*w2 + z2*w1
+  let w = w1*w2 + n1*w2 + n2*w1
+  HyperToternion(z, n, w)
+}
+
+pure /(HyperToternion, HyperToternion) -> HyperToternion = ((z1,n1,w1),(z2,n2,w2)) {
+  let z = z1/z2 + z1/n2 + n1/z2 + z1/w2
+  let n = n1/n2
+  let w = w1/w2 + n1/w2 + w1/n2 + w1/z2
+  HyperToternion(z, n, w)
+}
+
+pure ^(HyperToternion, HyperToternion) -> HyperToternion = ((z1,n1,w1),(z2,n2,w2)) {
+  HyperToternion(z1^z2+z1^n2, n1^n2, n1^w2*w1^n2)
+}
+
+promote Toternion -> HyperToternion = (n) {
+  HyperToternion(n)
+}
+
+pure HyperToternion.magnitude() -> float = () {
+  ((this.z^2 + this.n^2 + this.w^2)^(1.0/3.0)).magnitude()
+}
+
+let x = HyperToternion(2) * HyperToternion(2)
+
+x.magnitude()

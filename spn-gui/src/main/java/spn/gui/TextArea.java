@@ -38,7 +38,8 @@ public class TextArea {
     private static final float FONT_SCALE_STEP = 0.025f;
     private float cellWidth;
     private float cellHeight;
-    private static final float PAD = 10f;
+    private static final float DEFAULT_PAD = 10f;
+    private float PAD = DEFAULT_PAD;
     private static final float GUTTER_PAD = 8f;  // gap between line numbers and text
     // Vertical offset for highlight rects so they cover descenders (g, y, p)
     // rather than sitting too high above the text baseline.
@@ -79,10 +80,18 @@ public class TextArea {
     // Cursor blink
     private double lastBlinkTime;
     private boolean cursorVisible = true;
+    private boolean cursorEnabled = true;
     private static final double BLINK_RATE = 0.53;
 
     // Clipboard bridge — set by the host so this component stays window-agnostic
     private ClipboardHandler clipboard = ClipboardHandler.NOOP;
+
+    // Plain-text mode: disables SPN syntax coloring, the line-number gutter,
+    // and the word-under-cursor term highlighter. Intended for general-purpose
+    // text inputs (settings forms, chat entry boxes) where editor decorations
+    // would be misleading. Defaults to false so existing call sites
+    // (EditorTab, LogTab, TraceSourceTab) keep current behavior.
+    private boolean plainText;
 
     // Syntax highlighting
     private final HighlightCache highlightCache = new HighlightCache();
@@ -381,20 +390,23 @@ public class TextArea {
         float textX = gutterX + gutter;
         float textY = boundsY + PAD;
 
-        // Line numbers
-        for (int i = 0; i < visibleRows && (scrollRow + i) < buffer.lineCount(); i++) {
-            int row = scrollRow + i;
-            String num = Integer.toString(row + 1);
-            // Right-align: position so last digit ends at (gutterX + gutter - GUTTER_PAD)
-            float numWidth = font.getTextWidth(num, fontScale);
-            float nx = gutterX + gutter - GUTTER_PAD - numWidth;
-            float ny = textY + (i + 1) * cellHeight;
-            float bright = (row == cursorRow) ? 0.7f : 0.4f;
-            font.drawText(num, nx, ny, fontScale, bright, bright, bright);
+        // Line numbers (suppressed in plain-text mode)
+        if (!plainText) {
+            for (int i = 0; i < visibleRows && (scrollRow + i) < buffer.lineCount(); i++) {
+                int row = scrollRow + i;
+                String num = Integer.toString(row + 1);
+                // Right-align: position so last digit ends at (gutterX + gutter - GUTTER_PAD)
+                float numWidth = font.getTextWidth(num, fontScale);
+                float nx = gutterX + gutter - GUTTER_PAD - numWidth;
+                float ny = textY + (i + 1) * cellHeight;
+                float bright = (row == cursorRow) ? 0.7f : 0.4f;
+                font.drawText(num, nx, ny, fontScale, bright, bright, bright);
+            }
         }
 
         // Term highlights (word under cursor) — suppressed during search
-        if (!hasSelection() && searchTerm == null) {
+        // and in plain-text mode (no SPN identifiers to highlight there).
+        if (!plainText && !hasSelection() && searchTerm == null) {
             String term = wordAtCursor();
             if (term != null) {
                 List<TermHighlighter.Match> matches = TermHighlighter.findMatches(
@@ -489,6 +501,12 @@ public class TextArea {
             int endCol = Math.min(line.length(), scrollCol + visibleCols);
 
             if (startCol < line.length()) {
+                if (plainText) {
+                    // No tokenizing — render the visible substring as a single neutral run.
+                    String visible = line.substring(startCol, endCol);
+                    font.drawText(visible, textX, y, fontScale, 0.85f, 0.85f, 0.85f);
+                    continue;
+                }
                 List<Token> tokens = highlightCache.getTokens(row, line);
 
                 // Detect operator-in-declaration: pure/action followed by operator symbol
@@ -559,8 +577,9 @@ public class TextArea {
             }
         }
 
-        // Cursor (aligned to highlight offset so it covers descenders)
-        if (cursorVisible) {
+        // Cursor (aligned to highlight offset so it covers descenders).
+        // Suppressed when cursorEnabled is false (unfocused fields).
+        if (cursorVisible && cursorEnabled) {
             int sRow = cursorRow - scrollRow;
             int sCol = cursorCol - scrollCol;
             if (sRow >= 0 && sRow < visibleRows && sCol >= 0) {
@@ -1404,10 +1423,45 @@ public class TextArea {
         cellHeight = font.getLineHeight(fontScale) * 1.2f;
     }
 
-    /** Width of the line-number gutter in pixels, based on digit count. */
+    /** Width of the line-number gutter in pixels, based on digit count.
+     *  Returns 0 in plain-text mode so the text starts flush with the bounds. */
     private float gutterWidth() {
+        if (plainText) return 0;
         int digits = Math.max(3, Integer.toString(buffer.lineCount()).length());
         return digits * cellWidth + GUTTER_PAD;
+    }
+
+    /**
+     * Disables SPN-specific decorations: line-number gutter, syntax coloring,
+     * word-under-cursor term highlights, and the operator-declaration accent.
+     * Use for general-purpose text inputs (settings forms, chat boxes) where
+     * editor cues don't apply. Selection, cursor, search highlights, undo,
+     * and clipboard all still work.
+     */
+    public void setPlainTextMode(boolean enabled) {
+        this.plainText = enabled;
+    }
+
+    public boolean isPlainTextMode() { return plainText; }
+
+    /**
+     * Sets the inner padding (default 10px) between the bounds and the text.
+     * Lower values make compact single-line inputs hug their field box; the
+     * default is chosen for the editor where extra room around the first line
+     * is welcome. Affects line-number gutter origin, change overlay, click
+     * hit-testing, and visible-row count in lockstep.
+     */
+    public void setPadding(float padding) {
+        this.PAD = Math.max(0f, padding);
+    }
+
+    /**
+     * Controls whether the blinking cursor is drawn. Defaults to true. Set to
+     * false on TextAreas that are visible but not currently focused (e.g.
+     * inactive form fields) so only the focused field shows a caret.
+     */
+    public void setCursorEnabled(boolean enabled) {
+        this.cursorEnabled = enabled;
     }
 
     private int extraScrollPadding; // extra rows of scroll beyond end of file
