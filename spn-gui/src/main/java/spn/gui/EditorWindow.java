@@ -574,6 +574,9 @@ public class EditorWindow {
         spn.canvas.CanvasState.set(canvasState);
         spn.canvasgui.spn.GuiSpnState guiState = new spn.canvasgui.spn.GuiSpnState();
         spn.canvasgui.spn.GuiSpnState.set(guiState);
+        spn.stdlib.io.IoState ioState = new spn.stdlib.io.IoState();
+        ioState.setPrintlnSink(line -> logBuffer.append(line, false));
+        spn.stdlib.io.IoState.set(ioState);
         // Provide host resources so an inline `guiRun` call can open the
         // GUI window (sharing this editor's GL context) without returning
         // to Java-land first — otherwise the enclosing stateful block
@@ -656,6 +659,7 @@ public class EditorWindow {
         } finally {
             spn.canvas.CanvasState.clear();
             spn.canvasgui.spn.GuiSpnState.clear();
+            spn.stdlib.io.IoState.clear();
         }
     }
 
@@ -675,6 +679,9 @@ public class EditorWindow {
         spn.canvas.CanvasState.set(canvasState);
         spn.canvasgui.spn.GuiSpnState guiState = new spn.canvasgui.spn.GuiSpnState();
         spn.canvasgui.spn.GuiSpnState.set(guiState);
+        spn.stdlib.io.IoState ioState = new spn.stdlib.io.IoState();
+        ioState.setPrintlnSink(line -> logBuffer.append(line, false));
+        spn.stdlib.io.IoState.set(ioState);
         guiState.setHostResources(handle,
                 () -> canvasActive = true,
                 () -> { canvasActive = false; makeCurrent(); });
@@ -745,6 +752,7 @@ public class EditorWindow {
             spn.trace.TraceRecorder.end();
             spn.canvas.CanvasState.clear();
             spn.canvasgui.spn.GuiSpnState.clear();
+            spn.stdlib.io.IoState.clear();
         }
     }
 

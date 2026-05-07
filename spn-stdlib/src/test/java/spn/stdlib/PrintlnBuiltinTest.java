@@ -78,4 +78,27 @@ class PrintlnBuiltinTest {
         assertEquals(0L, result);
         assertTrue(captured.toString(StandardCharsets.UTF_8).contains("3.14"));
     }
+
+    @Test
+    void customSinkOverridesStdout() {
+        // Host installs a sink (e.g. GUI logBuffer) — println should go there,
+        // not stdout.
+        java.util.List<String> sink = new java.util.ArrayList<>();
+        spn.stdlib.io.IoState ioState = new spn.stdlib.io.IoState();
+        ioState.setPrintlnSink(sink::add);
+        spn.stdlib.io.IoState.set(ioState);
+        try {
+            Object result = run("""
+                    import IO
+                    println("routed")
+                    """);
+            assertEquals(0L, result);
+            assertEquals(1, sink.size());
+            assertEquals("routed", sink.getFirst());
+            assertTrue(captured.toString(StandardCharsets.UTF_8).isEmpty(),
+                    "stdout should be empty when sink is installed");
+        } finally {
+            spn.stdlib.io.IoState.clear();
+        }
+    }
 }

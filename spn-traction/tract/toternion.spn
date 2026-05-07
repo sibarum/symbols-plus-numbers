@@ -1,3 +1,4 @@
+import IO (println)
 -- Toternion: Total arithmetic 
 -- z*0 + n + w*Infinity
 type Toternion(z:float, n:float, w:float)
@@ -121,4 +122,4 @@ pure HyperToternion.magnitude() -> float = () {
 
 let x = HyperToternion(2) * HyperToternion(2)
 
-x.magnitude()
+println(x.magnitude())

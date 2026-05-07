@@ -13,7 +13,10 @@ public abstract class SpnPrintlnNode extends SpnExpressionNode {
 
     @Specialization
     protected long println(Object value) {
-        System.out.println(value);
+        String line = String.valueOf(value);
+        IoState state = IoState.get();
+        if (state != null) state.getPrintlnSink().accept(line);
+        else System.out.println(line);
         return 0L;
     }
 }
