@@ -26,6 +26,11 @@ public class Hud {
     private float boundsX, boundsY, boundsW, boundsH;
     private List<HudSegment> segments = List.of();
 
+    /** Per-frame background override. Null means the default {@code BG_*} colors
+     *  apply; non-null is an {@code [r, g, b]} triplet used as the bar color
+     *  while a mode is taking over input. */
+    private float[] customBackground;
+
     private String flashText;
     private boolean flashIsError;
     private double flashExpiry; // seconds (monotonic)
@@ -36,6 +41,14 @@ public class Hud {
 
     public void setSegments(List<HudSegment> segments) {
         this.segments = segments;
+    }
+
+    /** Override the bar background. Pass {@code null} to revert to the
+     *  default {@code BG_*} colors. Used by modes that capture input
+     *  (find/replace, suggester, full-window palettes) so the HUD signals
+     *  visually that it is in a modal state, not just by changing text. */
+    public void setBackground(float[] rgb) {
+        this.customBackground = rgb;
     }
 
     /** Clear any active flash message, restoring normal HUD content. */
@@ -57,8 +70,11 @@ public class Hud {
 
     /** Render the HUD. Call between beginFrame/endFrame. */
     public void render(Renderer renderer, double now) {
-        // Background
-        renderer.drawRect(boundsX, boundsY, boundsW, boundsH, BG_R, BG_G, BG_B);
+        // Background — custom override wins so modal modes can signal takeover.
+        float bgR = customBackground != null ? customBackground[0] : BG_R;
+        float bgG = customBackground != null ? customBackground[1] : BG_G;
+        float bgB = customBackground != null ? customBackground[2] : BG_B;
+        renderer.drawRect(boundsX, boundsY, boundsW, boundsH, bgR, bgG, bgB);
         // Top separator line
         renderer.drawRect(boundsX, boundsY, boundsW, SEP_HEIGHT, SEP_R, SEP_G, SEP_B);
 

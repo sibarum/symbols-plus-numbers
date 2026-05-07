@@ -85,6 +85,11 @@ public class LegacyModeAdapter implements spn.stdui.mode.Mode {
     }
 
     @Override
+    public float[] hudBackground() {
+        return legacy.hudBackground();
+    }
+
+    @Override
     public String name() {
         return legacy.getClass().getSimpleName();
     }

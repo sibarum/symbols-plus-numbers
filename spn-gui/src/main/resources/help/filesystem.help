@@ -1,0 +1,84 @@
+# Filesystem
+@summary Stdlib File — readFile, writeFile, listDir, mkdirs, fileExists
+@category stdlib
+
+The File module provides synchronous filesystem access. All functions are impure (they observe or mutate the OS filesystem) so they must be called inside an action body or at the script top level — never inside a pure function.
+
+Paths are strings. Relative paths resolve against the current working directory; use pwd() to query it.
+
+## Reading
+
+readFile(path) — return the file contents as a String. Throws on missing file or read error.
+
+fileExists(path) — boolean check, useful as a guard before readFile.
+
+listDir(path) — Array of entry names (not full paths) in the directory.
+
+pwd() — String containing the current working directory.
+
+## Writing
+
+writeFile(path, content) — write content to path, overwriting any existing file. Returns true on success, false on failure. Creates parent directories only if they exist; use mkdirs() first if needed.
+
+appendFile(path, content) — append content to the end of an existing file (or create it). Returns true / false.
+
+mkdirs(path) — create the directory and any missing parents. Returns true / false.
+
+deleteFile(path) — remove a single file. Returns true if deleted (or already absent), false on error.
+
+## Patterns
+
+Always check fileExists or capture the boolean return value of write/delete. Filesystem operations fail for many reasons (permissions, disk full, missing parent directory) — the boolean lets you decide whether to retry, fall back, or raise.
+
+--- example: read-write.spn
+-- Read a file, transform its contents, write the result back.
+import File (readFile, writeFile, fileExists)
+import String (toUpper)
+
+let path = "/tmp/spn-help-demo.txt"
+
+let exists = fileExists(path)
+match
+  | exists -> {
+      let content = readFile(path)
+      let upper = toUpper(content)
+      writeFile(path, upper)
+    }
+  | _ -> writeFile(path, "Hello, world!\n")
+---
+
+--- example: list-dir.spn
+-- List the current directory and count files vs subdirectories.
+import File (pwd, listDir)
+import Array (length)
+
+let here = pwd()
+let entries = listDir(here)
+(here, length(entries))
+-- (cwd-as-string, total-entry-count)
+---
+
+--- example: append-log.spn
+-- Append a timestamped line to a log file. mkdirs ensures the parent exists.
+import File (mkdirs, appendFile)
+import String (formatNum)
+
+mkdirs("/tmp/logs")
+let line = "[run #" ++ formatNum(42) ++ "] hello\n"
+appendFile("/tmp/logs/app.log", line)
+---
+
+--- example: round-trip.spn
+-- Write, read back, verify round-trip equality.
+import File (writeFile, readFile, deleteFile)
+
+let path = "/tmp/spn-roundtrip.txt"
+let original = "round-trip me"
+
+writeFile(path, original)
+let readBack = readFile(path)
+let same = readBack == original
+deleteFile(path)
+same
+-- true
+---

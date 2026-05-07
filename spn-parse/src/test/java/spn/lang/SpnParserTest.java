@@ -153,6 +153,22 @@ class SpnParserTest {
         @Test void modulo() { assertEquals(1L, run("7 % 3")); }
         @Test void negation() { assertEquals(-5L, run("-5")); }
 
+        @Test void powerLong() { assertEquals(8L, run("2 ^ 3")); }
+        @Test void powerZeroExponent() { assertEquals(1L, run("7 ^ 0")); }
+        @Test void powerDouble() { assertEquals(8.0, run("2.0 ^ 3.0")); }
+
+        @Test
+        void powerRightAssociative() {
+            // 2 ^ 3 ^ 2  ==  2 ^ (3 ^ 2)  ==  2 ^ 9  ==  512
+            assertEquals(512L, run("2 ^ 3 ^ 2"));
+        }
+
+        @Test
+        void powerBindsTighterThanMul() {
+            // 3 * 2 ^ 3  ==  3 * (2 ^ 3)  ==  3 * 8  ==  24
+            assertEquals(24L, run("3 * 2 ^ 3"));
+        }
+
         @Test
         void precedence() {
             assertEquals(14L, run("2 + 3 * 4"));
@@ -162,6 +178,19 @@ class SpnParserTest {
         @Test
         void doubleArithmetic() {
             assertEquals(5.5, run("2.5 + 3.0"));
+        }
+
+        @Test
+        void powerOverloadable() {
+            // User-defined ^ overload for a struct dispatches via multi-dispatch.
+            // Here ^ on Box does multiplication on the wrapped int — proves
+            // that a custom semantics for ^ replaces the primitive fallback.
+            assertEquals(15L, run("""
+                type Box(int)
+                pure ^(Box, Box) -> Box = (a, b) { Box(a.0 * b.0) }
+                let r = Box(3) ^ Box(5)
+                r.0
+                """));
         }
 
         @Test

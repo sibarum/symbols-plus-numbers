@@ -1,0 +1,185 @@
+# Canvas
+@summary Imperative 2D drawing — circles, rectangles, lines, text, animation
+@category Canvas
+
+The Canvas module provides immediate-mode 2D drawing. You open a window with canvas(width, height), issue draw calls, and call show() to keep the window alive until closed. Canvas functions are impure: they mutate window state and the framebuffer.
+
+For pure scene description (compose draw commands without touching the framebuffer), see the spn.canvas.draw module — it gives you a typed DrawCmd algebra that render() interprets at the action boundary.
+
+## Setup and lifecycle
+
+canvas(width, height) — open the canvas window. Call once at the top of your script.
+
+show() — block on the canvas window until the user closes it. Without show() the window flashes briefly and disappears when the script returns.
+
+animate(fps, drawFn) — run the named function once per frame at the given rate. drawFn receives the elapsed seconds as a float; the loop returns when the user closes the window.
+
+## Drawing primitives
+
+clear(r, g, b) — fill the entire canvas with a color. RGB components are floats in 0.0..1.0.
+
+fill(r, g, b), stroke(r, g, b) — set fill and stroke colors for subsequent shapes.
+
+strokeWeight(w) — set the stroke width in pixels.
+
+rect(x, y, w, h) — axis-aligned rectangle at (x, y).
+
+circle(x, y, r) — circle centered at (x, y) with radius r.
+
+line(x1, y1, x2, y2) — line segment.
+
+text(x, y, content, size) — render text. Size is a font scale factor.
+
+## Coordinate system
+
+The origin (0, 0) is the top-left corner. X increases right, Y increases down. Sizes are in pixels.
+
+## Writable images
+
+For pixel-level work — function plots, fractals, image filters, NN visualizations, anything you'd want to also save as a file — Canvas provides a writable image type that is independent of the canvas window.
+
+image(width, height) — allocate a new writable image. Returns an Image value.
+
+setPixel(image, x, y, r, g, b) — write one pixel. RGB is in 0.0..1.0; out-of-range values clamp; out-of-bounds coords are ignored. Cheap for sparse writes; expensive at millions of calls.
+
+mapPixels(image, fn) — fill every pixel by calling fn(x, y) which must return a 3-tuple (r, g, b). The Java loop avoids per-pixel SPN dispatch overhead — only the callback crosses the boundary.
+
+There are two natural shapes for the callback:
+
+- A pure lambda (x, y) -> (r, g, b) — each pixel computed independently, no shared state. Fits gradients, function plots, fractals, anything where pixel N doesn't depend on pixel < N.
+
+- A do() closure inside a stateful block — the closure captures the enclosing this and can read or mutate its fields between pixel calls. Iteration is row-major and sequential, so accumulators, running averages, and IIR-style filters work as expected.
+
+drawImage(image, x, y) — queue the image for display in the canvas window at the given top-left position. Multiple drawImage calls of the same Image share a cached GL texture; mutations between draws trigger a re-upload automatically.
+
+savePng(image, path) — write the image to a PNG file. Works without ever calling canvas() — useful for headless rendering.
+
+## Pure mode
+
+If you prefer not to mix computation with drawing effects, build an Array of DrawCmd values using spn.canvas.draw and pass it to render() — that is the only function in draw.spn that touches the canvas. Pure scene functions are then memoizable, parallelizable, and trivially testable.
+
+--- example: hello-canvas.spn
+-- Minimal Canvas program: open a window, draw one shape, wait for close.
+-- Top-level statements run as a script; no main() wrapper needed.
+import Canvas
+
+canvas(400, 300)
+clear(0.10, 0.10, 0.15)
+
+fill(0.85, 0.55, 0.20)
+circle(200.0, 150.0, 60.0)
+
+show()
+---
+
+--- example: shapes.spn
+-- Mix of primitives with stroke + fill.
+import Canvas
+
+canvas(640, 360)
+clear(0.08, 0.10, 0.14)
+
+-- A filled rectangle with a contrasting outline.
+stroke(0.95, 0.85, 0.40)
+strokeWeight(3.0)
+fill(0.20, 0.40, 0.70)
+rect(40.0, 40.0, 200.0, 120.0)
+
+-- A triangle from three line segments.
+stroke(0.85, 0.30, 0.55)
+strokeWeight(2.0)
+line(320.0,  60.0, 460.0, 280.0)
+line(460.0, 280.0, 540.0,  60.0)
+line(540.0,  60.0, 320.0,  60.0)
+
+-- A label.
+fill(0.85, 0.85, 0.90)
+text(40.0, 220.0, "shapes", 0.32)
+
+show()
+---
+
+--- example: animation.spn
+-- animate() drives a frame loop. The callback is a named action that
+-- receives the elapsed seconds; close the window to stop.
+import Canvas
+import Math (cos, sin)
+
+action drawFrame(float) -> int = (elapsed) {
+    clear(0.06, 0.07, 0.10)
+
+    let cx = 240.0 + cos(elapsed) * 120.0
+    let cy = 160.0 + sin(elapsed * 1.7) * 80.0
+
+    fill(0.95, 0.65, 0.25)
+    circle(cx, cy, 24.0)
+
+    fill(0.45, 0.65, 0.95)
+    circle(480.0 - cx, 320.0 - cy, 18.0)
+
+    0
+}
+
+canvas(480, 320)
+animate(60.0, drawFrame)
+show()
+---
+
+--- example: stateful-pixels.spn
+-- Stateful mapPixels: the do() closure captures `this` from the
+-- enclosing stateful block, letting iteration N depend on iteration < N.
+--
+-- Painter holds a running brightness value. Each pixel updates it via
+-- a one-pole low-pass filter (prev = prev * 0.9 + target * 0.1),
+-- producing horizontally-smoothed bands you couldn't get from a pure
+-- lambda. Same image is drawn to the canvas and saved to disk.
+import Canvas
+import Math (sin, toFloat)
+
+stateful type Painter(prev: float)
+
+canvas(256, 256)
+
+Painter(0.0) {
+    let img = image(256, 256)
+
+    mapPixels(img, do(x, y) {
+        let target = sin(toFloat(x) * 0.05) * 0.5 + 0.5
+        this.prev = this.prev * 0.9 + target * 0.1
+        (this.prev, this.prev * 0.5, 1.0 - this.prev)
+    })
+
+    drawImage(img, 0.0, 0.0)
+    savePng(img, "stateful-pixels.png")
+}
+
+show()
+---
+
+--- example: pure-scene.spn
+-- Pure scene description with the spn.canvas.draw command algebra.
+-- Functions return Array<DrawCmd>; render() interprets them.
+import Array (concat)
+import Canvas
+import spn.canvas.draw
+
+pure background() -> Array = () {
+    [ CmdClear(0.10, 0.10, 0.13) ]
+}
+
+pure dot(float, float, float, float, float) -> Array = (x, y, r, g, b) {
+    [ CmdFill(r, g, b), CmdCircle(x, y, 12.0) ]
+}
+
+pure scene() -> Array = () {
+    let cmds = background()
+    cmds = concat(cmds, dot(120.0, 100.0, 0.95, 0.55, 0.25))
+    cmds = concat(cmds, dot(200.0, 100.0, 0.55, 0.85, 0.45))
+    cmds = concat(cmds, dot(280.0, 100.0, 0.45, 0.65, 0.95))
+    cmds
+}
+
+canvas(400, 200)
+render(scene())
+show()
+---

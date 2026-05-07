@@ -53,4 +53,13 @@ public interface Mode {
      * Return the text to display in the HUD while this mode is active.
      */
     String hudText();
+
+    /**
+     * Background tint for the HUD bar while this mode is active. Return
+     * {@code [r, g, b]} (each in 0..1) to override the default color, or
+     * {@code null} to keep the default. Modes that capture input
+     * (find/replace, autocomplete, full-window palettes) override this so
+     * the HUD signals takeover visually, not just by changing text.
+     */
+    default float[] hudBackground() { return null; }
 }

@@ -215,7 +215,8 @@ public class SpnLexer {
 
     private static boolean isOperatorChar(char c) {
         return c == '+' || c == '-' || c == '*' || c == '/' || c == '%'
-                || c == '=' || c == '<' || c == '>' || c == '|' || c == '&';
+                || c == '=' || c == '<' || c == '>' || c == '|' || c == '&'
+                || c == '^';
     }
 
     private static boolean isDelimiter(char c) {

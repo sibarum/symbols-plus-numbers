@@ -18,12 +18,16 @@ import spn.node.SpnExpressionNode;
 @NodeInfo(shortName = "-")
 public abstract class SpnNegateNode extends SpnExpressionNode {
 
-    @Specialization(rewriteOn = ArithmeticException.class)
+    @Specialization
     protected long negateLong(long value) {
-        return Math.negateExact(value);
+        try {
+            return Math.negateExact(value);
+        } catch (ArithmeticException e) {
+            throw new SpnException("long overflow: -(" + value + ")", this);
+        }
     }
 
-    @Specialization(replaces = "negateLong")
+    @Specialization
     protected double negateDouble(double value) {
         return -value;
     }

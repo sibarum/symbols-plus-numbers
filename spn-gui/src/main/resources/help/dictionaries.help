@@ -1,0 +1,107 @@
+# Dictionaries
+@summary Stdlib Dict — put, get, keys, values, merge, hasKey
+@category stdlib
+
+The Dict module provides immutable key-value maps. Every mutation returns a fresh dict, leaving the input unchanged. Use emptyDict() to start, then put() to build up.
+
+Most dict functions operate on UntypedDict; typed dicts flow through unchanged.
+
+## Building
+
+emptyDict() — a new dict with no entries.
+
+put(dict, key, value) — return a new dict with key bound to value (overwrites any existing binding).
+
+merge(left, right) — combine two dicts. On key collision, right wins.
+
+remove(dict, key) — return a new dict without the given key. No-op if absent.
+
+## Querying
+
+dictGet(dict, key) — look up. Returns the value or throws if missing — pair with hasKey() for safety.
+
+hasKey(dict, key) — boolean.
+
+dictSize(dict) — entry count.
+
+keys(dict), values(dict) — Array of keys / values respectively.
+
+entries(dict) — Array of (key, value) tuples.
+
+## Transforming
+
+mapValues(dict, fn) — apply fn to each value, return a new dict with the same keys.
+
+## Iteration
+
+entries() is the workhorse for iteration: pair it with for over an array, or with map/fold from the Array module.
+
+--- example: word-count.spn
+-- Count occurrences of each word in a string.
+import Dict (emptyDict, put, hasKey, dictGet)
+import String (split)
+
+let text = "alpha beta alpha gamma beta alpha"
+let words = split(text, " ")
+
+let counts = emptyDict()
+let i = 0
+let n = length(words)
+while {i < n} do {
+    let w = words[i]
+    let prev = match | hasKey(counts, w) -> dictGet(counts, w) | _ -> 0
+    counts = put(counts, w, prev + 1)
+    i = i + 1
+}
+counts
+-- counts is { "alpha": 3, "beta": 2, "gamma": 1 }
+---
+
+--- example: merge-and-iterate.spn
+-- Merge two dicts and iterate via entries().
+import Dict (emptyDict, put, merge, entries)
+import Array (length)
+import String (formatNum, join)
+
+let a = put(put(emptyDict(), "x", 1), "y", 2)
+let b = put(put(emptyDict(), "y", 20), "z", 3)
+-- merge: right side wins on collision -> { x: 1, y: 20, z: 3 }
+let combined = merge(a, b)
+
+let rows = []
+let es = entries(combined)
+let i = 0
+while {i < length(es)} do {
+    let (k, v) = es[i]
+    rows = append(rows, k ++ "=" ++ formatNum(v))
+    i = i + 1
+}
+join(rows, ", ")
+---
+
+--- example: typed-keys.spn
+-- Dictionaries are keyed by structural value equality, so symbol literals
+-- (:foo, :bar) make handy enum-style keys for state machines.
+import Dict (emptyDict, put, dictGet)
+
+let state = emptyDict()
+state = put(state, :hp,    100)
+state = put(state, :mana,   30)
+state = put(state, :level,   1)
+
+dictGet(state, :hp)
+---
+
+--- example: map-values.spn
+-- Transform every value in a dict; keys are preserved.
+import Dict (emptyDict, put, mapValues)
+
+let prices = put(put(put(emptyDict(),
+    "apple",  1.20),
+    "banana", 0.50),
+    "cherry", 3.00)
+
+-- 10% discount across the board.
+let sale = mapValues(prices, do(p) { p * 0.90 })
+sale
+---

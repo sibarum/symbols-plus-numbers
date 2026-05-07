@@ -118,6 +118,28 @@ public class ModeManager {
         return active != null ? active.hudSegments() : List.of();
     }
 
+    /** Default tint applied whenever a modal mode is pushed above the base
+     *  (i.e. {@code depth() > 1}) and the active mode hasn't requested its
+     *  own. Set by the host so styling stays out of spn-stdui. */
+    private float[] defaultModalBackground;
+
+    /** Configure the default takeover tint. Pass {@code null} to disable
+     *  auto-tinting for pushed modes. */
+    public void setDefaultModalBackground(float[] rgb) {
+        this.defaultModalBackground = rgb;
+    }
+
+    /** Background tint requested by the active mode, or the default modal
+     *  tint when one is pushed above the base, or {@code null}. Read each
+     *  frame by the host so modes can signal takeover. */
+    public float[] activeHudBackground() {
+        Mode active = stack.peek();
+        if (active == null) return null;
+        float[] custom = active.hudBackground();
+        if (custom != null) return custom;
+        return depth() > 1 ? defaultModalBackground : null;
+    }
+
     private boolean handleSignal(ControlSignal signal) {
         Mode active = stack.peek();
         if (active == null) return false;

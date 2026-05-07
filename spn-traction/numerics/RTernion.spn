@@ -1,0 +1,12 @@
+import Math (pow)
+
+type RTernion(a:float, b:float, c:float, d:float)
+
+pure *(RTernion, RTernion) -> RTernion = ((a1,b1,c1,d1), (a2,b2,c2,d2)) {
+  RTernion((1/(a1+1))^(b2+1), d1*c1-c2*d2, (a2/(b1+1)), d2*c2-c1*d1)
+}
+
+
+let t1 = RTernion(11,8,3,4)
+let t2 = RTernion(3,7,22,7)
+

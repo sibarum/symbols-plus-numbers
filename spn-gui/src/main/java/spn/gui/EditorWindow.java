@@ -43,6 +43,11 @@ public class EditorWindow {
     private final NavigationHistory navHistory = new NavigationHistory();
     private boolean initialized;
 
+    /** Tint applied to the HUD bar whenever a mode is capturing input
+     *  (search, replace, autocomplete, palettes, dialogs). Warm amber against
+     *  the default cool gray, matching the brass-on-iron mainframe look. */
+    public static final float[] HUD_TAKEOVER_TINT = { 0.22f, 0.18f, 0.10f };
+
     // Set to true while a canvas window is active. Prevents the editor's
     // window-refresh callback from stealing the GL context.
     private volatile boolean canvasActive;
@@ -77,6 +82,11 @@ public class EditorWindow {
                 clipboard,
                 Main.instance.getWindowManager().actions()
         );
+
+        // Tint the HUD whenever a modal mode is pushed above the base.
+        // EditorTab overrides hudBackground() for its own sub-modes
+        // (find/replace/suggester) which run at depth == 1.
+        frame.getModeManager().setDefaultModalBackground(HUD_TAKEOVER_TINT);
 
         // Handle MODE_MENU signal → push action palette
         frame.getModeManager().setSignalHandler((signal, active) -> {
@@ -202,6 +212,7 @@ public class EditorWindow {
         actionRegistry.register("Redo",          "Edit",   "Ctrl+Y",       "Redo a previously undone edit.",                        () -> { TextArea ta = getTextArea(); if (ta != null) ta.performRedo(); });
         actionRegistry.register("Find",          "Edit",   "Ctrl+F",       "Search within the current file. Enter next, Shift+Enter prev, Tab to replace mode, Esc to close.", this::openFindInActiveTab);
         actionRegistry.register("Find & Replace","Edit",   "Ctrl+H",       "Search and replace within the current file.",           this::openReplaceInActiveTab);
+        actionRegistry.register("Toggle Line Comment","Edit","Ctrl+Shift+/","Toggle SPN '--' line comments on the selected lines (or the current line). Insertion column matches the minimum indent across non-blank lines; blank lines are skipped.", () -> { TextArea ta = getTextArea(); if (ta != null) ta.toggleLineComment(); });
         actionRegistry.register("Zoom In",       "View",   "Ctrl+=",       "Increase editor font size.",                            () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomIn(); });
         actionRegistry.register("Zoom Out",      "View",   "Ctrl+-",       "Decrease editor font size.",                            () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomOut(); });
         actionRegistry.register("Zoom Reset",    "View",   "Ctrl+0",       "Reset editor font size to default.",                    () -> { TextArea ta = getTextArea(); if (ta != null) ta.zoomReset(); });
@@ -215,7 +226,7 @@ public class EditorWindow {
         });
         actionRegistry.register("Type Info",     "View",   "Ctrl+T",       "Show resolved operator dispatches for the current line. Displays which overloads are called (e.g. +(Rational, Rational)). Dismissed by any keystroke.", () -> {});
         actionRegistry.register("Go to Definition","View", "Ctrl+Click",   "Navigate to the declaration of the identifier under the cursor. Works for local bindings, parameters, types, factories, methods, constants, operators, and named or positional fields. In-module targets open (or switch to) the defining file; cross-module targets jump to the declaration in the imported module's source, falling back to the `import` statement when the source isn't available.", () -> {});
-        actionRegistry.register("Help",          "Help",   "Ctrl+/",       "Open the help search. Search commands, shortcuts, and API reference.", () -> pushLegacyMode(new HelpMode(this, actionRegistry)));
+        actionRegistry.register("Help",          "Help",   "Ctrl+/",       "Open the help search. Searches IDE commands and reference articles for Canvas, CanvasGui, and stdlib modules. Selecting an article shows long-form prose plus runnable example files that open in new editor tabs.", () -> pushLegacyMode(new HelpMode(this, actionRegistry)));
         actionRegistry.register("Navigate Back",   "View",   "Ctrl+Alt+Left",  "Jump to the previous stable cursor position (last edit, copy/cut/paste, tab change, or mode push/pop).", this::navigateBack);
         actionRegistry.register("Navigate Forward","View",   "Ctrl+Alt+Right", "Jump to the next stable cursor position after a Navigate Back.", this::navigateForward);
     }

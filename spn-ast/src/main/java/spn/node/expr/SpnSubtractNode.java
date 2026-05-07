@@ -16,12 +16,16 @@ import spn.node.SpnExpressionNode;
 @NodeInfo(shortName = "-")
 public abstract class SpnSubtractNode extends SpnExpressionNode {
 
-    @Specialization(rewriteOn = ArithmeticException.class)
+    @Specialization
     protected long subLongs(long left, long right) {
-        return Math.subtractExact(left, right);
+        try {
+            return Math.subtractExact(left, right);
+        } catch (ArithmeticException e) {
+            throw new SpnException("long overflow: " + left + " - " + right, this);
+        }
     }
 
-    @Specialization(replaces = "subLongs")
+    @Specialization
     protected double subDoubles(double left, double right) {
         return left - right;
     }

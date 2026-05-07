@@ -86,4 +86,10 @@ class TabViewMode implements Mode {
         }
         return base;
     }
+
+    @Override
+    public float[] hudBackground() {
+        Tab active = tabView.getActiveTab();
+        return active != null ? active.hudBackground() : null;
+    }
 }

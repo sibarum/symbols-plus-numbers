@@ -1,5 +1,6 @@
 package spn.canvasgui.cmd;
 
+import org.lwjgl.opengl.GL11;
 import spn.canvas.CanvasRenderer;
 import spn.canvas.DrawCommand;
 import spn.canvasgui.font.FontRegistry;
@@ -80,7 +81,7 @@ public final class GuiPaintRenderer {
         font.endText();
 
         // beginText/endText flips GL state; restore what geometry expects.
-        glDisable(org.lwjgl.opengl.GL11.GL_DEPTH_TEST);
+        glDisable(GL11.GL_DEPTH_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     }
@@ -110,6 +111,7 @@ public final class GuiPaintRenderer {
             case DrawCommand.SetFill f -> f;
             case DrawCommand.SetStroke s -> s;
             case DrawCommand.SetStrokeWeight w -> w;
+            case DrawCommand.DrawImage di -> new DrawCommand.DrawImage(di.image(), di.x()+dx, di.y()+dy);
         };
     }
 

@@ -1,0 +1,86 @@
+# Sets
+@summary Stdlib Set — fromArray, union, intersection, difference, isSubset
+@category stdlib
+
+The Set module provides immutable unordered collections of unique values. Like dicts and arrays, every operation returns a new set rather than mutating the input.
+
+Use fromArray to convert an Array into a Set (deduplicating in the process), and toArray to go back when you need ordered iteration.
+
+## Building
+
+fromArray(array) — convert an Array to a Set, removing duplicates.
+
+setAdd(set, element) — return a new set with the element included. No-op if already present.
+
+setRemove(set, element) — return a new set without the element. No-op if absent.
+
+## Querying
+
+size(set) — element count.
+
+contains(set, element) — boolean check (the same name as the Array variant; dispatched on receiver type).
+
+## Set algebra
+
+union — produced by merging two sets. (No dedicated builtin — use fromArray(concat(toArray(a), toArray(b))) or build with setAdd.)
+
+intersection(left, right) — elements in both.
+
+difference(left, right) — elements in left but not in right.
+
+isSubset(left, right) — true if every element of left is also in right.
+
+## Conversion
+
+toArray(set) — Array of elements. Order is implementation-defined; sort if you need a stable order.
+
+--- example: dedupe.spn
+-- Remove duplicates from an array via a round-trip through Set.
+import Set (fromArray, toArray)
+import Array (sort)
+
+let raw = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]
+let unique = sort(toArray(fromArray(raw)))
+-- unique is [1, 2, 3, 4, 5, 6, 9]
+unique
+---
+
+--- example: set-algebra.spn
+-- Intersection and difference on tag sets.
+import Set (fromArray, intersection, difference, isSubset)
+
+let a = fromArray(["red", "green", "blue", "purple"])
+let b = fromArray(["green", "yellow", "purple"])
+
+let common = intersection(a, b)
+let onlyInA = difference(a, b)
+let aSubsetB = isSubset(a, b)
+
+(common, onlyInA, aSubsetB)
+-- (Set{"green","purple"}, Set{"red","blue"}, false)
+---
+
+--- example: incremental-build.spn
+-- Build a set incrementally with setAdd; check membership with contains.
+import Set (fromArray, setAdd, contains, size)
+
+let visited = fromArray([])
+visited = setAdd(visited, "/home")
+visited = setAdd(visited, "/etc")
+visited = setAdd(visited, "/home")  -- no-op: already present
+
+let alreadySeen = contains(visited, "/home")
+(size(visited), alreadySeen)
+-- (2, true)
+---
+
+--- example: subset-check.spn
+-- Verify that a required-feature set is satisfied by an available-feature set.
+import Set (fromArray, isSubset)
+
+let required = fromArray(["read", "write"])
+let granted = fromArray(["read", "write", "admin"])
+
+isSubset(required, granted)
+-- true: every required permission is granted
+---

@@ -2,9 +2,19 @@ package spn.canvas;
 
 import spn.fonts.SdfFontRenderer;
 
+import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL12.GL_BGRA;
+import static org.lwjgl.opengl.GL12.GL_UNSIGNED_INT_8_8_8_8_REV;
+import static org.lwjgl.opengl.GL13.GL_TEXTURE0;
+import static org.lwjgl.opengl.GL13.glActiveTexture;
 import static org.lwjgl.opengl.GL15.*;
 import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.opengl.GL30.*;
@@ -25,6 +35,17 @@ public final class CanvasRenderer {
     private int vao;
     private int vbo;
     private int uProjectionLoc;
+
+    // Textured-quad pipeline (used for drawImage). Separate program because
+    // the fragment shader samples a texture instead of using a flat color.
+    private int texProgram;
+    private int texVao;
+    private int texVbo;
+    private int uTexProjectionLoc;
+    // 4 floats per textured vertex: x, y, u, v
+    private static final int TEX_FLOATS_PER_VERTEX = 4;
+    private final float[] texVertexBuf = new float[6 * TEX_FLOATS_PER_VERTEX];
+    private final Map<SpnImage, Integer> textureCache = new IdentityHashMap<>();
 
     private final float[] vertexBuf = new float[MAX_VERTICES * FLOATS_PER_VERTEX];
     private int vertexCount;
@@ -57,17 +78,46 @@ public final class CanvasRenderer {
             }
             """;
 
+    private static final String TEX_VERTEX_SHADER = """
+            #version 330
+            layout(location=0) in vec2 aPos;
+            layout(location=1) in vec2 aTexCoord;
+            uniform mat4 uProjection;
+            out vec2 vTexCoord;
+            void main() {
+                gl_Position = uProjection * vec4(aPos, 0.0, 1.0);
+                vTexCoord = aTexCoord;
+            }
+            """;
+
+    private static final String TEX_FRAGMENT_SHADER = """
+            #version 330
+            in vec2 vTexCoord;
+            out vec4 fragColor;
+            uniform sampler2D uTexture;
+            void main() {
+                fragColor = texture(uTexture, vTexCoord);
+            }
+            """;
+
     // ── Init / Dispose ───────────────────────────────────────────────────
 
     public void init() {
         createShader();
         createBuffers();
+        createTexturedShader();
+        createTexturedBuffers();
     }
 
     public void dispose() {
         glDeleteBuffers(vbo);
         glDeleteVertexArrays(vao);
         glDeleteProgram(program);
+        glDeleteBuffers(texVbo);
+        glDeleteVertexArrays(texVao);
+        glDeleteProgram(texProgram);
+        for (int tex : textureCache.values()) glDeleteTextures(tex);
+        textureCache.clear();
     }
 
     // ── Replay ───────────────────────────────────────────────────────────
@@ -143,6 +193,22 @@ public final class CanvasRenderer {
                         glUniformMatrix4fv(uProjectionLoc, false, proj);
                         glBindVertexArray(vao);
                     }
+                }
+                case DrawCommand.DrawImage di -> {
+                    // Flush pending flat shapes, switch to textured pipeline,
+                    // draw the image, then restore the flat pipeline.
+                    flush();
+                    int tex = ensureTexture(di.image());
+                    glUseProgram(texProgram);
+                    glUniformMatrix4fv(uTexProjectionLoc, false, proj);
+                    glBindVertexArray(texVao);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, tex);
+                    drawTexturedQuad(di.x(), di.y(),
+                                     di.image().width(), di.image().height());
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    glUseProgram(program);
+                    glBindVertexArray(vao);
                 }
             }
         }
@@ -279,5 +345,115 @@ public final class CanvasRenderer {
 
         glBindBuffer(GL_ARRAY_BUFFER, 0);
         glBindVertexArray(0);
+    }
+
+    // ── Textured pipeline (drawImage) ────────────────────────────────────
+
+    private void createTexturedShader() {
+        int vert = compileShader(GL_VERTEX_SHADER, TEX_VERTEX_SHADER);
+        int frag = compileShader(GL_FRAGMENT_SHADER, TEX_FRAGMENT_SHADER);
+        texProgram = glCreateProgram();
+        glAttachShader(texProgram, vert);
+        glAttachShader(texProgram, frag);
+        glLinkProgram(texProgram);
+        if (glGetProgrami(texProgram, GL_LINK_STATUS) == GL_FALSE) {
+            String log = glGetProgramInfoLog(texProgram);
+            throw new RuntimeException("Canvas textured shader link failed:\n" + log);
+        }
+        glDeleteShader(vert);
+        glDeleteShader(frag);
+        uTexProjectionLoc = glGetUniformLocation(texProgram, "uProjection");
+        // Sampler defaults to texture unit 0; we always bind there.
+        glUseProgram(texProgram);
+        glUniform1i(glGetUniformLocation(texProgram, "uTexture"), 0);
+        glUseProgram(0);
+    }
+
+    private void createTexturedBuffers() {
+        texVao = glGenVertexArrays();
+        glBindVertexArray(texVao);
+
+        texVbo = glGenBuffers();
+        glBindBuffer(GL_ARRAY_BUFFER, texVbo);
+        glBufferData(GL_ARRAY_BUFFER, (long) 6 * TEX_FLOATS_PER_VERTEX * Float.BYTES,
+                     GL_DYNAMIC_DRAW);
+
+        int stride = TEX_FLOATS_PER_VERTEX * Float.BYTES;
+        // layout(location=0) vec2 aPos
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, false, stride, 0);
+        // layout(location=1) vec2 aTexCoord
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, false, stride, 2L * Float.BYTES);
+
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindVertexArray(0);
+    }
+
+    /**
+     * Returns the GL texture id for this image, uploading or re-uploading
+     * pixel data if the image is new or has been mutated since last draw.
+     */
+    private int ensureTexture(SpnImage img) {
+        Integer cached = textureCache.get(img);
+        int tex;
+        if (cached == null) {
+            tex = glGenTextures();
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            textureCache.put(img, tex);
+            uploadTextureData(img);
+            img.clearDirty();
+        } else {
+            tex = cached;
+            if (img.isDirty()) {
+                glBindTexture(GL_TEXTURE_2D, tex);
+                uploadTextureData(img);
+                img.clearDirty();
+            }
+        }
+        return tex;
+    }
+
+    /** Upload the BufferedImage's INT_ARGB pixel buffer as a BGRA texture. */
+    private void uploadTextureData(SpnImage img) {
+        BufferedImage bi = img.buffer();
+        int[] pixels = ((DataBufferInt) bi.getRaster().getDataBuffer()).getData();
+        // BufferedImage.TYPE_INT_ARGB stores 0xAARRGGBB in native int order.
+        // GL_BGRA + GL_UNSIGNED_INT_8_8_8_8_REV reads ARGB on little-endian;
+        // for portability we pack into a ByteBuffer in native order.
+        ByteBuffer buf = ByteBuffer.allocateDirect(pixels.length * 4).order(ByteOrder.nativeOrder());
+        buf.asIntBuffer().put(pixels);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bi.getWidth(), bi.getHeight(), 0,
+                     GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, buf);
+    }
+
+    /** Draw a textured quad with top-left at (x,y) and size (w,h). */
+    private void drawTexturedQuad(float x, float y, float w, float h) {
+        int i = 0;
+        // Triangle 1: TL, TR, BR
+        i = quadVert(i, x,     y,     0f, 0f);
+        i = quadVert(i, x + w, y,     1f, 0f);
+        i = quadVert(i, x + w, y + h, 1f, 1f);
+        // Triangle 2: TL, BR, BL
+        i = quadVert(i, x,     y,     0f, 0f);
+        i = quadVert(i, x + w, y + h, 1f, 1f);
+        i = quadVert(i, x,     y + h, 0f, 1f);
+
+        glBindBuffer(GL_ARRAY_BUFFER, texVbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, texVertexBuf);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+
+    private int quadVert(int i, float x, float y, float u, float v) {
+        texVertexBuf[i]     = x;
+        texVertexBuf[i + 1] = y;
+        texVertexBuf[i + 2] = u;
+        texVertexBuf[i + 3] = v;
+        return i + TEX_FLOATS_PER_VERTEX;
     }
 }

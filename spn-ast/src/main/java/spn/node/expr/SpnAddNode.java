@@ -20,24 +20,21 @@ import spn.node.SpnExpressionNode;
  *     executes the child nodes to get their values, then dispatches to the right
  *     specialization based on the runtime types of those values.
  *
- * KEY TRUFFLE CONCEPT: @Specialization and the speculate-deoptimize cycle
+ * KEY TRUFFLE CONCEPT: @Specialization
  *
- * Truffle starts with the most optimistic assumption and widens only when necessary:
+ * Each specialization handles one shape of operands. The DSL picks the best fit
+ * at the call site (more-specific wins; @ImplicitCast lets long widen to double
+ * for the double specialization when the caller passes a long alongside a double).
  *
- *   1. addLongs: Assumes both operands are long. Uses Math.addExact which throws
- *      ArithmeticException on overflow. The "rewriteOn" parameter tells Truffle:
- *      "if this throws ArithmeticException, don't retry this specialization --
- *      permanently rewrite the node to skip it."
+ *   1. addLongs: Both operands long. Uses Math.addExact and surfaces overflow as
+ *      a located SpnException. We deliberately do NOT widen long→double on
+ *      overflow — silent widening breaks bit-exactness for rational/exact-arithmetic
+ *      types and hides the actual point of failure. If you want floating-point
+ *      semantics, write doubles.
  *
- *   2. addDoubles: Activated when operands are doubles, or when addLongs overflowed.
- *      The "replaces" parameter means: once we activate addDoubles, remove addLongs
- *      from consideration (since doubles subsume longs via our @ImplicitCast).
+ *   2. addDoubles: At least one operand is a double. Standard IEEE-754.
  *
- *   3. typeError: The @Fallback catches any type combination not handled above.
- *
- * At steady state, if this node always sees long+long, only addLongs exists in the
- * compiled code. No type checks, no boxing, no polymorphic dispatch -- just a single
- * ADD instruction with an overflow check. THIS is why Truffle languages can match C.
+ *   3. typeError: @Fallback catches any type combination not handled above.
  */
 @NodeChild("left")
 @NodeChild("right")
@@ -49,17 +46,22 @@ public abstract class SpnAddNode extends SpnExpressionNode {
      * If both children produce longs (the common case for integer arithmetic),
      * this is the only specialization that exists in compiled code.
      */
-    @Specialization(rewriteOn = ArithmeticException.class)
+    @Specialization
     protected long addLongs(long left, long right) {
-        return Math.addExact(left, right);
+        try {
+            return Math.addExact(left, right);
+        } catch (ArithmeticException e) {
+            throw new SpnException("long overflow: " + left + " + " + right, this);
+        }
     }
 
     /**
-     * Double addition. Activated either because an operand is a double, or because
-     * addLongs overflowed. The @ImplicitCast in SpnTypes means a long operand is
-     * automatically widened to double here.
+     * Double addition. Activated when at least one operand is a double; the
+     * @ImplicitCast in SpnTypes widens the other long operand. Long+long
+     * never lands here — overflow on Math.addExact above is reported, not
+     * silently widened, so bit-exact arithmetic stays bit-exact.
      */
-    @Specialization(replaces = "addLongs")
+    @Specialization
     protected double addDoubles(double left, double right) {
         return left + right;
     }

@@ -1,0 +1,101 @@
+# JSON
+@summary Stdlib Json — parseJson, toJson, toJsonPretty
+@category stdlib
+
+The Json module converts between JSON text and SPN values. It's intentionally minimal — three functions cover serialization in both directions.
+
+## Mapping between JSON and SPN
+
+When parseJson reads a JSON value, it produces SPN values according to this mapping:
+
+JSON object → Dict with symbol keys (so the key for "name" is :name)
+JSON array → Array
+JSON string → string
+JSON integer → Long
+JSON float → Double
+JSON true/false → Boolean
+JSON null → None (the empty case of Option)
+
+When toJson/toJsonPretty writes a value, the same mapping applies in reverse. Symbol keys in dicts become JSON object keys.
+
+## Functions
+
+parseJson(json) — parse a JSON string and return the SPN value. Throws on malformed input.
+
+toJson(value) — serialize to a compact one-line JSON string.
+
+toJsonPretty(value) — serialize with indentation and line breaks for human reading.
+
+## Symbol keys
+
+Because JSON object keys map to SPN symbol keys, you read fields by symbol literal, not by string:
+
+dictGet(parsed, :name)   -- correct
+dictGet(parsed, "name")  -- wrong: would look up the string key "name"
+
+This makes JSON-derived dicts ergonomic with the symbol/atom syntax used elsewhere in SPN (:click events, ADT discriminants, etc.).
+
+--- example: parse-and-read.spn
+-- Parse a JSON object and read fields with symbol keys.
+import Json (parseJson)
+import Dict (dictGet)
+
+let raw = "{\"name\": \"alice\", \"age\": 30, \"admin\": true}"
+let parsed = parseJson(raw)
+
+let name = dictGet(parsed, :name)
+let age = dictGet(parsed, :age)
+let admin = dictGet(parsed, :admin)
+
+(name, age, admin)
+-- ("alice", 30, true)
+---
+
+--- example: round-trip.spn
+-- Build a value, serialize, parse back, compare.
+import Json (toJson, parseJson)
+import Dict (emptyDict, put, dictGet)
+
+let original = put(put(put(emptyDict(),
+    :id,    7),
+    :name,  "widget"),
+    :tags,  ["red", "small"])
+
+let text = toJson(original)
+let restored = parseJson(text)
+
+let sameId = dictGet(restored, :id) == dictGet(original, :id)
+sameId
+-- true
+---
+
+--- example: pretty-config.spn
+-- Pretty-print a config dict for human-readable output to a file.
+import Json (toJsonPretty)
+import Dict (emptyDict, put)
+import File (writeFile)
+
+let config = emptyDict()
+config = put(config, :host, "localhost")
+config = put(config, :port, 8080)
+config = put(config, :flags, ["verbose", "trace"])
+
+let text = toJsonPretty(config)
+writeFile("/tmp/config.json", text)
+---
+
+--- example: parse-array.spn
+-- The top-level JSON value can be any type. Here we parse an array
+-- of records and project a single field from each.
+import Json (parseJson)
+import Array (map, length)
+import Dict (dictGet)
+
+let raw = "[{\"x\":1,\"y\":2},{\"x\":3,\"y\":4},{\"x\":5,\"y\":6}]"
+let points = parseJson(raw)
+
+-- Pull the x coordinate out of each record.
+let xs = map(points, do(p) { dictGet(p, :x) })
+xs
+-- [1, 3, 5]
+---

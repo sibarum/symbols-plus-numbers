@@ -44,6 +44,7 @@ public class WindowFrame {
         modeManager.render(renderer, width, contentH, now);
 
         hud.setSegments(modeManager.hudSegments());
+        hud.setBackground(modeManager.activeHudBackground());
         hud.setBounds(0, contentH, width, hudH);
         hud.render(renderer, now);
     }

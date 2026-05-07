@@ -1,0 +1,158 @@
+# Canvas GUI
+@summary Retained-mode UI — vboxes, buttons, sliders, tabs, stateful do() closures
+@category Canvas
+
+CanvasGui is a tiny retained-mode UI toolkit. You declare your app state as a stateful type, then build a render() closure that returns a tree of GuiCmd nodes each frame. Event handlers are do() closures that capture this and mutate state in place; the render closure rebuilds the tree on the next tick.
+
+## The shape of a CanvasGui app
+
+stateful type AppState(...) — declare every piece of mutable UI state up front.
+
+AppState(initial-values) { ... } — the block runs against a fresh heap-allocated instance. Inside, this refers to the instance.
+
+let render = do() { guiRender(...) } — a do() closure that captures this. It is called every frame; rebuild the GuiCmd tree from current state.
+
+guiWindow(title, width, height) — open the OS window.
+
+guiRun(fps, render) — start the event loop, call render at the given rate, return when the user closes.
+
+## Layout containers
+
+guiVBox(children), guiHBox(children) — vertical / horizontal stack. Pass an array of GuiCmd.
+
+guiGrid(rows, cols, children) — fixed-size grid.
+
+guiTabs(active, labels, contents) — tab bar. Active is the current tab index; on(:select, ...) fires with the new index when the user clicks a tab.
+
+guiScrollable(child) — wrap one child in a scrollable region.
+
+guiSpacer(weight), guiMask(child) — flex spacing and clipping.
+
+## Widgets
+
+guiText(content) — plain or editable text. Editable mode is opt-in via .editable(true), then on(:change, do(s) { ... }) receives each new value.
+
+guiButton(label) — clickable button. Use on(:click, do() { ... }) and optionally .selected(bool) to render it pressed (radio/toggle pattern).
+
+guiSlider(min, max, value), guiDial(min, max, value) — value pickers. Both fire on(:change, do(v) { ... }) with the new float.
+
+guiCanvas — a Canvas-backed drawing region inside the GUI tree.
+
+## Style modifiers
+
+GuiCmd values support a chain of style methods that return a new GuiCmd: .padding(units), .bg(r, g, b), .selected(bool), .editable(bool). These compose by chaining: guiText("x").padding(0.5).bg(0.14, 0.16, 0.22).
+
+## Events
+
+.on(:event, handler) attaches a handler to a node. Symbol literals like :click, :change, :select identify the event. The handler is a do() closure; the arity matches the event payload (zero args for :click, one for :change/:select).
+
+--- example: counter.spn
+-- The smallest stateful CanvasGui app: a counter with two buttons.
+import CanvasGui
+import String (formatNum)
+
+stateful type AppState(counter: int)
+
+AppState(0) {
+  let render = do() {
+    guiRender(
+      guiVBox([
+        guiText("Counter: " ++ formatNum(this.counter)),
+        guiHBox([
+          guiButton("−").on(:click, do() { this.counter = this.counter - 1 }),
+          guiButton("+").on(:click, do() { this.counter = this.counter + 1 }),
+        ]),
+      ])
+    )
+  }
+
+  guiWindow("Counter", 480, 200)
+  guiRun(30.0, render)
+}
+---
+
+--- example: text-input.spn
+-- Editable text bound to this.name. Echo the current value above the field.
+import CanvasGui
+
+stateful type Form(name: string)
+
+Form("hello world") {
+  let render = do() {
+    guiRender(
+      guiVBox([
+        guiText("Echo: " ++ this.name),
+        guiText(this.name)
+            .editable(true)
+            .padding(0.5).bg(0.14, 0.16, 0.22)
+            .on(:change, do(s) { this.name = s }),
+      ]).padding(0.75)
+    )
+  }
+
+  guiWindow("Text input", 520, 180)
+  guiRun(30.0, render)
+}
+---
+
+--- example: slider.spn
+-- A slider and a dial both bound to floats.
+import CanvasGui
+import String (formatNum)
+
+stateful type Knobs(volume: float, angle: float)
+
+Knobs(0.5, 0.5) {
+  let render = do() {
+    guiRender(
+      guiVBox([
+        guiText("Volume: " ++ formatNum(this.volume)),
+        guiSlider(0.0, 1.0, this.volume).on(:change, do(v) { this.volume = v }),
+        guiText("Angle: " ++ formatNum(this.angle)),
+        guiDial(0.0, 1.0, this.angle).on(:change, do(v) { this.angle = v }),
+      ]).padding(0.75)
+    )
+  }
+
+  guiWindow("Knobs", 480, 240)
+  guiRun(30.0, render)
+}
+---
+
+--- example: tabs-and-radio.spn
+-- guiTabs switches sub-views; a radio group is implemented by binding
+-- the .selected() state of each button to a comparison with this.choice.
+import CanvasGui
+
+stateful type Settings(tab: int, choice: _)
+
+Settings(0, :red) {
+  let render = do() {
+    guiRender(
+      guiTabs(this.tab, ["Colors", "About"], [
+        guiVBox([
+          guiText("Pick a color:"),
+          guiHBox([
+            guiButton("Red")
+                .selected(this.choice == :red)
+                .on(:click, do() { this.choice = :red }),
+            guiButton("Green")
+                .selected(this.choice == :green)
+                .on(:click, do() { this.choice = :green }),
+            guiButton("Blue")
+                .selected(this.choice == :blue)
+                .on(:click, do() { this.choice = :blue }),
+          ]),
+        ]).padding(0.75),
+        guiVBox([
+          guiText("This demo shows tabs and a radio-style button group."),
+          guiText("Mutual exclusion is just `selected(this.choice == :foo)`."),
+        ]).padding(0.75),
+      ]).on(:select, do(i) { this.tab = i })
+    )
+  }
+
+  guiWindow("Tabs + radio", 480, 280)
+  guiRun(30.0, render)
+}
+---

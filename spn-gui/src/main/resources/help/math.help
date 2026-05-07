@@ -1,0 +1,109 @@
+# Math
+@summary Stdlib Math — trig, exp/log, rounding, conversions, gcd, clamp
+@category stdlib
+
+The Math module provides scalar numeric primitives. Trigonometry takes radians (use radians(deg) to convert). Floating-point functions return Double; integer-flavored functions like floor/ceil/round return Long.
+
+There is no built-in pi constant — define it yourself if needed (the Kuramoto demo uses pure twoPi() -> float = () { 6.283185307179586 }).
+
+## Trigonometry
+
+sin(x), cos(x), tan(x) — radians in, double out.
+
+asin(x), acos(x), atan(x) — inverses; results in radians.
+
+atan2(y, x) — full-range arctangent. Note the y-first argument order (matches C/Java).
+
+radians(deg), degrees(rad) — angle conversions.
+
+## Exponentials and powers
+
+exp(x), log(x), log10(x) — natural and base-10 exponentials.
+
+pow(base, exponent) — general power. sqrt(x), cbrt(x) — square and cube roots.
+
+hypot(x, y) — the Euclidean length without intermediate overflow: sqrt(x*x + y*y) done safely.
+
+heron(a, b, c) — triangle area from side lengths via Heron's formula.
+
+## Rounding and conversion
+
+floor(x), ceil(x), round(x) — Long results.
+
+toInt(x), toFloat(x) — explicit conversions between Long and Double. Use toFloat in arithmetic that mixes ints and floats.
+
+abs(x), sign(x) — magnitude and -1/0/1 sign.
+
+## Bit operations
+
+shl(value, count), shr(value, count) — logical shift left/right on Long.
+
+bitWidth(value) — minimum number of bits needed to represent the value (i.e., position of highest set bit).
+
+## Numeric helpers
+
+min(a, b), max(a, b) — pairwise min and max. (For min/max of an array, use arrayMin / arrayMax from Array.)
+
+clamp(value, lo, hi) — pin value into [lo, hi].
+
+gcd(a, b) — greatest common divisor.
+
+random() — uniform Double in [0.0, 1.0).
+
+--- example: trig.spn
+-- Compute coordinates around a unit circle at 30-degree increments.
+import Math (cos, sin, radians)
+import Array (range, map)
+
+let angles = map(range(0, 13), do(i) { radians(toFloat(i) * 30.0) })
+map(angles, do(t) { (cos(t), sin(t)) })
+-- 13 (cos, sin) pairs from 0° to 360°
+---
+
+--- example: random-stats.spn
+-- Generate a sample, then compute mean and standard deviation.
+import Math (random, sqrt, toFloat)
+import Array (range, map, sum, length)
+
+pure squared(float) -> float = (x) { x * x }
+
+let n = 100
+let xs = map(range(0, n), do(i) { random() })
+
+let mean = sum(xs) / toFloat(length(xs))
+let centered = map(xs, do(x) { x - mean })
+let variance = sum(map(centered, squared)) / toFloat(length(xs))
+let stddev = sqrt(variance)
+
+(mean, stddev)
+---
+
+--- example: clamp-and-lerp.spn
+-- Build a few helpers on top of Math primitives.
+import Math (clamp, toFloat)
+
+pure lerp(float, float, float) -> float = (a, b, t) {
+    a + (b - a) * t
+}
+
+pure remap(float, float, float, float, float) -> float = (x, fromLo, fromHi, toLo, toHi) {
+    let t = clamp((x - fromLo) / (fromHi - fromLo), 0.0, 1.0)
+    lerp(toLo, toHi, t)
+}
+
+-- Map a slider value (0..100) to a hue (0..360) clipped on input.
+remap(75.0, 0.0, 100.0, 0.0, 360.0)
+---
+
+--- example: integer-math.spn
+-- Bit ops and gcd on integers.
+import Math (gcd, shl, shr, bitWidth)
+
+let a = gcd(48, 36)
+let b = shl(1, 10)
+let c = shr(1024, 3)
+let d = bitWidth(255)
+
+(a, b, c, d)
+-- (12, 1024, 128, 8)
+---

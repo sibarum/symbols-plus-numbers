@@ -36,6 +36,11 @@ public interface Tab {
     /** Text to display in the HUD while this tab is active. */
     String hudText();
 
+    /** Background tint for the HUD bar while this tab is active. Return
+     *  {@code [r, g, b]} (0..1) when this tab is in a takeover sub-mode
+     *  (find, replace, autocomplete), or {@code null} for the default. */
+    default float[] hudBackground() { return null; }
+
     /** Called when this tab becomes the active tab. */
     default void onActivated() {}
 

@@ -1111,6 +1111,75 @@ public class TextArea {
     }
 
     /**
+     * Toggle line comments on every line touched by the selection (or current
+     * line if no selection). IntelliJ-style: blank lines are skipped; the
+     * marker is inserted at the minimum leading-indent column across non-blank
+     * lines in the range. If every non-blank line in the range is already
+     * commented, the marker is stripped instead. Records one undo entry.
+     */
+    public void toggleLineComment() {
+        int[] r = affectedLineRange();
+        int firstRow = r[0], lastRow = r[1];
+
+        int rB = cursorRow, cB = cursorCol;
+        int origAnchorRow = selAnchorRow, origAnchorCol = selAnchorCol;
+
+        int endCol = buffer.lineLength(lastRow);
+        String original = buffer.getTextRange(firstRow, 0, lastRow, endCol);
+        String[] lines = original.split("\n", -1);
+
+        int minIndent = Integer.MAX_VALUE;
+        boolean allCommented = true;
+        boolean anyNonBlank = false;
+        for (String line : lines) {
+            if (line.isBlank()) continue;
+            anyNonBlank = true;
+            int indent = 0;
+            while (indent < line.length() && line.charAt(indent) == ' ') indent++;
+            if (indent < minIndent) minIndent = indent;
+            if (!line.startsWith("--", indent)) allCommented = false;
+        }
+        if (!anyNonBlank) return;
+
+        int[] delta = new int[lines.length];
+        StringBuilder rebuilt = new StringBuilder();
+        for (int i = 0; i < lines.length; i++) {
+            if (i > 0) rebuilt.append('\n');
+            String line = lines[i];
+            if (line.isBlank()) { rebuilt.append(line); continue; }
+            if (allCommented) {
+                int indent = 0;
+                while (indent < line.length() && line.charAt(indent) == ' ') indent++;
+                int strip = 2;
+                if (indent + 2 < line.length() && line.charAt(indent + 2) == ' ') strip = 3;
+                delta[i] = -strip;
+                rebuilt.append(line, 0, indent).append(line, indent + strip, line.length());
+            } else {
+                delta[i] = 3;
+                rebuilt.append(line, 0, minIndent).append("-- ").append(line, minIndent, line.length());
+            }
+        }
+        String replaced = rebuilt.toString();
+        if (replaced.equals(original)) return;
+
+        buffer.deleteRange(firstRow, 0, lastRow, endCol);
+        buffer.insertText(firstRow, 0, replaced);
+
+        if (rB >= firstRow && rB <= lastRow) {
+            cursorCol = Math.max(0, cB + delta[rB - firstRow]);
+        }
+        cursorRow = rB;
+        if (origAnchorRow >= firstRow && origAnchorRow <= lastRow) {
+            selAnchorRow = origAnchorRow;
+            selAnchorCol = Math.max(0, origAnchorCol + delta[origAnchorRow - firstRow]);
+        }
+
+        if (!undoRedoInProgress) {
+            undo.record(firstRow, 0, original, replaced, rB, cB, cursorRow, cursorCol);
+        }
+    }
+
+    /**
      * Duplicate every line touched by the selection (or current line if none),
      * inserting a copy directly below. Cursor moves to the same column on the
      * mirrored line. Records a single undo entry.

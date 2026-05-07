@@ -1,0 +1,123 @@
+# Arrays
+@summary Stdlib Array — map, filter, fold, range, slice, sort, zip, and friends
+@category stdlib
+
+The Array module provides functional combinators over SPN arrays. Most operate on UntypedArray (the heterogeneous fallback form); typed Array<T> values flow through transparently. Arrays are immutable in the functional sense — every operation that returns Array returns a new array, leaving the input unchanged.
+
+Literal syntax is [a, b, c]. Index with arr[i]. Get the size with length(arr).
+
+## Building
+
+range(start, end) — half-open range from start to end-1, returned as Array.
+
+append(arr, element) — add one element to the end. Returns the new array.
+
+concat(left, right) — join two arrays. Returns a new array.
+
+flatten(arr) — turn Array<Array<T>> into Array<T>.
+
+## Querying
+
+length(arr) — element count.
+
+first(arr), last(arr) — endpoints. Throw at runtime if the array is empty.
+
+contains(arr, element) — boolean check by equality.
+
+indexOf(arr, element) — first matching index, or -1.
+
+find(arr, predicate) — Option<T> wrapping the first element matching the predicate.
+
+all(arr, predicate), any(arr, predicate) — universal/existential check.
+
+## Transforming
+
+map(arr, fn) — apply fn to each element, return new array of results.
+
+filter(arr, predicate) — keep only elements for which predicate is true.
+
+fold(arr, init, fn) — accumulate left-to-right. fn takes (accum, element) and returns the next accum.
+
+flatMap(arr, fn) — map then flatten one level.
+
+sort(arr) — total order; the elements need a default comparison.
+
+reverse(arr), unique(arr) — exactly what you'd expect.
+
+## Slicing and grouping
+
+slice(arr, start, end) — half-open subarray.
+
+take(arr, n), drop(arr, n) — first/skip n.
+
+chunk(arr, size) — partition into fixed-size chunks (last may be shorter).
+
+groupBy(arr, keyFn) — Dict<K, Array<V>> grouping by key.
+
+enumerate(arr) — Array of (index, element) tuples.
+
+zip(left, right) — pairwise tuples; result length is min of inputs.
+
+## Reductions
+
+sum(arr), arrayMax(arr), arrayMin(arr) — scalar reductions over numeric arrays.
+
+--- example: range-map-sum.spn
+-- Build a range, square each element, sum the result.
+import Array (range, map, sum)
+
+let xs = range(1, 11)
+let squares = map(xs, do(x) { x * x })
+let total = sum(squares)
+-- total is 385
+total
+---
+
+--- example: filter-fold.spn
+-- Filter and fold together. Pure functions can pass arrays around freely.
+import Array (range, filter, fold)
+
+pure isEven(int) -> bool = (n) { (n % 2) == 0 }
+
+let xs = range(0, 21)
+let evens = filter(xs, isEven)
+-- Sum the evens with fold instead of sum().
+let total = fold(evens, 0, do(acc, n) { acc + n })
+total
+---
+
+--- example: zip-enumerate.spn
+-- enumerate pairs each element with its index. zip joins two arrays.
+import Array (range, enumerate, zip, map)
+import String (formatNum, join)
+
+let names = ["alice", "bob", "carol"]
+let ages = [30, 25, 41]
+
+-- enumerate -> [(0, "alice"), (1, "bob"), (2, "carol")]
+let indexed = enumerate(names)
+
+-- zip -> [("alice", 30), ("bob", 25), ("carol", 41)]
+let people = zip(names, ages)
+
+-- Render as text rows.
+pure rowOf((string, int)) -> string = (pair) {
+    let (name, age) = pair
+    name ++ " is " ++ formatNum(age)
+}
+let rows = map(people, rowOf)
+join(rows, "\n")
+---
+
+--- example: chunks-and-groups.spn
+-- chunk slices into batches; groupBy bins by a key function.
+import Array (range, chunk, groupBy)
+
+let xs = range(0, 10)
+let pairs = chunk(xs, 2)
+-- pairs is [[0,1], [2,3], [4,5], [6,7], [8,9]]
+
+let bins = groupBy(xs, do(n) { n % 3 })
+-- bins is a Dict from remainder -> array of integers
+bins
+---

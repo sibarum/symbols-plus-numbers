@@ -39,6 +39,10 @@ public class EditorTab extends ScrollableTab {
     // Dismissed by any subsequent keystroke.
     private boolean typeInfoActive;
 
+    // Cycling member-suggestion session driven by Ctrl+, / Ctrl+. The session
+    // tracks its own validity by comparing cursor position before each cycle.
+    private final MemberSuggester suggester = new MemberSuggester();
+
     EditorTab(EditorWindow window) {
         super(window);
 
@@ -211,6 +215,29 @@ public class EditorTab extends ScrollableTab {
             // Don't consume — let the key propagate to its normal handler
         }
 
+        // Active member-suggestion session: Ctrl+Enter accepts, Esc cancels,
+        // cursor-movement keys accept and then run their normal action. The
+        // cycle keys (Ctrl+./Ctrl+,) are handled by the regular branch below.
+        // All other keys fall through; the session naturally ends when the
+        // cursor diverges from the expected position on the next cycle press.
+        if (suggester.isActive(textArea) && action == GLFW_PRESS) {
+            if (ctrl && key == GLFW_KEY_ENTER) {
+                suggester.accept(textArea);
+                return true;
+            }
+            if (key == GLFW_KEY_ESCAPE) {
+                suggester.cancel(textArea);
+                return true;
+            }
+            if (isCursorMovementKey(key)) {
+                // Accept and stop here — accept already positioned the cursor
+                // at end-of-word; passing the arrow on would shift it again.
+                // Left arrow lands at the start of the completed word instead.
+                suggester.accept(textArea, key == GLFW_KEY_LEFT);
+                return true;
+            }
+        }
+
         // Ctrl+F opens find mode
         if (ctrl && key == GLFW_KEY_F && action == GLFW_PRESS) {
             openFind(false);
@@ -274,8 +301,20 @@ public class EditorTab extends ScrollableTab {
             window.pushLegacyMode(new ActionMenuMode(window, window.getActionRegistry()));
             return true;
         }
-        if (ctrl && key == GLFW_KEY_SLASH && action == GLFW_PRESS) {
+        if (ctrl && !shift && key == GLFW_KEY_SLASH && action == GLFW_PRESS) {
             window.pushLegacyMode(new HelpMode(window, window.getActionRegistry()));
+            return true;
+        }
+        if (ctrl && shift && key == GLFW_KEY_SLASH && action == GLFW_PRESS) {
+            textArea.toggleLineComment();
+            return true;
+        }
+        if (ctrl && (key == GLFW_KEY_PERIOD || key == GLFW_KEY_COMMA)
+                && action == GLFW_PRESS) {
+            int dir = key == GLFW_KEY_PERIOD ? 1 : -1;
+            String absFile = filePath != null
+                    ? filePath.toAbsolutePath().normalize().toString() : null;
+            suggester.cycle(textArea, diagnosticEngine.getTypeGraph(), absFile, dir);
             return true;
         }
         // Escape: don't consume — let TabViewMode handle tab close
@@ -299,6 +338,14 @@ public class EditorTab extends ScrollableTab {
     @Override
     public void onDeactivated() {
         if (findActive) closeFind();
+        if (suggester.isActive(textArea)) suggester.accept(textArea);
+    }
+
+    private static boolean isCursorMovementKey(int key) {
+        return key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT
+                || key == GLFW_KEY_UP || key == GLFW_KEY_DOWN
+                || key == GLFW_KEY_HOME || key == GLFW_KEY_END
+                || key == GLFW_KEY_PAGE_UP || key == GLFW_KEY_PAGE_DOWN;
     }
 
     @Override
@@ -308,6 +355,13 @@ public class EditorTab extends ScrollableTab {
                 && action == GLFW_PRESS
                 && clickIsInsideText(mx, my)) {
             closeFind();
+        }
+        if (suggester.isActive(textArea)
+                && button == GLFW_MOUSE_BUTTON_LEFT
+                && action == GLFW_PRESS
+                && clickIsInsideText(mx, my)) {
+            suggester.accept(textArea);
+            // fall through so the click still positions the cursor
         }
         if (button == GLFW_MOUSE_BUTTON_LEFT
                 && action == GLFW_PRESS
@@ -640,10 +694,45 @@ public class EditorTab extends ScrollableTab {
         return sb.toString();
     }
 
+    /** HUD content while a member-suggestion session is active. */
+    private String suggestHudText() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Suggest [")
+          .append(suggester.currentIndex() + 1)
+          .append("/")
+          .append(suggester.matchCount())
+          .append("] ")
+          .append(suggester.currentSuggestion());
+
+        java.util.List<String> next = suggester.upcoming(3);
+        if (!next.isEmpty()) {
+            sb.append(" → ");  // → arrow
+            for (int i = 0; i < next.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(next.get(i));
+            }
+        }
+
+        sb.append(" | Ctrl+. Next | Ctrl+, Prev | Ctrl+Enter Accept | Esc Cancel");
+        return sb.toString();
+    }
+
+    @Override
+    public float[] hudBackground() {
+        // Tint the HUD whenever an in-editor sub-mode captures input.
+        // Type-info is a passive read-only display — no tint.
+        if (findActive) return EditorWindow.HUD_TAKEOVER_TINT;
+        if (suggester.isActive(textArea)) return EditorWindow.HUD_TAKEOVER_TINT;
+        return null;
+    }
+
     @Override
     public String hudText() {
         // Find/replace mode takes over the HUD
         if (findActive) return findHudText();
+
+        // Member-suggestion session takes over the HUD
+        if (suggester.isActive(textArea)) return suggestHudText();
 
         // Type-info mode: Ctrl+T shows all dispatches on the current line
         if (typeInfoActive) {
@@ -655,6 +744,15 @@ public class EditorTab extends ScrollableTab {
         }
 
         StringBuilder sb = new StringBuilder();
+
+        // Signature hint: passively show "Sig: foo(x, [y], z)" while the
+        // cursor is inside the parens of a known function whose call already
+        // has at least one character typed. The bracketed name marks the
+        // current arg slot. Goes first so it stays prominent.
+        String sig = MemberSuggester.signatureHintAt(textArea, diagnosticEngine.getTypeGraph());
+        if (sig != null) {
+            sb.append("Sig: ").append(sig).append(" | ");
+        }
 
         // Change and error summary
         int changedLines = changeOverlay.changedLineCount();

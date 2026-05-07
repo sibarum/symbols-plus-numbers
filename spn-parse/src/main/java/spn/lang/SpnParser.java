@@ -1253,7 +1253,8 @@ public class SpnParser {
 
     private static boolean isOpChar(char c) {
         return c == '+' || c == '-' || c == '*' || c == '/' || c == '%'
-                || c == '=' || c == '<' || c == '>' || c == '|' || c == '&';
+                || c == '=' || c == '<' || c == '>' || c == '|' || c == '&'
+                || c == '^';
     }
 
     // ── Macro conditional blocks: <! if COND !> { A } <! else !> { B } ─────
@@ -1754,10 +1755,109 @@ public class SpnParser {
                 signatureRegistry.putIfAbsent(entry.getKey(), entry.getValue());
             }
         }
+
+        // Mirror imported names into the TypeGraph so the IDE can offer them
+        // as autocomplete suggestions. Without this, only declarations from
+        // the current file are visible to MemberSuggester — builtins, stdlib,
+        // and cross-module imports are invisible.
+        recordImportedTypeGraphNodes(module);
+    }
+
+    /** Inject TypeGraph nodes for everything an import made visible: functions,
+     *  builtin factories, types, structs, variants, and macros. Nodes use the
+     *  source-side names (selective imports register under their local alias
+     *  via {@link #recordImportedNode}). All imported nodes use a null file
+     *  and {@link spn.source.SourceRange#UNKNOWN} range — go-to-def relies on
+     *  the existing {@code importedTypeDeclarations} map, not these nodes. */
+    @SuppressWarnings("unchecked")
+    private void recordImportedTypeGraphNodes(SpnModule module) {
+        Map<String, SpnFunctionDescriptor> descriptors = module.getExtra("descriptors");
+
+        for (var entry : module.getFunctions().entrySet()) {
+            recordImportedFunction(entry.getKey(), entry.getValue(),
+                    descriptors != null ? descriptors.get(entry.getKey()) : null);
+        }
+        for (String name : module.getBuiltinFactories().keySet()) {
+            recordImportedBuiltin(name,
+                    descriptors != null ? descriptors.get(name) : null);
+        }
+        for (var entry : module.getTypes().entrySet()) {
+            recordImportedTypeOrStruct(entry.getKey(), TypeGraph.Kind.TYPE,
+                    entry.getValue(), null, null);
+        }
+        for (var entry : module.getStructs().entrySet()) {
+            recordImportedTypeOrStruct(entry.getKey(), TypeGraph.Kind.STRUCT,
+                    null, entry.getValue(), null);
+        }
+        for (var entry : module.getVariants().entrySet()) {
+            recordImportedTypeOrStruct(entry.getKey(), TypeGraph.Kind.VARIANT,
+                    null, null, entry.getValue());
+        }
+        Map<String, MacroDef> macros = module.getExtra("macros");
+        if (macros != null) {
+            for (var entry : macros.entrySet()) {
+                recordImportedMacro(entry.getKey(), entry.getValue());
+            }
+        }
+    }
+
+    /** Add a single FUNCTION node, or skip if a node with the same name+kind
+     *  already exists (defensive against duplicate imports). */
+    private void recordImportedFunction(String name, CallTarget ct,
+                                        SpnFunctionDescriptor descriptor) {
+        if (hasImportedNode(name, TypeGraph.Kind.FUNCTION)) return;
+        TypeGraph.Node.Builder b = TypeGraph.Node.builder(name, TypeGraph.Kind.FUNCTION)
+                .callTarget(ct);
+        if (descriptor != null) b.functionDescriptor(descriptor);
+        typeGraph.add(b.build());
+    }
+
+    private void recordImportedBuiltin(String name, SpnFunctionDescriptor descriptor) {
+        if (hasImportedNode(name, TypeGraph.Kind.BUILTIN)) return;
+        TypeGraph.Node.Builder b = TypeGraph.Node.builder(name, TypeGraph.Kind.BUILTIN);
+        if (descriptor != null) b.functionDescriptor(descriptor);
+        typeGraph.add(b.build());
+    }
+
+    private void recordImportedTypeOrStruct(String name, TypeGraph.Kind kind,
+                                            SpnTypeDescriptor td,
+                                            SpnStructDescriptor sd,
+                                            SpnVariantSet vs) {
+        if (hasImportedNode(name, kind)) return;
+        TypeGraph.Node.Builder b = TypeGraph.Node.builder(name, kind);
+        if (td != null) b.typeDescriptor(td);
+        if (sd != null) b.structDescriptor(sd);
+        if (vs != null) b.variantSet(vs);
+        typeGraph.add(b.build());
+    }
+
+    private void recordImportedMacro(String name, MacroDef def) {
+        if (hasImportedNode(name, TypeGraph.Kind.MACRO)) return;
+        TypeGraph.Node.Builder b = TypeGraph.Node.builder(name, TypeGraph.Kind.MACRO);
+        if (def != null) {
+            b.macroBody(def.bodyTokens());
+            List<String> paramNames = new ArrayList<>(def.params().size());
+            for (MacroParam p : def.params()) paramNames.add(p.name());
+            b.macroParams(paramNames);
+        }
+        typeGraph.add(b.build());
+    }
+
+    /** True if the TypeGraph already has a node with the given name+kind.
+     *  Used by import recording so duplicate imports of the same module are
+     *  idempotent rather than producing N copies of every name. */
+    private boolean hasImportedNode(String name, TypeGraph.Kind kind) {
+        for (TypeGraph.Node n : typeGraph.lookup(name)) {
+            if (n.kind() == kind && n.file() == null) return true;
+        }
+        return false;
     }
 
     @SuppressWarnings("unchecked")
     private void applySelectiveImport(SpnModule module, ImportDirective directive) {
+        Map<String, SpnFunctionDescriptor> descriptors = module.getExtra("descriptors");
+        Map<String, MacroDef> macros = module.getExtra("macros");
+
         for (ImportDirective.ImportedName imp : directive.selectiveNames()) {
             String src = imp.name();
             String dst = imp.localName();
@@ -1766,6 +1866,8 @@ public class SpnParser {
             if (fn != null) {
                 functionRegistry.put(dst, fn);
                 if (module.isImpure()) impureBuiltins.add(dst);
+                recordImportedFunction(dst, fn,
+                        descriptors != null ? descriptors.get(src) : null);
                 continue;
             }
 
@@ -1773,17 +1875,36 @@ public class SpnParser {
             if (bf != null) {
                 builtinRegistry.put(dst, bf);
                 if (module.isImpure()) impureBuiltins.add(dst);
+                recordImportedBuiltin(dst,
+                        descriptors != null ? descriptors.get(src) : null);
                 continue;
             }
 
+            // Macros also import selectively; mirror to the TypeGraph.
+            if (macros != null) {
+                MacroDef md = macros.get(src);
+                if (md != null) {
+                    recordImportedMacro(dst, md);
+                }
+            }
+
             SpnTypeDescriptor td = module.getType(src);
-            if (td != null) { typeRegistry.put(dst, td); }
+            if (td != null) {
+                typeRegistry.put(dst, td);
+                recordImportedTypeOrStruct(dst, TypeGraph.Kind.TYPE, td, null, null);
+            }
 
             SpnStructDescriptor sd = module.getStruct(src);
-            if (sd != null) { structRegistry.put(dst, sd); }
+            if (sd != null) {
+                structRegistry.put(dst, sd);
+                recordImportedTypeOrStruct(dst, TypeGraph.Kind.STRUCT, null, sd, null);
+            }
 
             SpnVariantSet vs = module.getVariant(src);
-            if (vs != null) { variantRegistry.put(dst, vs); }
+            if (vs != null) {
+                variantRegistry.put(dst, vs);
+                recordImportedTypeOrStruct(dst, TypeGraph.Kind.VARIANT, null, null, vs);
+            }
 
             // IDE go-to-def: if this module carries source positions for the
             // imported type, record it under the LOCAL alias so clicks on
@@ -3653,6 +3774,7 @@ public class SpnParser {
     private static final int PREC_CAT  = 5;  // ++
     private static final int PREC_ADD  = 6;  // + -
     private static final int PREC_MUL  = 7;  // * / %
+    private static final int PREC_POW  = 8;  // ^   (right-associative)
 
     // ── Binary operator infrastructure ─────────────────────────────────────
     //
@@ -3816,7 +3938,13 @@ public class SpnParser {
 
     /** One infix operator's precedence-table entry. */
     private record InfixOp(int prec, BinaryFallback fallback,
-                           FieldType resultType, BinaryNodeFactory factory) {}
+                           FieldType resultType, BinaryNodeFactory factory,
+                           boolean rightAssoc) {
+        InfixOp(int prec, BinaryFallback fallback,
+                FieldType resultType, BinaryNodeFactory factory) {
+            this(prec, fallback, resultType, factory, false);
+        }
+    }
 
     /**
      * Precedence/dispatch table for all binary operators. Qualified variants
@@ -3837,7 +3965,8 @@ public class SpnParser {
             java.util.Map.entry("-",  new InfixOp(PREC_ADD, BinaryFallback.ARITHMETIC,        null,              SpnSubtractNodeGen::create)),
             java.util.Map.entry("*",  new InfixOp(PREC_MUL, BinaryFallback.ARITHMETIC,        null,              SpnMultiplyNodeGen::create)),
             java.util.Map.entry("/",  new InfixOp(PREC_MUL, BinaryFallback.ARITHMETIC,        null,              SpnDivideNodeGen::create)),
-            java.util.Map.entry("%",  new InfixOp(PREC_MUL, BinaryFallback.ARITHMETIC,        null,              SpnModuloNodeGen::create))
+            java.util.Map.entry("%",  new InfixOp(PREC_MUL, BinaryFallback.ARITHMETIC,        null,              SpnModuloNodeGen::create)),
+            java.util.Map.entry("^",  new InfixOp(PREC_POW, BinaryFallback.ARITHMETIC,        null,              SpnPowerNodeGen::create, true))
     );
 
     /** Look up the InfixOp for a base symbol, or null if not an infix operator. */
@@ -3896,7 +4025,9 @@ public class SpnParser {
             tokens.advance(); // consume the operator
 
             // Left-associative: RHS binds one precedence higher.
-            SpnExpressionNode right = parseExpr(op.prec() + 1);
+            // Right-associative (e.g. `^`): RHS binds at same precedence so
+            // `a ^ b ^ c` parses as `a ^ (b ^ c)`.
+            SpnExpressionNode right = parseExpr(op.rightAssoc() ? op.prec() : op.prec() + 1);
 
             // Special: `1 / x` → try multiplicative-inverse dispatch.
             if (resolved.equals("/")) {

@@ -16,12 +16,16 @@ import spn.node.SpnExpressionNode;
 @NodeInfo(shortName = "*")
 public abstract class SpnMultiplyNode extends SpnExpressionNode {
 
-    @Specialization(rewriteOn = ArithmeticException.class)
+    @Specialization
     protected long multiplyLongs(long left, long right) {
-        return Math.multiplyExact(left, right);
+        try {
+            return Math.multiplyExact(left, right);
+        } catch (ArithmeticException e) {
+            throw new SpnException("long overflow: " + left + " * " + right, this);
+        }
     }
 
-    @Specialization(replaces = "multiplyLongs")
+    @Specialization
     protected double multiplyDoubles(double left, double right) {
         return left * right;
     }

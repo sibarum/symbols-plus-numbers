@@ -41,6 +41,14 @@ public interface Mode {
     List<HudSegment> hudSegments();
 
     /**
+     * Background tint for the HUD bar while this mode is active. Returns
+     * {@code [r, g, b]} (each in 0..1) to override the default bar color, or
+     * {@code null} to keep it. Used to give a visual cue when a mode is
+     * capturing input (find/replace, autocomplete, command palettes).
+     */
+    default float[] hudBackground() { return null; }
+
+    /**
      * Called when this mode becomes the foreground mode.
      */
     default void onAttach(ModeContext ctx) {}

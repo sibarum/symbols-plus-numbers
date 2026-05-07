@@ -1,0 +1,22 @@
+
+type MathNeuron(a:float, b:float, c:float, d:float)
+
+pure MathNeuron.prediction() -> float = () {
+  this.a+this.b+this.c
+}
+
+pure *(MathNeuron, MathNeuron) -> MathNeuron = ((ia, ib, ic, id), (na, nb, nc, nd)){
+  let r1 = id/nd
+  let r2 = 1/r1
+  MathNeuron(
+    (ia^na)*r1 + (na^ia)*r2,
+    (ib*nb)*r1 + (ib^nb)*r2,
+    (ic+nc)*r1 + (ic*nc)*r2,
+    r1
+  )
+}
+
+
+let result = MathNeuron(1,1,1,1) * MathNeuron(1,1,1,8)
+
+result.prediction()

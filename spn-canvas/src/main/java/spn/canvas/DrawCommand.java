@@ -12,4 +12,5 @@ public sealed interface DrawCommand {
     record FillCircle(float cx, float cy, float r) implements DrawCommand {}
     record StrokeLine(float x1, float y1, float x2, float y2) implements DrawCommand {}
     record Text(float x, float y, String text, float scale) implements DrawCommand {}
+    record DrawImage(SpnImage image, float x, float y) implements DrawCommand {}
 }

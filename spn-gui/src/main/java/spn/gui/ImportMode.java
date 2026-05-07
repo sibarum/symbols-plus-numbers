@@ -22,6 +22,8 @@ class ImportMode implements Mode {
     private static final float PAD = 30f;
     private static final int MAX_VISIBLE_ROWS = 20;
     private static final float ROW_HEIGHT_FACTOR = 1.4f;
+    private static final float SCROLLBAR_WIDTH = 6f;
+    private static final float SCROLLBAR_MIN_THUMB = 20f;
 
     private static final float BG_R = 0.10f, BG_G = 0.10f, BG_B = 0.12f;
     private static final float INPUT_BG_R = 0.16f, INPUT_BG_G = 0.16f, INPUT_BG_B = 0.20f;
@@ -30,6 +32,8 @@ class ImportMode implements Mode {
     private static final float MODULE_R = 0.50f, MODULE_G = 0.65f, MODULE_B = 0.80f;
     private static final float CURSOR_R = 0.90f, CURSOR_G = 0.90f, CURSOR_B = 0.30f;
     private static final float PROMPT_R = 0.55f, PROMPT_G = 0.55f, PROMPT_B = 0.60f;
+    private static final float TRACK_R = 0.18f, TRACK_G = 0.18f, TRACK_B = 0.22f;
+    private static final float THUMB_R = 0.45f, THUMB_G = 0.45f, THUMB_B = 0.55f;
 
     /** Kind of importable item — drives rendering color and import-statement shape. */
     enum Kind {
@@ -193,13 +197,16 @@ class ImportMode implements Mode {
         listTop = y;
         listRowH = rowHeight;
         int visibleCount = Math.min(MAX_VISIBLE_ROWS, filtered.size() - scrollOffset);
+        boolean hasScrollbar = filtered.size() > MAX_VISIBLE_ROWS;
+        float rowRight = paletteWidth - (hasScrollbar ? SCROLLBAR_WIDTH + 4f : 0f);
+
         for (int i = 0; i < visibleCount; i++) {
             int idx = scrollOffset + i;
             ImportItem item = filtered.get(idx);
             float rowY = y + i * rowHeight;
 
             if (idx == selectedIndex) {
-                font.drawRect(paletteX, rowY, paletteWidth, rowHeight, SEL_R, SEL_G, SEL_B);
+                font.drawRect(paletteX, rowY, rowRight, rowHeight, SEL_R, SEL_G, SEL_B);
             }
 
             float itemY = rowY + rowHeight - 4f;
@@ -216,8 +223,24 @@ class ImportMode implements Mode {
                     color[0], color[1], color[2]);
         }
 
-        // Scroll indicator
-        if (filtered.size() > MAX_VISIBLE_ROWS) {
+        // Scrollbar — thin vertical track + proportional thumb on the right
+        // edge of the palette. Drawn only when there's more than one screenful.
+        if (hasScrollbar) {
+            float trackX = paletteX + paletteWidth - SCROLLBAR_WIDTH;
+            float trackTop = y;
+            float trackHeight = MAX_VISIBLE_ROWS * rowHeight;
+            int maxScroll = Math.max(0, filtered.size() - MAX_VISIBLE_ROWS);
+            font.drawRect(trackX, trackTop, SCROLLBAR_WIDTH, trackHeight,
+                    TRACK_R, TRACK_G, TRACK_B);
+            float thumbH = Math.max(SCROLLBAR_MIN_THUMB,
+                    trackHeight * ((float) MAX_VISIBLE_ROWS / filtered.size()));
+            float scrollSpan = trackHeight - thumbH;
+            float thumbY = trackTop + (maxScroll > 0
+                    ? scrollSpan * ((float) scrollOffset / maxScroll) : 0f);
+            font.drawRect(trackX, thumbY, SCROLLBAR_WIDTH, thumbH,
+                    THUMB_R, THUMB_G, THUMB_B);
+
+            // Textual position indicator stays as a secondary cue below the list.
             String info = (scrollOffset + 1) + "-" + (scrollOffset + visibleCount)
                     + " of " + filtered.size();
             float infoW = font.getTextWidth(info, SMALL_SCALE);
